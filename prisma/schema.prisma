@@ -1,0 +1,79 @@
+// prisma/schema.prisma
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+model Unit {
+  id        Int      @id @default(autoincrement())
+  name      String
+  code      String?  @db.VarChar(50)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+
+model CurrencyType {
+  id        Int      @id @default(autoincrement())
+  title     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model CurrencySource {
+  id        Int      @id @default(autoincrement())
+  title     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+
+model Tag {
+  id        Int      @id @default(autoincrement())
+  label     String   @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+}
+
+model Project {
+  id   Int    @id @default(autoincrement())
+  code String @db.VarChar(20)
+  name String @db.VarChar(255)
+
+  @@map("projects") // جدول واقعی در Postgres
+}
+
+
+model User {
+  id         Int           @id @default(autoincrement())
+  name       String?
+  email      String?       @unique
+  username   String        @unique
+  password   String
+  department String?
+  role       String        @default("user")
+  // همون access / access_labels
+  access     String[]      @default([])
+  // ارتباط با نقش‌ها
+  roles      UserRoleMap[]
+}
+
+model UserRole {
+  id    Int           @id @default(autoincrement())
+  name  String        @unique
+  users UserRoleMap[]
+}
+
+model UserRoleMap {
+  userId Int
+  roleId Int
+
+  user   User     @relation(fields: [userId], references: [id])
+  role   UserRole @relation(fields: [roleId], references: [id])
+
+  @@id([userId, roleId])
+}

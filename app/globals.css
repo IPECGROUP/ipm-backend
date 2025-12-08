@@ -1,0 +1,30 @@
+/* ۱. همه @importها باید اول فایل باشند */
+@import url('https://fonts.googleapis.com/css2?family=Vazirmatn:wght@300;400;500;600;700&display=swap');
+@import "tailwindcss";
+
+/* ۲. رنگ‌ها و تم (پیش‌فرض: لایت) */
+:root {
+  --color-background: #f9fafb;
+  --color-foreground: #020617;
+}
+
+/* تم دارک (فعلاً فقط آماده‌اش کردیم، سوییچ بعداً) */
+[data-theme='dark'] {
+  --color-background: #020617;
+  --color-foreground: #e5e7eb;
+}
+
+/* ۳. کلاس کمکی اگر جایی خواستی دستی بزنی */
+.font-vazirmatn {
+  font-family: 'Vazirmatn', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, Helvetica, Arial, sans-serif;
+}
+
+/* ۴. استایل کلی بدنه: این مهم‌ترین بخشه برای فونت */
+body {
+  margin: 0;
+  background-color: var(--color-background);
+  color: var(--color-foreground);
+  font-family: 'Vazirmatn', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI',
+    Roboto, Helvetica, Arial, sans-serif;
+}
