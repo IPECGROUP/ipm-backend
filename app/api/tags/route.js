@@ -1,7 +1,7 @@
 // app/api/tags/route.js
 export const runtime = "nodejs";
 
-import { prisma } from "../../../../lib/prisma";
+import { prisma } from "../../../lib/prisma";
 
 // GET /api/tags → لیست برچسب‌ها
 export async function GET() {
