@@ -4,24 +4,32 @@ import { prisma } from "@/lib/prisma";
 export const runtime = "nodejs";
 
 const ALLOWED_KINDS = new Set(["office", "site", "finance", "cash", "capex", "projects"]);
-
 const json = (data, status = 200) => NextResponse.json(data, { status });
 
+function getSlugArray(params) {
+  const raw = params?.slug ?? [];
+  if (Array.isArray(raw)) return raw;
+  if (raw === undefined || raw === null) return [];
+  return [raw];
+}
+
 function parseParams(params) {
-  const slug = params?.slug || [];
+  const slug = getSlugArray(params);
   const kind = String(slug[0] || "").trim();
   const idRaw = slug[1];
 
-  if (!ALLOWED_KINDS.has(kind)) return { kind: null, id: null };
+  if (!ALLOWED_KINDS.has(kind)) return { kind: null, id: null, idInvalid: false };
 
   let id = null;
+  let idInvalid = false;
+
   if (idRaw !== undefined) {
     const n = Number(idRaw);
-    if (!Number.isFinite(n) || n <= 0) return { kind, id: null, idInvalid: true };
-    id = n;
+    if (!Number.isFinite(n) || n <= 0) idInvalid = true;
+    else id = n;
   }
 
-  return { kind, id, idInvalid: false };
+  return { kind, id, idInvalid };
 }
 
 async function readJson(req) {
@@ -38,18 +46,17 @@ export async function GET(_req, { params }) {
   if (idInvalid) return json({ error: "invalid_id" }, 400);
 
   try {
-    // اگر /centers/:kind/:id خواستی (اختیاری)
     if (id) {
       const item = await prisma.center.findUnique({ where: { id } });
       if (!item || item.kind !== kind) return json({ error: "not_found" }, 404);
       return json({ item });
     }
 
-    // /centers/:kind
     const items = await prisma.center.findMany({
       where: { kind },
       orderBy: [{ suffix: "asc" }],
     });
+
     return json({ items: items || [] });
   } catch (e) {
     return json({ error: "centers_get_error", message: String(e?.message || e) }, 500);
