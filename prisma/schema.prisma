@@ -78,3 +78,18 @@ model UserRoleMap {
 
   @@id([userId, roleId])
 }
+
+
+
+model Center {
+  id          Int      @id @default(autoincrement())
+  kind        String   @db.Text
+  suffix      String   @db.Text
+  description String   @default("") @db.Text
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@unique([kind, suffix])
+  @@index([kind])
+  @@map("centers")
+}
