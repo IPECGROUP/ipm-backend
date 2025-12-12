@@ -6,16 +6,29 @@ export const runtime = "nodejs";
 const ALLOWED_KINDS = new Set(["office", "site", "finance", "cash", "capex", "projects"]);
 const json = (data, status = 200) => NextResponse.json(data, { status });
 
-function getSlugArray(params) {
-  const raw = params?.slug ?? [];
-  if (Array.isArray(raw)) return raw;
-  if (raw === undefined || raw === null) return [];
-  return [raw];
+function slugFromReq(req) {
+  try {
+    const u = new URL(req.url);
+    const parts = u.pathname.split("/").filter(Boolean); // e.g. ["api","centers","office","123"]
+    const i = parts.indexOf("centers");
+    if (i === -1) return [];
+    return parts.slice(i + 1); // ["office","123"]
+  } catch {
+    return [];
+  }
 }
 
-function parseParams(params) {
-  const slug = getSlugArray(params);
-const kind = decodeURIComponent(String(slug[0] || "")).trim().toLowerCase();
+function getSlugArray(req, params) {
+  const raw = params?.slug;
+  if (Array.isArray(raw)) return raw;
+  if (typeof raw === "string" && raw) return [raw];
+  // fallback: parse from URL
+  return slugFromReq(req);
+}
+
+function parseParams(req, params) {
+  const slug = getSlugArray(req, params);
+  const kind = decodeURIComponent(String(slug[0] || "")).trim().toLowerCase();
   const idRaw = slug[1];
 
   if (!ALLOWED_KINDS.has(kind)) return { kind: null, id: null, idInvalid: false };
@@ -40,9 +53,9 @@ async function readJson(req) {
   }
 }
 
-export async function GET(_req, { params }) {
-  const { kind, id, idInvalid } = parseParams(params);
-if (!kind) return json({ error: "invalid_kind", got: { slug: params?.slug } }, 400);
+export async function GET(req, ctx) {
+  const { kind, id, idInvalid } = parseParams(req, ctx?.params);
+  if (!kind) return json({ error: "invalid_kind" }, 400);
   if (idInvalid) return json({ error: "invalid_id" }, 400);
 
   try {
@@ -63,8 +76,8 @@ if (!kind) return json({ error: "invalid_kind", got: { slug: params?.slug } }, 4
   }
 }
 
-export async function POST(req, { params }) {
-  const { kind, id, idInvalid } = parseParams(params);
+export async function POST(req, ctx) {
+  const { kind, id, idInvalid } = parseParams(req, ctx?.params);
   if (!kind) return json({ error: "invalid_kind" }, 400);
   if (idInvalid) return json({ error: "invalid_id" }, 400);
   if (id) return json({ error: "bad_route" }, 400);
@@ -89,8 +102,8 @@ export async function POST(req, { params }) {
   }
 }
 
-export async function PATCH(req, { params }) {
-  const { kind, id, idInvalid } = parseParams(params);
+export async function PATCH(req, ctx) {
+  const { kind, id, idInvalid } = parseParams(req, ctx?.params);
   if (!kind) return json({ error: "invalid_kind" }, 400);
   if (idInvalid || !id) return json({ error: "invalid_id" }, 400);
 
@@ -120,8 +133,8 @@ export async function PATCH(req, { params }) {
   }
 }
 
-export async function DELETE(_req, { params }) {
-  const { kind, id, idInvalid } = parseParams(params);
+export async function DELETE(req, ctx) {
+  const { kind, id, idInvalid } = parseParams(req, ctx?.params);
   if (!kind) return json({ error: "invalid_kind" }, 400);
   if (idInvalid || !id) return json({ error: "invalid_id" }, 400);
 
