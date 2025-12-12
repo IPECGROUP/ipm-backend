@@ -1,29 +1,13 @@
-version: "3.9"
-
 services:
-  db:
-    image: postgres:16
-    restart: always
-    environment:
-      POSTGRES_USER: ipm_user
-      POSTGRES_PASSWORD: super_secret_password
-      POSTGRES_DB: ipm_db
-    volumes:
-      - ipm_pgdata:/var/lib/postgresql/data
-    ports:
-      - "5432:5432"
-
   app:
-    build: .
-    restart: always
-    depends_on:
-      - db
-    environment:
-      NODE_ENV: production
-      DATABASE_URL: postgres://ipm_user:super_secret_password@db:5432/ipm_db
-      # بقیه env ها مثل LOGIN_LOCAL=1 و ... رو هم اگر لازم شد اینجا اضافه می‌کنیم
+    build:
+      context: .
+      dockerfile: Dockerfile
     ports:
       - "3000:3000"
-
-volumes:
-  ipm_pgdata:
+    environment:
+      NODE_ENV: production
+      DATABASE_URL: ${DATABASE_URL}
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    restart: unless-stopped
