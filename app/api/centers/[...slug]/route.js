@@ -15,7 +15,7 @@ function getSlugArray(params) {
 
 function parseParams(params) {
   const slug = getSlugArray(params);
-  const kind = String(slug[0] || "").trim();
+const kind = decodeURIComponent(String(slug[0] || "")).trim().toLowerCase();
   const idRaw = slug[1];
 
   if (!ALLOWED_KINDS.has(kind)) return { kind: null, id: null, idInvalid: false };
@@ -42,7 +42,7 @@ async function readJson(req) {
 
 export async function GET(_req, { params }) {
   const { kind, id, idInvalid } = parseParams(params);
-  if (!kind) return json({ error: "invalid_kind" }, 400);
+if (!kind) return json({ error: "invalid_kind", got: { slug: params?.slug } }, 400);
   if (idInvalid) return json({ error: "invalid_id" }, 400);
 
   try {
