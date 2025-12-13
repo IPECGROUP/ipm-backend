@@ -9,10 +9,10 @@ const json = (data, status = 200) => NextResponse.json(data, { status });
 function slugFromReq(req) {
   try {
     const u = new URL(req.url);
-    const parts = u.pathname.split("/").filter(Boolean); // e.g. ["api","centers","office","123"]
+    const parts = u.pathname.split("/").filter(Boolean);
     const i = parts.indexOf("centers");
     if (i === -1) return [];
-    return parts.slice(i + 1); // ["office","123"]
+    return parts.slice(i + 1);
   } catch {
     return [];
   }
@@ -22,7 +22,6 @@ function getSlugArray(req, params) {
   const raw = params?.slug;
   if (Array.isArray(raw)) return raw;
   if (typeof raw === "string" && raw) return [raw];
-  // fallback: parse from URL
   return slugFromReq(req);
 }
 
@@ -53,12 +52,39 @@ async function readJson(req) {
   }
 }
 
+function mapProjectToCenterLike(p) {
+  return {
+    id: p?.id,
+    kind: "projects",
+    suffix: String(p?.code ?? ""),
+    description: String(p?.name ?? ""),
+    createdAt: p?.createdAt ?? null,
+    updatedAt: p?.updatedAt ?? null,
+  };
+}
+
 export async function GET(req, ctx) {
   const { kind, id, idInvalid } = parseParams(req, ctx?.params);
   if (!kind) return json({ error: "invalid_kind" }, 400);
   if (idInvalid) return json({ error: "invalid_id" }, 400);
 
   try {
+    // ✅ projects -> از جدول پروژه‌ها
+    if (kind === "projects") {
+      if (id) {
+        const p = await prisma.project.findUnique({ where: { id } });
+        if (!p) return json({ error: "not_found" }, 404);
+        return json({ item: mapProjectToCenterLike(p) });
+      }
+
+      const items = await prisma.project.findMany({
+        orderBy: [{ code: "asc" }],
+      });
+
+      return json({ items: (items || []).map(mapProjectToCenterLike) });
+    }
+
+    // سایر kind ها -> centers
     if (id) {
       const item = await prisma.center.findUnique({ where: { id } });
       if (!item || item.kind !== kind) return json({ error: "not_found" }, 404);
@@ -89,6 +115,19 @@ export async function POST(req, ctx) {
   if (!suffix) return json({ error: "suffix_required" }, 400);
 
   try {
+    // ✅ projects -> ساخت پروژه جدید
+    if (kind === "projects") {
+      const dup = await prisma.project.findFirst({ where: { code: suffix } });
+      if (dup) return json({ error: "duplicate_suffix" }, 409);
+
+      const item = await prisma.project.create({
+        data: { code: suffix, name: description || suffix },
+      });
+
+      return json({ ok: true, item: mapProjectToCenterLike(item) }, 201);
+    }
+
+    // سایر kind ها -> centers
     const dup = await prisma.center.findFirst({ where: { kind, suffix } });
     if (dup) return json({ error: "duplicate_suffix" }, 409);
 
@@ -114,6 +153,25 @@ export async function PATCH(req, ctx) {
   if (!suffix) return json({ error: "suffix_required" }, 400);
 
   try {
+    // ✅ projects -> ویرایش پروژه
+    if (kind === "projects") {
+      const cur = await prisma.project.findUnique({ where: { id } });
+      if (!cur) return json({ error: "not_found" }, 404);
+
+      const dup = await prisma.project.findFirst({
+        where: { code: suffix, NOT: { id } },
+      });
+      if (dup) return json({ error: "duplicate_suffix" }, 409);
+
+      const item = await prisma.project.update({
+        where: { id },
+        data: { code: suffix, name: description || suffix },
+      });
+
+      return json({ ok: true, item: mapProjectToCenterLike(item) });
+    }
+
+    // سایر kind ها -> centers
     const cur = await prisma.center.findUnique({ where: { id } });
     if (!cur || cur.kind !== kind) return json({ error: "not_found" }, 404);
 
@@ -139,6 +197,15 @@ export async function DELETE(req, ctx) {
   if (idInvalid || !id) return json({ error: "invalid_id" }, 400);
 
   try {
+    // ✅ projects -> حذف پروژه
+    if (kind === "projects") {
+      const cur = await prisma.project.findUnique({ where: { id } });
+      if (!cur) return json({ error: "not_found" }, 404);
+      await prisma.project.delete({ where: { id } });
+      return json({ ok: true });
+    }
+
+    // سایر kind ها -> centers
     const cur = await prisma.center.findUnique({ where: { id } });
     if (!cur || cur.kind !== kind) return json({ error: "not_found" }, 404);
 
@@ -148,3 +215,5 @@ export async function DELETE(req, ctx) {
     return json({ error: "centers_delete_error", message: String(e?.message || e) }, 500);
   }
 }
+
+
