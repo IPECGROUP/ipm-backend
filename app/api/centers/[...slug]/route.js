@@ -3,7 +3,15 @@ import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
 
-const ALLOWED_KINDS = new Set(["office", "site", "finance", "cash", "capex", "projects"]);
+const ALLOWED_KINDS = new Set([
+  "office",
+  "site",
+  "finance",
+  "cash",
+  "capex",
+  "projects",
+]);
+
 const json = (data, status = 200) => NextResponse.json(data, { status });
 
 function slugFromReq(req) {
@@ -52,15 +60,28 @@ async function readJson(req) {
   }
 }
 
-function mapProjectToCenterLike(p) {
+function normalizeCenterLike(x) {
+  const code = String(x?.code ?? x?.suffix ?? "").trim();
+  const name = String(x?.name ?? x?.description ?? "").trim();
+
   return {
+    ...x,
+    code,
+    name,
+    center_desc: x?.center_desc ?? name,
+    last_amount: Number(x?.last_amount || 0),
+  };
+}
+
+function mapProjectToCenterLike(p) {
+  return normalizeCenterLike({
     id: p?.id,
     kind: "projects",
     suffix: String(p?.code ?? ""),
     description: String(p?.name ?? ""),
     createdAt: p?.createdAt ?? null,
     updatedAt: p?.updatedAt ?? null,
-  };
+  });
 }
 
 export async function GET(req, ctx) {
@@ -69,7 +90,6 @@ export async function GET(req, ctx) {
   if (idInvalid) return json({ error: "invalid_id" }, 400);
 
   try {
-    // ✅ projects -> از جدول پروژه‌ها
     if (kind === "projects") {
       if (id) {
         const p = await prisma.project.findUnique({ where: { id } });
@@ -84,11 +104,10 @@ export async function GET(req, ctx) {
       return json({ items: (items || []).map(mapProjectToCenterLike) });
     }
 
-    // سایر kind ها -> centers
     if (id) {
       const item = await prisma.center.findUnique({ where: { id } });
       if (!item || item.kind !== kind) return json({ error: "not_found" }, 404);
-      return json({ item });
+      return json({ item: normalizeCenterLike(item) });
     }
 
     const items = await prisma.center.findMany({
@@ -96,9 +115,12 @@ export async function GET(req, ctx) {
       orderBy: [{ suffix: "asc" }],
     });
 
-    return json({ items: items || [] });
+    return json({ items: (items || []).map(normalizeCenterLike) });
   } catch (e) {
-    return json({ error: "centers_get_error", message: String(e?.message || e) }, 500);
+    return json(
+      { error: "centers_get_error", message: String(e?.message || e) },
+      500
+    );
   }
 }
 
@@ -109,13 +131,12 @@ export async function POST(req, ctx) {
   if (id) return json({ error: "bad_route" }, 400);
 
   const body = await readJson(req);
-  const suffix = String(body?.suffix ?? "").trim();
-  const description = String(body?.description ?? "").trim();
+  const suffix = String(body?.suffix ?? body?.code ?? "").trim();
+  const description = String(body?.description ?? body?.name ?? "").trim();
 
   if (!suffix) return json({ error: "suffix_required" }, 400);
 
   try {
-    // ✅ projects -> ساخت پروژه جدید
     if (kind === "projects") {
       const dup = await prisma.project.findFirst({ where: { code: suffix } });
       if (dup) return json({ error: "duplicate_suffix" }, 409);
@@ -127,7 +148,6 @@ export async function POST(req, ctx) {
       return json({ ok: true, item: mapProjectToCenterLike(item) }, 201);
     }
 
-    // سایر kind ها -> centers
     const dup = await prisma.center.findFirst({ where: { kind, suffix } });
     if (dup) return json({ error: "duplicate_suffix" }, 409);
 
@@ -135,9 +155,12 @@ export async function POST(req, ctx) {
       data: { kind, suffix, description },
     });
 
-    return json({ ok: true, item }, 201);
+    return json({ ok: true, item: normalizeCenterLike(item) }, 201);
   } catch (e) {
-    return json({ error: "centers_post_error", message: String(e?.message || e) }, 500);
+    return json(
+      { error: "centers_post_error", message: String(e?.message || e) },
+      500
+    );
   }
 }
 
@@ -147,13 +170,12 @@ export async function PATCH(req, ctx) {
   if (idInvalid || !id) return json({ error: "invalid_id" }, 400);
 
   const body = await readJson(req);
-  const suffix = String(body?.suffix ?? "").trim();
-  const description = String(body?.description ?? "").trim();
+  const suffix = String(body?.suffix ?? body?.code ?? "").trim();
+  const description = String(body?.description ?? body?.name ?? "").trim();
 
   if (!suffix) return json({ error: "suffix_required" }, 400);
 
   try {
-    // ✅ projects -> ویرایش پروژه
     if (kind === "projects") {
       const cur = await prisma.project.findUnique({ where: { id } });
       if (!cur) return json({ error: "not_found" }, 404);
@@ -171,7 +193,6 @@ export async function PATCH(req, ctx) {
       return json({ ok: true, item: mapProjectToCenterLike(item) });
     }
 
-    // سایر kind ها -> centers
     const cur = await prisma.center.findUnique({ where: { id } });
     if (!cur || cur.kind !== kind) return json({ error: "not_found" }, 404);
 
@@ -185,9 +206,12 @@ export async function PATCH(req, ctx) {
       data: { suffix, description },
     });
 
-    return json({ ok: true, item });
+    return json({ ok: true, item: normalizeCenterLike(item) });
   } catch (e) {
-    return json({ error: "centers_patch_error", message: String(e?.message || e) }, 500);
+    return json(
+      { error: "centers_patch_error", message: String(e?.message || e) },
+      500
+    );
   }
 }
 
@@ -197,7 +221,6 @@ export async function DELETE(req, ctx) {
   if (idInvalid || !id) return json({ error: "invalid_id" }, 400);
 
   try {
-    // ✅ projects -> حذف پروژه
     if (kind === "projects") {
       const cur = await prisma.project.findUnique({ where: { id } });
       if (!cur) return json({ error: "not_found" }, 404);
@@ -205,15 +228,15 @@ export async function DELETE(req, ctx) {
       return json({ ok: true });
     }
 
-    // سایر kind ها -> centers
     const cur = await prisma.center.findUnique({ where: { id } });
     if (!cur || cur.kind !== kind) return json({ error: "not_found" }, 404);
 
     await prisma.center.delete({ where: { id } });
     return json({ ok: true });
   } catch (e) {
-    return json({ error: "centers_delete_error", message: String(e?.message || e) }, 500);
+    return json(
+      { error: "centers_delete_error", message: String(e?.message || e) },
+      500
+    );
   }
 }
-
-
