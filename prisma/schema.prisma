@@ -17,7 +17,6 @@ model Unit {
   updatedAt DateTime @updatedAt
 }
 
-
 model CurrencyType {
   id        Int      @id @default(autoincrement())
   title     String   @unique
@@ -31,7 +30,6 @@ model CurrencySource {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 }
-
 
 model Tag {
   id        Int      @id @default(autoincrement())
@@ -48,7 +46,6 @@ model Project {
   @@map("projects") // جدول واقعی در Postgres
 }
 
-
 model User {
   id         Int           @id @default(autoincrement())
   name       String?
@@ -61,6 +58,7 @@ model User {
   access     String[]      @default([])
   // ارتباط با نقش‌ها
   roles      UserRoleMap[]
+  sessions   Session[]
 }
 
 model UserRole {
@@ -73,13 +71,11 @@ model UserRoleMap {
   userId Int
   roleId Int
 
-  user   User     @relation(fields: [userId], references: [id])
-  role   UserRole @relation(fields: [roleId], references: [id])
+  user User     @relation(fields: [userId], references: [id])
+  role UserRole @relation(fields: [roleId], references: [id])
 
   @@id([userId, roleId])
 }
-
-
 
 model Center {
   id          Int      @id @default(autoincrement())
@@ -92,4 +88,32 @@ model Center {
   @@unique([kind, suffix])
   @@index([kind])
   @@map("centers")
+}
+
+model Session {
+  id        String   @id @default(uuid())
+  userId    Int
+  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt DateTime @default(now())
+  expiresAt DateTime
+
+  @@index([userId])
+}
+
+model RevenueEstimateRow {
+  id          Int     @id @default(autoincrement())
+  code        String
+  rowIndex    Int     @map("row_index")
+  title       String
+  description String? @default("")
+  projectId   Int?    @map("project_id")
+  monthsJson  Json    @map("months_json")
+  amount      BigInt  @default(0)
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([projectId])
+  @@index([rowIndex])
+  @@map("revenue_estimate_rows")
 }
