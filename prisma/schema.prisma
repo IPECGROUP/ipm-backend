@@ -17,6 +17,22 @@ model Unit {
   updatedAt DateTime @updatedAt
 }
 
+model UnitAccessRule {
+  id        Int      @id @default(autoincrement())
+  unitId    Int
+  page      String
+  tab       String?  // null یعنی کل تب‌های اون صفحه
+  permitted Boolean  @default(true)
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@index([unitId])
+  @@unique([unitId, page, tab])
+}
+
 model CurrencyType {
   id        Int      @id @default(autoincrement())
   title     String   @unique
