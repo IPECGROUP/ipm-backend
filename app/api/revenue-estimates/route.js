@@ -12,9 +12,9 @@ export async function GET() {
     row_index: r.rowIndex,
     title: r.title,
     description: r.description ?? "",
-    project_id: r.projectId ?? null,
-    months: Array.isArray(r.monthsJson) ? r.monthsJson : [],
-    amount: r.amount != null ? String(r.amount) : "0",
+    project_id: r.projectId,
+    months: Array.isArray(r.monthsJson) ? r.monthsJson : (r.monthsJson ?? []),
+    amount: r.amount?.toString?.() ?? "0",
   }));
 
   return NextResponse.json({ items });
@@ -31,21 +31,15 @@ export async function POST(req) {
     );
   }
 
-  const normalized = rows.map((r, idx) => {
-    const rawAmount = String(r?.amount ?? "0");
-    const digits = rawAmount.replace(/[^\d]/g, "");
-    const amountBig = BigInt(digits || "0");
-
-    return {
-      code: String(r?.code ?? `R${idx + 1}`),
-      rowIndex: Number(r?.row_index ?? idx + 1),
-      title: String(r?.title ?? "").trim(),
-      description: String(r?.description ?? ""),
-      projectId: r?.project_id == null ? null : Number(r.project_id),
-      monthsJson: Array.isArray(r?.months) ? r.months : [],
-      amount: amountBig,
-    };
-  });
+  const normalized = rows.map((r, idx) => ({
+    code: String(r.code ?? `R${idx + 1}`),
+    rowIndex: Number(r.row_index ?? idx + 1),
+    title: String(r.title ?? "").trim(),
+    description: String(r.description ?? ""),
+    projectId: r.project_id == null ? null : Number(r.project_id),
+    monthsJson: Array.isArray(r.months) ? r.months : [],
+    amount: BigInt(String(r.amount ?? "0").replace(/[^\d]/g, "") || "0"),
+  }));
 
   await prisma.$transaction(async (tx) => {
     await tx.revenueEstimateRow.deleteMany({});
