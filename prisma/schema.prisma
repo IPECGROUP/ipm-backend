@@ -15,6 +15,7 @@ model Unit {
   code      String?  @db.VarChar(50)
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+  accessRules UnitAccessRule[] 
 }
 
 model UnitAccessRule {
