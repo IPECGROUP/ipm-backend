@@ -117,3 +117,16 @@ model RevenueEstimateRow {
   @@index([rowIndex])
   @@map("revenue_estimate_rows")
 }
+
+model BudgetEstimate {
+  id          BigInt   @id @default(autoincrement())
+  kind        String
+  projectId   BigInt?  @map("project_id")
+  code        String
+  amount      BigInt   @default(0)
+  description String?
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  @@index([kind, projectId, code, createdAt(sort: Desc)])
+  @@map("budget_estimates")
+}
