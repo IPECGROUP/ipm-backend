@@ -1,7 +1,7 @@
 // app/api/base/units/[[...id]]/route.js
 export const runtime = "nodejs";
 
-import { prisma } from "../../../../lib/prisma";
+import { prisma } from "../../../../../lib/prisma";
 
 // helper: گرفتن id از مسیر /api/base/units/:id
 function getId(params) {

@@ -1,7 +1,7 @@
 // app/api/admin/unit-access/[[...id]]/route.js
 export const runtime = "nodejs";
 
-import { prisma } from "../../../../lib/prisma";
+import { prisma } from "../../../../../lib/prisma";
 
 function getId(params) {
   const raw = params?.id?.[0];
