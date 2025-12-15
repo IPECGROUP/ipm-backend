@@ -16,6 +16,8 @@ model Unit {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
   accessRules UnitAccessRule[] 
+    users UserUnit[]
+
 }
 
 model UnitAccessRule {
@@ -76,6 +78,8 @@ model User {
   // ارتباط با نقش‌ها
   roles      UserRoleMap[]
   sessions   Session[]
+    units UserUnit[]
+
 }
 
 model UserRole {
@@ -146,4 +150,15 @@ model BudgetEstimate {
 
   @@index([kind, projectId, code, createdAt(sort: Desc)])
   @@map("budget_estimates")
+}
+
+model UserUnit {
+  userId Int
+  unitId Int
+
+  user User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  unit Unit @relation(fields: [unitId], references: [id], onDelete: Cascade)
+
+  @@id([userId, unitId])
+  @@index([unitId])
 }
