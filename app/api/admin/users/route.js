@@ -2,6 +2,7 @@
 export const runtime = "nodejs";
 
 import { prisma } from "../../../../lib/prisma";
+import bcrypt from "bcryptjs";
 
 // خوندن JSON امن
 async function readJson(request) {
@@ -33,8 +34,6 @@ function mapUser(u) {
 }
 
 // GET /api/admin/users
-//  - بدون id → لیست همه‌ی کاربران
-//  - با ?id= → یک کاربر تکی
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -44,51 +43,32 @@ export async function GET(request) {
       const id = Number(idParam);
       if (!id || Number.isNaN(id)) {
         return new Response(
-          JSON.stringify({
-            error: "invalid_id",
-            message: "شناسه نامعتبر است",
-          }),
-          {
-            status: 400,
-            headers: { "Content-Type": "application/json" },
-          }
+          JSON.stringify({ error: "invalid_id", message: "شناسه نامعتبر است" }),
+          { status: 400, headers: { "Content-Type": "application/json" } }
         );
       }
 
       const user = await prisma.user.findUnique({
         where: { id },
-        include: {
-          roles: { include: { role: true } },
-        },
+        include: { roles: { include: { role: true } } },
       });
 
       if (!user) {
         return new Response(
-          JSON.stringify({
-            error: "not_found",
-            message: "کاربر پیدا نشد",
-          }),
-          {
-            status: 404,
-            headers: { "Content-Type": "application/json" },
-          }
+          JSON.stringify({ error: "not_found", message: "کاربر پیدا نشد" }),
+          { status: 404, headers: { "Content-Type": "application/json" } }
         );
       }
 
       return Response.json({ user: mapUser(user) });
     }
 
-    // لیست همه کاربران
     const users = await prisma.user.findMany({
       orderBy: { id: "asc" },
-      include: {
-        roles: { include: { role: true } },
-      },
+      include: { roles: { include: { role: true } } },
     });
 
-    return Response.json({
-      users: users.map(mapUser),
-    });
+    return Response.json({ users: users.map(mapUser) });
   } catch (e) {
     console.error("admin_users_get_error", e);
     return new Response(
@@ -97,10 +77,7 @@ export async function GET(request) {
         message: e?.message || "unknown_error",
         code: e?.code || null,
       }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      }
+      { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
 }
@@ -111,32 +88,27 @@ export async function POST(request) {
     const body = await readJson(request);
 
     const username = String(body.username || "").trim();
-    const password = String(body.password || "");
+    const password = String(body.password || "").trim();
+
     if (!username || !password) {
       return new Response(
         JSON.stringify({
           error: "username_password_required",
           message: "نام کاربری و گذرواژه الزامی است",
         }),
-        {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        }
+        { status: 400, headers: { "Content-Type": "application/json" } }
       );
     }
 
     const name = body.name ? String(body.name).trim() : null;
     const email = body.email ? String(body.email).trim() : null;
-    const department = body.department
-      ? String(body.department).trim()
-      : null;
+    const department = body.department ? String(body.department).trim() : null;
     const role = body.role ? String(body.role).trim() : "user";
 
     const access = Array.isArray(body.access)
       ? body.access.map((v) => String(v || ""))
       : [];
 
-    // positions / roles → آرایه id نقش‌ها
     const rawRoleIds =
       Array.isArray(body.positions) && body.positions.length
         ? body.positions
@@ -147,12 +119,14 @@ export async function POST(request) {
       .map((v) => Number(v))
       .filter((v) => !Number.isNaN(v) && v > 0);
 
+    const passwordHash = await bcrypt.hash(password, 10);
+
     const user = await prisma.user.create({
       data: {
         name,
         email,
         username,
-        password, // بعداً می‌تونی هش کنی
+        passwordHash,
         department,
         role,
         access,
@@ -162,9 +136,7 @@ export async function POST(request) {
           })),
         },
       },
-      include: {
-        roles: { include: { role: true } },
-      },
+      include: { roles: { include: { role: true } } },
     });
 
     return Response.json({ user: mapUser(user) });
@@ -176,10 +148,7 @@ export async function POST(request) {
         message: e?.message || "unknown_error",
         code: e?.code || null,
       }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      }
+      { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
 }
@@ -192,14 +161,8 @@ export async function PATCH(request) {
     const id = Number(body.id);
     if (!id || Number.isNaN(id)) {
       return new Response(
-        JSON.stringify({
-          error: "invalid_id",
-          message: "شناسه نامعتبر است",
-        }),
-        {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        }
+        JSON.stringify({ error: "invalid_id", message: "شناسه نامعتبر است" }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
       );
     }
 
@@ -207,15 +170,11 @@ export async function PATCH(request) {
 
     if (body.name !== undefined)
       data.name =
-        body.name === null
-          ? null
-          : String(body.name || "").trim() || null;
+        body.name === null ? null : String(body.name || "").trim() || null;
 
     if (body.email !== undefined)
       data.email =
-        body.email === null
-          ? null
-          : String(body.email || "").trim() || null;
+        body.email === null ? null : String(body.email || "").trim() || null;
 
     if (body.username !== undefined)
       data.username = String(body.username || "").trim();
@@ -230,14 +189,14 @@ export async function PATCH(request) {
       data.role = String(body.role || "user").trim();
 
     if (body.password) {
-      data.password = String(body.password);
+      const pw = String(body.password || "").trim();
+      if (pw) data.passwordHash = await bcrypt.hash(pw, 10);
     }
 
     if (Array.isArray(body.access)) {
       data.access = body.access.map((v) => String(v || ""));
     }
 
-    // positions / roles → آرایه id نقش‌ها
     const rawRoleIds =
       Array.isArray(body.positions) && body.positions.length
         ? body.positions
@@ -252,7 +211,7 @@ export async function PATCH(request) {
         .filter((v) => !Number.isNaN(v) && v > 0);
 
       rolesUpdate = {
-        deleteMany: {}, // همه مپ‌های قبلی
+        deleteMany: {},
         create: roleIds.map((roleId) => ({
           role: { connect: { id: roleId } },
         })),
@@ -265,9 +224,7 @@ export async function PATCH(request) {
         ...data,
         ...(rolesUpdate ? { roles: rolesUpdate } : {}),
       },
-      include: {
-        roles: { include: { role: true } },
-      },
+      include: { roles: { include: { role: true } } },
     });
 
     return Response.json({ user: mapUser(user) });
@@ -279,10 +236,7 @@ export async function PATCH(request) {
         message: e?.message || "unknown_error",
         code: e?.code || null,
       }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      }
+      { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
 }
@@ -292,35 +246,22 @@ export async function DELETE(request) {
   try {
     const body = await readJson(request);
     const id = Number(body.id);
+
     if (!id || Number.isNaN(id)) {
       return new Response(
-        JSON.stringify({
-          error: "invalid_id",
-          message: "شناسه نامعتبر است",
-        }),
-        {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
-        }
+        JSON.stringify({ error: "invalid_id", message: "شناسه نامعتبر است" }),
+        { status: 400, headers: { "Content-Type": "application/json" } }
       );
     }
 
-    // اول مپ نقش‌ها رو پاک کن
-    await prisma.userRoleMap.deleteMany({
-      where: { userId: id },
-    });
+    await prisma.userRoleMap.deleteMany({ where: { userId: id } });
 
     const deleted = await prisma.user.delete({
       where: { id },
-      include: {
-        roles: { include: { role: true } },
-      },
+      include: { roles: { include: { role: true } } },
     });
 
-    return Response.json({
-      ok: true,
-      user: mapUser({ ...deleted, roles: [] }),
-    });
+    return Response.json({ ok: true, user: mapUser({ ...deleted, roles: [] }) });
   } catch (e) {
     console.error("admin_users_delete_error", e);
     return new Response(
@@ -329,10 +270,7 @@ export async function DELETE(request) {
         message: e?.message || "unknown_error",
         code: e?.code || null,
       }),
-      {
-        status: 500,
-        headers: { "Content-Type": "application/json" },
-      }
+      { status: 500, headers: { "Content-Type": "application/json" } }
     );
   }
 }
