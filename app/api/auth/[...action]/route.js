@@ -15,9 +15,27 @@ function json(data, status = 200) {
   });
 }
 
-function pickAction(params) {
+function actionFromParams(params) {
   const a = params?.action;
-  return Array.isArray(a) ? (a[0] || "") : (a || "");
+  const v = Array.isArray(a) ? (a[0] || "") : (a || "");
+  return String(v || "").trim();
+}
+
+function actionFromUrl(request) {
+  try {
+    const { pathname } = new URL(request.url);
+    const parts = pathname.split("/").filter(Boolean);
+    // ... /api/auth/<action>
+    const i = parts.findIndex((p) => p === "auth");
+    const a = i >= 0 ? (parts[i + 1] || "") : "";
+    return String(a || "").trim();
+  } catch {
+    return "";
+  }
+}
+
+function pickAction(request, params) {
+  return actionFromParams(params) || actionFromUrl(request);
 }
 
 async function readBody(req) {
@@ -67,17 +85,15 @@ async function handleLogin(request) {
 
   let ok = false;
   try {
-    if (looksLikeBcryptHash(stored)) ok = await bcrypt.compare(password, stored);
-    else ok = password === stored; // برای کاربرهایی که پسورد خام دارند
+    ok = looksLikeBcryptHash(stored) ? await bcrypt.compare(password, stored) : password === stored;
   } catch {
     ok = false;
   }
-
   if (!ok) return json({ error: "invalid_credentials" }, 401);
 
   const token = crypto.randomBytes(32).toString("hex");
 
-  // ✅ Session مدل شما token ندارد، پس token را در id ذخیره می‌کنیم
+  // ✅ session token را داخل id ذخیره می‌کنیم (چون مدل شما token ندارد)
   await prisma.session.create({
     data: {
       id: token,
@@ -90,7 +106,7 @@ async function handleLogin(request) {
   jar.set(COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: isHttpsRequest(request), // روی https true، روی تست‌های http (curl localhost) false
+    secure: isHttpsRequest(request),
     path: "/",
     maxAge: 60 * 60 * 24 * 30,
   });
@@ -131,8 +147,13 @@ async function handleLogout(request) {
 
 export async function GET(request, { params }) {
   try {
-    const action = pickAction(params);
+    const action = pickAction(request, params);
+
     if (action === "me") return await handleMe(request);
+
+    // اگر params کلاً خراب شد، این کمک می‌کنه /api/auth/me اشتباهی 404 نشه
+    if (action === "") return await handleMe(request);
+
     return json({ error: "not_found" }, 404);
   } catch (e) {
     console.error("auth_get_error", e);
@@ -142,9 +163,11 @@ export async function GET(request, { params }) {
 
 export async function POST(request, { params }) {
   try {
-    const action = pickAction(params);
+    const action = pickAction(request, params);
+
     if (action === "login") return await handleLogin(request);
     if (action === "logout") return await handleLogout(request);
+
     return json({ error: "not_found" }, 404);
   } catch (e) {
     console.error("auth_post_error", e);
