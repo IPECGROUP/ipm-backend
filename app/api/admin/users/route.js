@@ -1,15 +1,10 @@
-// app/api/admin/users/route.js
 export const runtime = "nodejs";
 
 import { prisma } from "../../../../lib/prisma";
 import bcrypt from "bcryptjs";
 
 async function readJson(request) {
-  try {
-    return await request.json();
-  } catch {
-    return {};
-  }
+  try { return await request.json(); } catch { return {}; }
 }
 
 function mapUser(u) {
@@ -24,11 +19,14 @@ function mapUser(u) {
     role: u.role,
     access: u.access || [],
     access_labels: u.access || [],
-    positions: roles.map((link) => ({
-      id: link.role.id,
-      name: link.role.name,
-    })),
+    positions: roles.map((link) => ({ id: link.role.id, name: link.role.name })),
   };
+}
+
+async function hashPasswordIfProvided(pw) {
+  const p = String(pw || "");
+  if (!p) return null;
+  return await bcrypt.hash(p, 10);
 }
 
 export async function GET(request) {
@@ -40,8 +38,7 @@ export async function GET(request) {
       const id = Number(idParam);
       if (!id || Number.isNaN(id)) {
         return new Response(JSON.stringify({ error: "invalid_id", message: "شناسه نامعتبر است" }), {
-          status: 400,
-          headers: { "Content-Type": "application/json" },
+          status: 400, headers: { "Content-Type": "application/json" },
         });
       }
 
@@ -52,8 +49,7 @@ export async function GET(request) {
 
       if (!user) {
         return new Response(JSON.stringify({ error: "not_found", message: "کاربر پیدا نشد" }), {
-          status: 404,
-          headers: { "Content-Type": "application/json" },
+          status: 404, headers: { "Content-Type": "application/json" },
         });
       }
 
@@ -69,23 +65,20 @@ export async function GET(request) {
   } catch (e) {
     console.error("admin_users_get_error", e);
     return new Response(JSON.stringify({ error: "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
+      status: 500, headers: { "Content-Type": "application/json" },
     });
   }
 }
 
-// POST /api/admin/users
 export async function POST(request) {
   try {
     const body = await readJson(request);
 
     const username = String(body.username || "").trim();
-    const passwordRaw = String(body.password || "");
-    if (!username || !passwordRaw) {
+    const password = String(body.password || "");
+    if (!username || !password) {
       return new Response(JSON.stringify({ error: "username_password_required", message: "نام کاربری و گذرواژه الزامی است" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
+        status: 400, headers: { "Content-Type": "application/json" },
       });
     }
 
@@ -97,29 +90,22 @@ export async function POST(request) {
     const access = Array.isArray(body.access) ? body.access.map((v) => String(v || "")) : [];
 
     const rawRoleIds =
-      Array.isArray(body.positions) && body.positions.length
-        ? body.positions
-        : Array.isArray(body.roles)
-        ? body.roles
-        : [];
+      Array.isArray(body.positions) && body.positions.length ? body.positions :
+      Array.isArray(body.roles) && body.roles.length ? body.roles : [];
     const roleIds = rawRoleIds.map((v) => Number(v)).filter((v) => !Number.isNaN(v) && v > 0);
 
-    const password = await bcrypt.hash(passwordRaw, 10);
+    const passwordHash = await hashPasswordIfProvided(password);
 
     const user = await prisma.user.create({
       data: {
         name,
         email,
         username,
-        password, // ✅ هش‌شده
+        password: passwordHash, // ✅ همیشه هش ذخیره می‌کنیم
         department,
         role,
         access,
-        roles: {
-          create: roleIds.map((roleId) => ({
-            role: { connect: { id: roleId } },
-          })),
-        },
+        roles: { create: roleIds.map((roleId) => ({ role: { connect: { id: roleId } } })) },
       },
       include: { roles: { include: { role: true } } },
     });
@@ -128,13 +114,11 @@ export async function POST(request) {
   } catch (e) {
     console.error("admin_users_post_error", e);
     return new Response(JSON.stringify({ error: "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
+      status: 500, headers: { "Content-Type": "application/json" },
     });
   }
 }
 
-// PATCH /api/admin/users
 export async function PATCH(request) {
   try {
     const body = await readJson(request);
@@ -142,49 +126,34 @@ export async function PATCH(request) {
     const id = Number(body.id);
     if (!id || Number.isNaN(id)) {
       return new Response(JSON.stringify({ error: "invalid_id", message: "شناسه نامعتبر است" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
+        status: 400, headers: { "Content-Type": "application/json" },
       });
     }
 
     const data = {};
 
-    if (body.name !== undefined)
-      data.name = body.name === null ? null : String(body.name || "").trim() || null;
-
-    if (body.email !== undefined)
-      data.email = body.email === null ? null : String(body.email || "").trim() || null;
-
+    if (body.name !== undefined) data.name = body.name === null ? null : (String(body.name || "").trim() || null);
+    if (body.email !== undefined) data.email = body.email === null ? null : (String(body.email || "").trim() || null);
     if (body.username !== undefined) data.username = String(body.username || "").trim();
-
-    if (body.department !== undefined)
-      data.department = body.department === null ? null : String(body.department || "").trim() || null;
-
+    if (body.department !== undefined) data.department = body.department === null ? null : (String(body.department || "").trim() || null);
     if (body.role !== undefined) data.role = String(body.role || "user").trim();
 
     if (body.password) {
-      data.password = await bcrypt.hash(String(body.password), 10); // ✅ هش‌شده
+      data.password = await hashPasswordIfProvided(body.password); // ✅ هش
     }
 
-    if (Array.isArray(body.access)) {
-      data.access = body.access.map((v) => String(v || ""));
-    }
+    if (Array.isArray(body.access)) data.access = body.access.map((v) => String(v || ""));
 
     const rawRoleIds =
-      Array.isArray(body.positions) && body.positions.length
-        ? body.positions
-        : Array.isArray(body.roles)
-        ? body.roles
-        : null;
+      Array.isArray(body.positions) && body.positions.length ? body.positions :
+      Array.isArray(body.roles) && body.roles.length ? body.roles : null;
 
     let rolesUpdate = undefined;
     if (rawRoleIds !== null) {
       const roleIds = rawRoleIds.map((v) => Number(v)).filter((v) => !Number.isNaN(v) && v > 0);
       rolesUpdate = {
         deleteMany: {},
-        create: roleIds.map((roleId) => ({
-          role: { connect: { id: roleId } },
-        })),
+        create: roleIds.map((roleId) => ({ role: { connect: { id: roleId } } })),
       };
     }
 
@@ -198,8 +167,7 @@ export async function PATCH(request) {
   } catch (e) {
     console.error("admin_users_patch_error", e);
     return new Response(JSON.stringify({ error: "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
+      status: 500, headers: { "Content-Type": "application/json" },
     });
   }
 }
@@ -210,8 +178,7 @@ export async function DELETE(request) {
     const id = Number(body.id);
     if (!id || Number.isNaN(id)) {
       return new Response(JSON.stringify({ error: "invalid_id", message: "شناسه نامعتبر است" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
+        status: 400, headers: { "Content-Type": "application/json" },
       });
     }
 
@@ -226,8 +193,7 @@ export async function DELETE(request) {
   } catch (e) {
     console.error("admin_users_delete_error", e);
     return new Response(JSON.stringify({ error: "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
-      status: 500,
-      headers: { "Content-Type": "application/json" },
+      status: 500, headers: { "Content-Type": "application/json" },
     });
   }
 }
