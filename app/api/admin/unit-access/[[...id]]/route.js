@@ -3,33 +3,44 @@ export const runtime = "nodejs";
 
 import { prisma } from "../../../../../lib/prisma";
 
-function getId(params) {
-  const raw = params?.id?.[0];
-  const id = raw ? Number(raw) : 0;
-  return id && Number.isFinite(id) ? id : 0;
+function pickIdFromParams(params) {
+  const raw = Array.isArray(params?.id) ? params.id[0] : params?.id;
+  const n = Number(raw);
+  return Number.isFinite(n) && n > 0 ? n : null;
+}
+
+function pickIdFromUrl(request) {
+  try {
+    const { pathname } = new URL(request.url);
+    // مثال: /api/admin/unit-access/1
+    const parts = pathname.split("/").filter(Boolean);
+    const last = parts[parts.length - 1];
+    if (!last || last === "unit-access") return null;
+    const n = Number(last);
+    return Number.isFinite(n) && n > 0 ? n : null;
+  } catch {
+    return null;
+  }
 }
 
 // GET /api/admin/unit-access?unit_id=1
 export async function GET(request) {
   try {
-    const { searchParams } = new URL(request.url);
-    const unitId = Number(searchParams.get("unit_id") || 0);
-    if (!unitId) return Response.json({ items: [] });
+    const url = new URL(request.url);
+    const unitId = Number(url.searchParams.get("unit_id") || 0);
+    if (!unitId) {
+      return new Response(JSON.stringify({ error: "unit_id_required" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
 
     const items = await prisma.unitAccessRule.findMany({
       where: { unitId },
-      orderBy: [{ page: "asc" }, { tab: "asc" }],
+      orderBy: { id: "asc" },
     });
 
-    return Response.json({
-      items: items.map((x) => ({
-        id: x.id,
-        unit_id: x.unitId,
-        page: x.page,
-        tab: x.tab,
-        permitted: x.permitted ? 1 : 0,
-      })),
-    });
+    return Response.json({ items });
   } catch (e) {
     console.error("unit_access_get_error", e);
     return new Response(JSON.stringify({ error: "internal_error" }), {
@@ -39,38 +50,34 @@ export async function GET(request) {
   }
 }
 
-// POST /api/admin/unit-access  (upsert)
+// POST /api/admin/unit-access
 export async function POST(request) {
   try {
     const body = await request.json();
-    const unitId = Number(body.unit_id || 0);
-    const page = String(body.page || "").trim();
-    const tab = body.tab == null ? null : String(body.tab || "").trim();
-    const permitted = body.permitted === 1 || body.permitted === true;
 
-    if (!unitId || !page) {
-      return new Response(JSON.stringify({ error: "bad_request" }), {
+    const unitId = Number(body.unit_id ?? body.unitId ?? 0);
+    const page = String(body.page || "").trim();
+    const tab = body.tab === null || body.tab === undefined ? null : String(body.tab).trim();
+    const permitted = body.permitted === 0 ? 0 : 1;
+
+    if (!unitId) {
+      return new Response(JSON.stringify({ error: "unit_id_required" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (!page) {
+      return new Response(JSON.stringify({ error: "page_required" }), {
         status: 400,
         headers: { "Content-Type": "application/json" },
       });
     }
 
-    const item = await prisma.unitAccessRule.upsert({
-      where: { unitId_page_tab: { unitId, page, tab } },
-      update: { permitted },
-      create: { unitId, page, tab, permitted },
+    const item = await prisma.unitAccessRule.create({
+      data: { unitId, page, tab, permitted },
     });
 
-    return Response.json({
-      ok: true,
-      item: {
-        id: item.id,
-        unit_id: item.unitId,
-        page: item.page,
-        tab: item.tab,
-        permitted: item.permitted ? 1 : 0,
-      },
-    });
+    return Response.json({ ok: true, item });
   } catch (e) {
     console.error("unit_access_post_error", e);
     return new Response(JSON.stringify({ error: "internal_error" }), {
@@ -81,9 +88,9 @@ export async function POST(request) {
 }
 
 // DELETE /api/admin/unit-access/:id
-export async function DELETE(_request, { params }) {
+export async function DELETE(request, { params }) {
   try {
-    const id = getId(params);
+    const id = pickIdFromParams(params) ?? pickIdFromUrl(request);
     if (!id) {
       return new Response(JSON.stringify({ error: "invalid_id" }), {
         status: 400,
@@ -91,8 +98,8 @@ export async function DELETE(_request, { params }) {
       });
     }
 
-    await prisma.unitAccessRule.delete({ where: { id } });
-    return Response.json({ ok: true });
+    const item = await prisma.unitAccessRule.delete({ where: { id } });
+    return Response.json({ ok: true, item });
   } catch (e) {
     console.error("unit_access_delete_error", e);
     return new Response(JSON.stringify({ error: "internal_error" }), {
