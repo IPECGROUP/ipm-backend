@@ -1,5 +1,6 @@
 // app/api/admin/unit-access/[[...id]]/route.js
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 import { prisma } from "../../../../../lib/prisma";
 
@@ -12,7 +13,6 @@ function pickIdFromParams(params) {
 function pickIdFromUrl(request) {
   try {
     const { pathname } = new URL(request.url);
-    // مثال: /api/admin/unit-access/1
     const parts = pathname.split("/").filter(Boolean);
     const last = parts[parts.length - 1];
     if (!last || last === "unit-access") return null;
@@ -24,11 +24,27 @@ function pickIdFromUrl(request) {
 }
 
 function toBoolPermitted(v) {
-  return v === true || v === 1 || v === "1" || v === "true";
+  if (v === true) return true;
+  if (v === false) return false;
+  if (v === 1 || v === "1" || v === "true") return true;
+  if (v === 0 || v === "0" || v === "false") return false;
+  return true; // پیش‌فرض: true
 }
 
 function toIntPermitted(v) {
   return v ? 1 : 0;
+}
+
+function mapRow(r) {
+  return {
+    id: r.id,
+    unitId: r.unitId,
+    page: r.page,
+    tab: r.tab,
+    permitted: toIntPermitted(r.permitted),
+    createdAt: r.createdAt,
+    updatedAt: r.updatedAt,
+  };
 }
 
 // GET /api/admin/unit-access?unit_id=1
@@ -36,6 +52,7 @@ export async function GET(request) {
   try {
     const url = new URL(request.url);
     const unitId = Number(url.searchParams.get("unit_id") || 0);
+
     if (!unitId) {
       return new Response(JSON.stringify({ error: "unit_id_required" }), {
         status: 400,
@@ -48,19 +65,7 @@ export async function GET(request) {
       orderBy: { id: "asc" },
     });
 
-    // ✅ فرانت توی UnitsPage چک می‌کنه permitted !== 1
-    // پس اینجا Boolean رو به 1/0 تبدیل می‌کنیم تا UI دست نخورَد
-    const items = (rows || []).map((r) => ({
-      id: r.id,
-      unitId: r.unitId,
-      page: r.page,
-      tab: r.tab,
-      permitted: toIntPermitted(r.permitted),
-      createdAt: r.createdAt,
-      updatedAt: r.updatedAt,
-    }));
-
-    return Response.json({ items });
+    return Response.json({ items: (rows || []).map(mapRow) });
   } catch (e) {
     console.error("unit_access_get_error", e);
     return new Response(JSON.stringify({ error: "internal_error" }), {
@@ -78,7 +83,10 @@ export async function POST(request) {
     const unitId = Number(body.unit_id ?? body.unitId ?? 0);
     const page = String(body.page || "").trim();
     const tab =
-      body.tab === null || body.tab === undefined ? null : String(body.tab).trim();
+      body.tab === null || body.tab === undefined
+        ? null
+        : String(body.tab).trim();
+
     const permitted = toBoolPermitted(body.permitted);
 
     if (!unitId) {
@@ -94,23 +102,17 @@ export async function POST(request) {
       });
     }
 
-    const item = await prisma.unitAccessRule.create({
-      data: { unitId, page, tab, permitted }, // ✅ permitted بولی
+    // اگر نمی‌خوای رکورد تکراری ساخته بشه:
+    // اول مشابهش رو پاک کن (یا اگر unique داری، می‌تونی upsert بزنی)
+    await prisma.unitAccessRule.deleteMany({
+      where: { unitId, page, tab },
     });
 
-    // خروجی هم برای UI با 1/0 برگرده (هماهنگ با GET)
-    return Response.json({
-      ok: true,
-      item: {
-        id: item.id,
-        unitId: item.unitId,
-        page: item.page,
-        tab: item.tab,
-        permitted: toIntPermitted(item.permitted),
-        createdAt: item.createdAt,
-        updatedAt: item.updatedAt,
-      },
+    const item = await prisma.unitAccessRule.create({
+      data: { unitId, page, tab, permitted }, // داخل DB بولین
     });
+
+    return Response.json({ ok: true, item: mapRow(item) });
   } catch (e) {
     console.error("unit_access_post_error", e);
     return new Response(JSON.stringify({ error: "internal_error" }), {
@@ -124,6 +126,7 @@ export async function POST(request) {
 export async function DELETE(request, { params }) {
   try {
     const id = pickIdFromParams(params) ?? pickIdFromUrl(request);
+
     if (!id) {
       return new Response(JSON.stringify({ error: "invalid_id" }), {
         status: 400,
@@ -132,19 +135,7 @@ export async function DELETE(request, { params }) {
     }
 
     const item = await prisma.unitAccessRule.delete({ where: { id } });
-
-    return Response.json({
-      ok: true,
-      item: {
-        id: item.id,
-        unitId: item.unitId,
-        page: item.page,
-        tab: item.tab,
-        permitted: toIntPermitted(item.permitted),
-        createdAt: item.createdAt,
-        updatedAt: item.updatedAt,
-      },
-    });
+    return Response.json({ ok: true, item: mapRow(item) });
   } catch (e) {
     console.error("unit_access_delete_error", e);
     return new Response(JSON.stringify({ error: "internal_error" }), {
