@@ -4,7 +4,6 @@ export const runtime = "nodejs";
 import { prisma } from "../../../../lib/prisma";
 import bcrypt from "bcryptjs";
 
-// خوندن JSON امن
 async function readJson(request) {
   try {
     return await request.json();
@@ -13,7 +12,6 @@ async function readJson(request) {
   }
 }
 
-// نرمال‌سازی خروجی کاربر برای فرانت
 function mapUser(u) {
   if (!u) return null;
   const roles = Array.isArray(u.roles) ? u.roles : [];
@@ -33,7 +31,6 @@ function mapUser(u) {
   };
 }
 
-// GET /api/admin/users
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -42,10 +39,10 @@ export async function GET(request) {
     if (idParam) {
       const id = Number(idParam);
       if (!id || Number.isNaN(id)) {
-        return new Response(
-          JSON.stringify({ error: "invalid_id", message: "شناسه نامعتبر است" }),
-          { status: 400, headers: { "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify({ error: "invalid_id", message: "شناسه نامعتبر است" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
       }
 
       const user = await prisma.user.findUnique({
@@ -54,10 +51,10 @@ export async function GET(request) {
       });
 
       if (!user) {
-        return new Response(
-          JSON.stringify({ error: "not_found", message: "کاربر پیدا نشد" }),
-          { status: 404, headers: { "Content-Type": "application/json" } }
-        );
+        return new Response(JSON.stringify({ error: "not_found", message: "کاربر پیدا نشد" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
       }
 
       return Response.json({ user: mapUser(user) });
@@ -71,33 +68,25 @@ export async function GET(request) {
     return Response.json({ users: users.map(mapUser) });
   } catch (e) {
     console.error("admin_users_get_error", e);
-    return new Response(
-      JSON.stringify({
-        error: "internal_error",
-        message: e?.message || "unknown_error",
-        code: e?.code || null,
-      }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ error: "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 }
 
-// POST /api/admin/users  → ساخت کاربر جدید
+// POST /api/admin/users
 export async function POST(request) {
   try {
     const body = await readJson(request);
 
     const username = String(body.username || "").trim();
-    const password = String(body.password || "").trim();
-
-    if (!username || !password) {
-      return new Response(
-        JSON.stringify({
-          error: "username_password_required",
-          message: "نام کاربری و گذرواژه الزامی است",
-        }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      );
+    const passwordRaw = String(body.password || "");
+    if (!username || !passwordRaw) {
+      return new Response(JSON.stringify({ error: "username_password_required", message: "نام کاربری و گذرواژه الزامی است" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
     }
 
     const name = body.name ? String(body.name).trim() : null;
@@ -105,9 +94,7 @@ export async function POST(request) {
     const department = body.department ? String(body.department).trim() : null;
     const role = body.role ? String(body.role).trim() : "user";
 
-    const access = Array.isArray(body.access)
-      ? body.access.map((v) => String(v || ""))
-      : [];
+    const access = Array.isArray(body.access) ? body.access.map((v) => String(v || "")) : [];
 
     const rawRoleIds =
       Array.isArray(body.positions) && body.positions.length
@@ -115,18 +102,16 @@ export async function POST(request) {
         : Array.isArray(body.roles)
         ? body.roles
         : [];
-    const roleIds = rawRoleIds
-      .map((v) => Number(v))
-      .filter((v) => !Number.isNaN(v) && v > 0);
+    const roleIds = rawRoleIds.map((v) => Number(v)).filter((v) => !Number.isNaN(v) && v > 0);
 
-    const passwordHash = await bcrypt.hash(password, 10);
+    const password = await bcrypt.hash(passwordRaw, 10);
 
     const user = await prisma.user.create({
       data: {
         name,
         email,
         username,
-        passwordHash,
+        password, // ✅ هش‌شده
         department,
         role,
         access,
@@ -142,55 +127,43 @@ export async function POST(request) {
     return Response.json({ user: mapUser(user) });
   } catch (e) {
     console.error("admin_users_post_error", e);
-    return new Response(
-      JSON.stringify({
-        error: "internal_error",
-        message: e?.message || "unknown_error",
-        code: e?.code || null,
-      }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ error: "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 }
 
-// PATCH /api/admin/users  → ویرایش کاربر (id داخل body)
+// PATCH /api/admin/users
 export async function PATCH(request) {
   try {
     const body = await readJson(request);
 
     const id = Number(body.id);
     if (!id || Number.isNaN(id)) {
-      return new Response(
-        JSON.stringify({ error: "invalid_id", message: "شناسه نامعتبر است" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ error: "invalid_id", message: "شناسه نامعتبر است" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
     }
 
     const data = {};
 
     if (body.name !== undefined)
-      data.name =
-        body.name === null ? null : String(body.name || "").trim() || null;
+      data.name = body.name === null ? null : String(body.name || "").trim() || null;
 
     if (body.email !== undefined)
-      data.email =
-        body.email === null ? null : String(body.email || "").trim() || null;
+      data.email = body.email === null ? null : String(body.email || "").trim() || null;
 
-    if (body.username !== undefined)
-      data.username = String(body.username || "").trim();
+    if (body.username !== undefined) data.username = String(body.username || "").trim();
 
     if (body.department !== undefined)
-      data.department =
-        body.department === null
-          ? null
-          : String(body.department || "").trim() || null;
+      data.department = body.department === null ? null : String(body.department || "").trim() || null;
 
-    if (body.role !== undefined)
-      data.role = String(body.role || "user").trim();
+    if (body.role !== undefined) data.role = String(body.role || "user").trim();
 
     if (body.password) {
-      const pw = String(body.password || "").trim();
-      if (pw) data.passwordHash = await bcrypt.hash(pw, 10);
+      data.password = await bcrypt.hash(String(body.password), 10); // ✅ هش‌شده
     }
 
     if (Array.isArray(body.access)) {
@@ -206,10 +179,7 @@ export async function PATCH(request) {
 
     let rolesUpdate = undefined;
     if (rawRoleIds !== null) {
-      const roleIds = rawRoleIds
-        .map((v) => Number(v))
-        .filter((v) => !Number.isNaN(v) && v > 0);
-
+      const roleIds = rawRoleIds.map((v) => Number(v)).filter((v) => !Number.isNaN(v) && v > 0);
       rolesUpdate = {
         deleteMany: {},
         create: roleIds.map((roleId) => ({
@@ -220,38 +190,29 @@ export async function PATCH(request) {
 
     const user = await prisma.user.update({
       where: { id },
-      data: {
-        ...data,
-        ...(rolesUpdate ? { roles: rolesUpdate } : {}),
-      },
+      data: { ...data, ...(rolesUpdate ? { roles: rolesUpdate } : {}) },
       include: { roles: { include: { role: true } } },
     });
 
     return Response.json({ user: mapUser(user) });
   } catch (e) {
     console.error("admin_users_patch_error", e);
-    return new Response(
-      JSON.stringify({
-        error: "internal_error",
-        message: e?.message || "unknown_error",
-        code: e?.code || null,
-      }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ error: "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 }
 
-// DELETE /api/admin/users  → حذف کاربر (id داخل body)
 export async function DELETE(request) {
   try {
     const body = await readJson(request);
     const id = Number(body.id);
-
     if (!id || Number.isNaN(id)) {
-      return new Response(
-        JSON.stringify({ error: "invalid_id", message: "شناسه نامعتبر است" }),
-        { status: 400, headers: { "Content-Type": "application/json" } }
-      );
+      return new Response(JSON.stringify({ error: "invalid_id", message: "شناسه نامعتبر است" }), {
+        status: 400,
+        headers: { "Content-Type": "application/json" },
+      });
     }
 
     await prisma.userRoleMap.deleteMany({ where: { userId: id } });
@@ -264,13 +225,9 @@ export async function DELETE(request) {
     return Response.json({ ok: true, user: mapUser({ ...deleted, roles: [] }) });
   } catch (e) {
     console.error("admin_users_delete_error", e);
-    return new Response(
-      JSON.stringify({
-        error: "internal_error",
-        message: e?.message || "unknown_error",
-        code: e?.code || null,
-      }),
-      { status: 500, headers: { "Content-Type": "application/json" } }
-    );
+    return new Response(JSON.stringify({ error: "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
+      status: 500,
+      headers: { "Content-Type": "application/json" },
+    });
   }
 }
