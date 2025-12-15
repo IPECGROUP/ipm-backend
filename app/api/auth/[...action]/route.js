@@ -15,27 +15,9 @@ function json(data, status = 200) {
   });
 }
 
-function pickActionFromParams(params) {
+function pickAction(params) {
   const a = params?.action;
-  const v = Array.isArray(a) ? (a[0] || "") : (a || "");
-  return String(v || "").trim();
-}
-
-function pickActionFromUrl(request) {
-  try {
-    const { pathname } = new URL(request.url);
-    const parts = pathname.split("/").filter(Boolean);
-    // /api/auth/login  => parts = ["api","auth","login"]
-    const i = parts.lastIndexOf("auth");
-    const act = i >= 0 ? (parts[i + 1] || "") : (parts[parts.length - 1] || "");
-    return String(act || "").trim();
-  } catch {
-    return "";
-  }
-}
-
-function pickAction(request, params) {
-  return pickActionFromParams(params) || pickActionFromUrl(request);
+  return Array.isArray(a) ? (a[0] || "") : (a || "");
 }
 
 async function readBody(req) {
@@ -57,6 +39,16 @@ function looksLikeBcryptHash(s) {
   return v.startsWith("$2a$") || v.startsWith("$2b$") || v.startsWith("$2y$");
 }
 
+function isHttpsRequest(request) {
+  const xfProto = (request.headers.get("x-forwarded-proto") || "").toLowerCase();
+  if (xfProto.includes("https")) return true;
+  try {
+    return new URL(request.url).protocol === "https:";
+  } catch {
+    return false;
+  }
+}
+
 async function handleLogin(request) {
   const body = await readBody(request);
   const username = String(body.username || "").trim();
@@ -74,35 +66,31 @@ async function handleLogin(request) {
   if (!stored) return json({ error: "user_has_no_password" }, 400);
 
   let ok = false;
-
-  // اگر هش بود با bcrypt چک کن، اگر نبود با مقایسه ساده (برای سازگاری)
-  if (looksLikeBcryptHash(stored)) {
-    try {
-      ok = await bcrypt.compare(password, stored);
-    } catch {
-      ok = false;
-    }
-  } else {
-    ok = password === String(stored);
+  try {
+    if (looksLikeBcryptHash(stored)) ok = await bcrypt.compare(password, stored);
+    else ok = password === stored; // برای کاربرهایی که پسورد خام دارند
+  } catch {
+    ok = false;
   }
 
   if (!ok) return json({ error: "invalid_credentials" }, 401);
 
   const token = crypto.randomBytes(32).toString("hex");
 
+  // ✅ Session مدل شما token ندارد، پس token را در id ذخیره می‌کنیم
   await prisma.session.create({
     data: {
-      token,
+      id: token,
       userId: user.id,
       expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30),
     },
   });
 
-  const jar = cookies();
+  const jar = await cookies();
   jar.set(COOKIE_NAME, token, {
     httpOnly: true,
     sameSite: "lax",
-    secure: process.env.NODE_ENV === "production",
+    secure: isHttpsRequest(request), // روی https true، روی تست‌های http (curl localhost) false
     path: "/",
     maxAge: 60 * 60 * 24 * 30,
   });
@@ -110,13 +98,13 @@ async function handleLogin(request) {
   return json({ ok: true, user: safeUser(user) });
 }
 
-async function handleMe() {
-  const jar = cookies();
+async function handleMe(request) {
+  const jar = await cookies();
   const token = jar.get(COOKIE_NAME)?.value || "";
   if (!token) return json({ user: null });
 
-  const sess = await prisma.session.findFirst({
-    where: { token },
+  const sess = await prisma.session.findUnique({
+    where: { id: token },
     include: { user: true },
   });
 
@@ -131,11 +119,11 @@ async function handleMe() {
   return json({ user: safeUser(sess.user) });
 }
 
-async function handleLogout() {
-  const jar = cookies();
+async function handleLogout(request) {
+  const jar = await cookies();
   const token = jar.get(COOKIE_NAME)?.value || "";
   if (token) {
-    try { await prisma.session.deleteMany({ where: { token } }); } catch {}
+    try { await prisma.session.deleteMany({ where: { id: token } }); } catch {}
   }
   jar.set(COOKIE_NAME, "", { path: "/", maxAge: 0 });
   return json({ ok: true });
@@ -143,8 +131,8 @@ async function handleLogout() {
 
 export async function GET(request, { params }) {
   try {
-    const action = pickAction(request, params);
-    if (action === "me") return await handleMe();
+    const action = pickAction(params);
+    if (action === "me") return await handleMe(request);
     return json({ error: "not_found" }, 404);
   } catch (e) {
     console.error("auth_get_error", e);
@@ -154,9 +142,9 @@ export async function GET(request, { params }) {
 
 export async function POST(request, { params }) {
   try {
-    const action = pickAction(request, params);
+    const action = pickAction(params);
     if (action === "login") return await handleLogin(request);
-    if (action === "logout") return await handleLogout();
+    if (action === "logout") return await handleLogout(request);
     return json({ error: "not_found" }, 404);
   } catch (e) {
     console.error("auth_post_error", e);
