@@ -2,7 +2,6 @@
 export const runtime = "nodejs";
 
 import { NextResponse } from "next/server";
-import { cookies } from "next/headers";
 import { prisma } from "../../../../lib/prisma";
 
 const KNOWN_PAGES = [
@@ -28,18 +27,87 @@ function truthy(v) {
   return v === true || v === 1 || v === "1" || v === "true";
 }
 
-export async function GET() {
+function pickDelegate(names) {
+  for (const n of names) {
+    const d = prisma?.[n];
+    if (d && typeof d.findMany === "function") return d;
+  }
+  return null;
+}
+
+async function getSessionByCookie(sid) {
+  const sessionDelegate = pickDelegate(["session", "sessions"]);
+  if (!sessionDelegate) return null;
+
+  // بعضی اسکیمه‌ها unique رو روی id دارند، بعضی‌ها روی token
   try {
-    const c = cookies();
-    const sid = c.get("ipm_session")?.value;
+    return await sessionDelegate.findUnique({ where: { id: sid } });
+  } catch {}
+  try {
+    return await sessionDelegate.findUnique({ where: { token: sid } });
+  } catch {}
+
+  return null;
+}
+
+async function getUserUnitIds(userId) {
+  // محتمل‌ترین نام‌های مدل
+  const d =
+    pickDelegate([
+      "userUnit",
+      "userUnits",
+      "userUnitMap",
+      "userRoleUnitMap",
+      "userUnitMembership",
+      "userUnitsMap",
+    ]) || null;
+
+  if (!d) return [];
+
+  try {
+    const rows = await d.findMany({
+      where: { userId },
+      select: { unitId: true },
+    });
+    return Array.from(new Set((rows || []).map((r) => r.unitId).filter(Boolean)));
+  } catch {}
+
+  // بعضی وقت‌ها select/field اسمش فرق می‌کنه
+  try {
+    const rows = await d.findMany({ where: { userId } });
+    const unitIds = (rows || [])
+      .map((r) => r.unitId ?? r.unit_id ?? r.unitID ?? r.unit)
+      .filter((x) => x != null)
+      .map((x) => Number(x))
+      .filter((x) => Number.isFinite(x) && x > 0);
+    return Array.from(new Set(unitIds));
+  } catch {
+    return [];
+  }
+}
+
+async function getUnitAccessRules(unitIds) {
+  const d = pickDelegate(["unitAccessRule", "unitAccessRules"]);
+  if (!d) return [];
+
+  return await d.findMany({
+    where: { unitId: { in: unitIds } },
+    orderBy: { id: "asc" },
+  });
+}
+
+export async function GET(request) {
+  try {
+    const sid = request.cookies.get("ipm_session")?.value;
     if (!sid) {
       return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
     }
 
-    const session = await prisma.session.findUnique({ where: { id: sid } });
+    const session = await getSessionByCookie(sid);
     if (!session) {
       return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
     }
+
     if (session.expiresAt && new Date(session.expiresAt).getTime() < Date.now()) {
       return NextResponse.json({ ok: false, error: "session_expired" }, { status: 401 });
     }
@@ -49,52 +117,50 @@ export async function GET() {
       return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
     }
 
-    // ادمین => همه صفحات و همه تب‌ها مجاز
+    // admin => همه صفحات و همه تب‌ها
     if (isAdminUser(user)) {
       const pages = {};
-      for (const p of KNOWN_PAGES) {
-        pages[p] = { permitted: 1, tabs: null };
-      }
+      for (const p of KNOWN_PAGES) pages[p] = { permitted: 1, tabs: null };
       return NextResponse.json({
         ok: true,
-        user: { id: user.id, username: user.username, role: user.role, email: user.email, name: user.name },
+        user: {
+          id: user.id,
+          username: user.username,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          access: user.access || [],
+        },
         unitIds: [],
         pages,
       });
     }
 
-    // واحدهای کاربر
-    const userUnitModel = prisma.userUnit || prisma.userUnits;
-    if (!userUnitModel) {
-      return NextResponse.json({ ok: false, error: "user_unit_model_missing" }, { status: 500 });
-    }
+    const unitIds = await getUserUnitIds(user.id);
 
-    const urows = await userUnitModel.findMany({
-      where: { userId: user.id },
-      select: { unitId: true },
-    });
-    const unitIds = Array.from(new Set((urows || []).map((x) => x.unitId).filter(Boolean)));
-
-    // اگر کاربر واحد ندارد => هیچ دسترسی
+    // اگر واحد ندارد => هیچ دسترسی
     const pages = {};
     for (const p of KNOWN_PAGES) pages[p] = null;
 
     if (!unitIds.length) {
       return NextResponse.json({
         ok: true,
-        user: { id: user.id, username: user.username, role: user.role, email: user.email, name: user.name },
+        user: {
+          id: user.id,
+          username: user.username,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          access: user.access || [],
+        },
         unitIds,
         pages,
       });
     }
 
-    // قوانین دسترسی
-    const rules = await prisma.unitAccessRule.findMany({
-      where: { unitId: { in: unitIds } },
-      orderBy: { id: "asc" },
-    });
+    const rules = await getUnitAccessRules(unitIds);
 
-    // گروه‌بندی بر اساس page
+    // گروه بندی rule ها بر اساس page
     const byPage = new Map();
     for (const r of rules || []) {
       const page = String(r.page || "").trim();
@@ -110,14 +176,14 @@ export async function GET() {
         continue;
       }
 
-      // اگر page-level rule داریم (tab == null) و permitted=true => کل صفحه + همه تب‌ها
+      // اگر page-level allow (tab=null) داشتیم => همه تب‌ها
       const pageLevelAllow = rs.some((x) => (x.tab == null || x.tab === "") && truthy(x.permitted));
       if (pageLevelAllow) {
         pages[page] = { permitted: 1, tabs: null };
         continue;
       }
 
-      // اگر ruleهای تب داریم => فقط همان تب‌های permitted مجاز
+      // وگرنه فقط تب‌های مجاز
       const tabs = {};
       for (const x of rs) {
         if (x.tab == null || x.tab === "") continue;
@@ -131,12 +197,25 @@ export async function GET() {
 
     return NextResponse.json({
       ok: true,
-      user: { id: user.id, username: user.username, role: user.role, email: user.email, name: user.name },
+      user: {
+        id: user.id,
+        username: user.username,
+        name: user.name,
+        email: user.email,
+        role: user.role,
+        access: user.access || [],
+      },
       unitIds,
       pages,
     });
   } catch (e) {
     console.error("access_my_error", e);
-    return NextResponse.json({ error: "internal_error" }, { status: 500 });
+    return NextResponse.json(
+      {
+        error: "internal_error",
+        message: e?.message || "unknown_error",
+      },
+      { status: 500 }
+    );
   }
 }
