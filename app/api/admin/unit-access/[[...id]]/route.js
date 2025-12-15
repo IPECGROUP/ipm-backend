@@ -23,6 +23,14 @@ function pickIdFromUrl(request) {
   }
 }
 
+function toBoolPermitted(v) {
+  return v === true || v === 1 || v === "1" || v === "true";
+}
+
+function toIntPermitted(v) {
+  return v ? 1 : 0;
+}
+
 // GET /api/admin/unit-access?unit_id=1
 export async function GET(request) {
   try {
@@ -35,10 +43,22 @@ export async function GET(request) {
       });
     }
 
-    const items = await prisma.unitAccessRule.findMany({
+    const rows = await prisma.unitAccessRule.findMany({
       where: { unitId },
       orderBy: { id: "asc" },
     });
+
+    // ✅ فرانت توی UnitsPage چک می‌کنه permitted !== 1
+    // پس اینجا Boolean رو به 1/0 تبدیل می‌کنیم تا UI دست نخورَد
+    const items = (rows || []).map((r) => ({
+      id: r.id,
+      unitId: r.unitId,
+      page: r.page,
+      tab: r.tab,
+      permitted: toIntPermitted(r.permitted),
+      createdAt: r.createdAt,
+      updatedAt: r.updatedAt,
+    }));
 
     return Response.json({ items });
   } catch (e) {
@@ -57,8 +77,9 @@ export async function POST(request) {
 
     const unitId = Number(body.unit_id ?? body.unitId ?? 0);
     const page = String(body.page || "").trim();
-    const tab = body.tab === null || body.tab === undefined ? null : String(body.tab).trim();
-    const permitted = body.permitted === 0 ? 0 : 1;
+    const tab =
+      body.tab === null || body.tab === undefined ? null : String(body.tab).trim();
+    const permitted = toBoolPermitted(body.permitted);
 
     if (!unitId) {
       return new Response(JSON.stringify({ error: "unit_id_required" }), {
@@ -74,10 +95,22 @@ export async function POST(request) {
     }
 
     const item = await prisma.unitAccessRule.create({
-      data: { unitId, page, tab, permitted },
+      data: { unitId, page, tab, permitted }, // ✅ permitted بولی
     });
 
-    return Response.json({ ok: true, item });
+    // خروجی هم برای UI با 1/0 برگرده (هماهنگ با GET)
+    return Response.json({
+      ok: true,
+      item: {
+        id: item.id,
+        unitId: item.unitId,
+        page: item.page,
+        tab: item.tab,
+        permitted: toIntPermitted(item.permitted),
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+      },
+    });
   } catch (e) {
     console.error("unit_access_post_error", e);
     return new Response(JSON.stringify({ error: "internal_error" }), {
@@ -99,7 +132,19 @@ export async function DELETE(request, { params }) {
     }
 
     const item = await prisma.unitAccessRule.delete({ where: { id } });
-    return Response.json({ ok: true, item });
+
+    return Response.json({
+      ok: true,
+      item: {
+        id: item.id,
+        unitId: item.unitId,
+        page: item.page,
+        tab: item.tab,
+        permitted: toIntPermitted(item.permitted),
+        createdAt: item.createdAt,
+        updatedAt: item.updatedAt,
+      },
+    });
   } catch (e) {
     console.error("unit_access_delete_error", e);
     return new Response(JSON.stringify({ error: "internal_error" }), {
