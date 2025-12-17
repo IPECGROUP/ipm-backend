@@ -17,7 +17,10 @@ export async function GET() {
     amount: r.amount?.toString?.() ?? "0",
   }));
 
-  return NextResponse.json({ items });
+  return NextResponse.json(
+    { items },
+    { headers: { "Cache-Control": "no-store" } }
+  );
 }
 
 export async function POST(req) {
@@ -27,7 +30,7 @@ export async function POST(req) {
   if (!Array.isArray(rows)) {
     return NextResponse.json(
       { error: "invalid_payload", message: "rows must be an array" },
-      { status: 400 }
+      { status: 400, headers: { "Cache-Control": "no-store" } }
     );
   }
 
@@ -46,5 +49,8 @@ export async function POST(req) {
     await tx.revenueEstimateRow.createMany({ data: normalized });
   });
 
-  return NextResponse.json({ ok: true });
+  return NextResponse.json(
+    { ok: true },
+    { headers: { "Cache-Control": "no-store" } }
+  );
 }
