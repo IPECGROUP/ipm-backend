@@ -13,6 +13,7 @@ export async function GET() {
     title: r.title,
     description: r.description ?? "",
     project_id: r.projectId,
+    is_other: !!r.isOther,
     months: Array.isArray(r.monthsJson) ? r.monthsJson : (r.monthsJson ?? []),
     amount: r.amount?.toString?.() ?? "0",
   }));
@@ -40,6 +41,7 @@ export async function POST(req) {
     title: String(r.title ?? "").trim(),
     description: String(r.description ?? ""),
     projectId: r.project_id == null ? null : Number(r.project_id),
+    isOther: !!(r.is_other ?? r.isOther),
     monthsJson: Array.isArray(r.months) ? r.months : [],
     amount: BigInt(String(r.amount ?? "0").replace(/[^\d]/g, "") || "0"),
   }));
