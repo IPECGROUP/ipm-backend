@@ -2,6 +2,7 @@
 export const runtime = "nodejs";
 
 import { prisma } from "../../../../../lib/prisma";
+import { Prisma } from "@prisma/client";
 
 // helper: گرفتن id از مسیر /api/base/units/:id
 function getId(params) {
@@ -121,6 +122,24 @@ export async function DELETE(_request, { params }) {
     return Response.json({ ok: true, item: unit });
   } catch (e) {
     console.error("units_delete_error", e);
+
+    if (e instanceof Prisma.PrismaClientKnownRequestError) {
+      // FK constraint (unit is referenced somewhere)
+      if (e.code === "P2003") {
+        return new Response(JSON.stringify({ error: "unit_in_use" }), {
+          status: 409,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+      // Record not found
+      if (e.code === "P2025") {
+        return new Response(JSON.stringify({ error: "unit_not_found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+    }
+
     return new Response(JSON.stringify({ error: "internal_error" }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
