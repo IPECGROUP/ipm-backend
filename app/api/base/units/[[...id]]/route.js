@@ -4,18 +4,31 @@ export const runtime = "nodejs";
 import { prisma } from "../../../../../lib/prisma";
 import { Prisma } from "@prisma/client";
 
-// helper: گرفتن id از مسیر /api/base/units/:id
-function getId(params) {
-  const raw = params?.id?.[0];
-  const id = raw ? Number(raw) : 0;
-  return id && Number.isFinite(id) ? id : 0;
+function getId(request, params) {
+  let raw = params?.id;
+
+  if (Array.isArray(raw)) raw = raw[0];
+
+  if (raw !== undefined && raw !== null && String(raw).trim() !== "") {
+    const n = Number(raw);
+    if (n && Number.isFinite(n)) return n;
+  }
+
+  try {
+    const { pathname } = new URL(request.url);
+    const m = pathname.match(/\/base\/units\/(\d+)(?:\/)?$/) || pathname.match(/\/units\/(\d+)(?:\/)?$/);
+    if (m?.[1]) {
+      const n = Number(m[1]);
+      if (n && Number.isFinite(n)) return n;
+    }
+  } catch {}
+
+  return 0;
 }
 
-// GET /api/base/units  → لیست
-// GET /api/base/units/:id → یک واحد
 export async function GET(request, { params }) {
   try {
-    const id = getId(params);
+    const id = getId(request, params);
 
     if (id) {
       const item = await prisma.unit.findUnique({ where: { id } });
@@ -36,10 +49,9 @@ export async function GET(request, { params }) {
   }
 }
 
-// POST /api/base/units → افزودن واحد
 export async function POST(request, { params }) {
   try {
-    const id = getId(params);
+    const id = getId(request, params);
     if (id) {
       return new Response(JSON.stringify({ error: "method_not_allowed" }), {
         status: 405,
@@ -69,10 +81,9 @@ export async function POST(request, { params }) {
   }
 }
 
-// PATCH /api/base/units/:id → ویرایش
 export async function PATCH(request, { params }) {
   try {
-    const id = getId(params);
+    const id = getId(request, params);
     if (!id) {
       return new Response(JSON.stringify({ error: "invalid_id" }), {
         status: 400,
@@ -107,10 +118,9 @@ export async function PATCH(request, { params }) {
   }
 }
 
-// DELETE /api/base/units/:id → حذف
-export async function DELETE(_request, { params }) {
+export async function DELETE(request, { params }) {
   try {
-    const id = getId(params);
+    const id = getId(request, params);
     if (!id) {
       return new Response(JSON.stringify({ error: "invalid_id" }), {
         status: 400,
@@ -123,29 +133,19 @@ export async function DELETE(_request, { params }) {
   } catch (e) {
     console.error("units_delete_error", e);
 
-    // ✅ در Next.js به جای instanceof مطمئن‌ترین روش چک کردن code هست
-    const code = e?.code;
-
-    // FK constraint (unit is referenced somewhere)
-    if (code === "P2003") {
-      return new Response(
-        JSON.stringify({
-          error: "unit_in_use",
-          meta: e?.meta || null,
-        }),
-        {
+    if (e instanceof Prisma.PrismaClientKnownRequestError) {
+      if (e.code === "P2003") {
+        return new Response(JSON.stringify({ error: "unit_in_use" }), {
           status: 409,
           headers: { "Content-Type": "application/json" },
-        }
-      );
-    }
-
-    // Record not found
-    if (code === "P2025") {
-      return new Response(JSON.stringify({ error: "unit_not_found" }), {
-        status: 404,
-        headers: { "Content-Type": "application/json" },
-      });
+        });
+      }
+      if (e.code === "P2025") {
+        return new Response(JSON.stringify({ error: "unit_not_found" }), {
+          status: 404,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
     }
 
     return new Response(JSON.stringify({ error: "internal_error" }), {
