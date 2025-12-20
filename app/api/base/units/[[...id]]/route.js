@@ -123,21 +123,29 @@ export async function DELETE(_request, { params }) {
   } catch (e) {
     console.error("units_delete_error", e);
 
-    if (e instanceof Prisma.PrismaClientKnownRequestError) {
-      // FK constraint (unit is referenced somewhere)
-      if (e.code === "P2003") {
-        return new Response(JSON.stringify({ error: "unit_in_use" }), {
+    // ✅ در Next.js به جای instanceof مطمئن‌ترین روش چک کردن code هست
+    const code = e?.code;
+
+    // FK constraint (unit is referenced somewhere)
+    if (code === "P2003") {
+      return new Response(
+        JSON.stringify({
+          error: "unit_in_use",
+          meta: e?.meta || null,
+        }),
+        {
           status: 409,
           headers: { "Content-Type": "application/json" },
-        });
-      }
-      // Record not found
-      if (e.code === "P2025") {
-        return new Response(JSON.stringify({ error: "unit_not_found" }), {
-          status: 404,
-          headers: { "Content-Type": "application/json" },
-        });
-      }
+        }
+      );
+    }
+
+    // Record not found
+    if (code === "P2025") {
+      return new Response(JSON.stringify({ error: "unit_not_found" }), {
+        status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
     }
 
     return new Response(JSON.stringify({ error: "internal_error" }), {
