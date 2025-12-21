@@ -162,3 +162,45 @@ model UserUnit {
   @@id([userId, unitId])
   @@index([unitId])
 }
+
+
+model Letter {
+  id                Int      @id @default(autoincrement())
+
+  // incoming | outgoing
+  kind              String
+
+  category          String?  // e.g. "project" or ""
+  projectId         Int?
+
+  letterNo          String?
+  letterDate        String?  // "YYYY/MM/DD" (Jalali as string)
+
+  fromName          String?
+  toName            String?
+  orgName           String?
+  subject           String?
+
+  hasAttachment     Boolean  @default(false)
+  attachmentTitle   String?
+
+  returnToIds       Json?    // array of ids (strings/numbers)
+  piroIds           Json?    // array of ids (strings/numbers)
+  tagIds            Json?    // array of ids (strings/numbers)
+
+  secretariatDate   String?
+  secretariatNo     String?
+  receiverName      String?
+
+  // attachments are stored "with the letter" in DB (metadata)
+  // each item: { id, name, size, type, url, path, uploaded_at }
+  attachments       Json?
+
+  createdBy         String?  // later if you have auth/user
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  @@index([kind])
+  @@index([projectId])
+  @@index([createdAt])
+}
