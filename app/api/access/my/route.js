@@ -24,12 +24,7 @@ function isAdminUser(u) {
 }
 
 function truthy(v) {
-  if (v === true) return true;
-  if (v === 1 || v === "1" || v === "true") return true;
-  if (typeof v === "bigint") return v === 1n;
-  if (typeof v === "number") return v === 1;
-  if (typeof v === "string") return v.trim().toLowerCase() === "true" || v.trim() === "1";
-  return false;
+  return v === true || v === 1 || v === "1" || v === "true";
 }
 
 function pickDelegate(names) {
@@ -91,11 +86,34 @@ async function getUserUnitIds(userId) {
 async function getUnitAccessRules(unitIds) {
   const d = pickDelegate(["unitAccessRule", "unitAccessRules"]);
   if (!d) return [];
-
   return await d.findMany({
     where: { unitId: { in: unitIds } },
     orderBy: { id: "asc" },
   });
+}
+
+function normalizePage(v) {
+  const s = String(v ?? "").trim();
+  return s || "";
+}
+
+function normalizeTab(rule) {
+  // فقط وقتی tab "واقعاً" وجود داشته باشه باید باهاش تصمیم بگیریم
+  let raw;
+  if (Object.prototype.hasOwnProperty.call(rule, "tab")) raw = rule.tab;
+  else if (Object.prototype.hasOwnProperty.call(rule, "tab_name")) raw = rule.tab_name;
+  else if (Object.prototype.hasOwnProperty.call(rule, "tabName")) raw = rule.tabName;
+  else if (Object.prototype.hasOwnProperty.call(rule, "tab_key")) raw = rule.tab_key;
+  else if (Object.prototype.hasOwnProperty.call(rule, "tabKey")) raw = rule.tabKey;
+  else return { tab: "__MISSING__" };
+
+  if (raw === null) return { tab: null };
+  if (raw === undefined) return { tab: "__MISSING__" };
+
+  const s = String(raw).trim();
+  if (!s) return { tab: "" };
+  if (s.toLowerCase() === "null") return { tab: null };
+  return { tab: s };
 }
 
 export async function GET(request) {
@@ -119,23 +137,25 @@ export async function GET(request) {
       return NextResponse.json({ ok: false, error: "unauthorized" }, { status: 401 });
     }
 
-    // admin => همه صفحات و همه تب‌ها
     if (isAdminUser(user)) {
       const pages = {};
       for (const p of KNOWN_PAGES) pages[p] = { permitted: 1, tabs: null };
-      return NextResponse.json({
-        ok: true,
-        user: {
-          id: user.id,
-          username: user.username,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          access: user.access || [],
+      return NextResponse.json(
+        {
+          ok: true,
+          user: {
+            id: user.id,
+            username: user.username,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            access: user.access || [],
+          },
+          unitIds: [],
+          pages,
         },
-        unitIds: [],
-        pages,
-      });
+        { headers: { "Cache-Control": "no-store" } }
+      );
     }
 
     const unitIds = await getUserUnitIds(user.id);
@@ -144,33 +164,30 @@ export async function GET(request) {
     for (const p of KNOWN_PAGES) pages[p] = null;
 
     if (!unitIds.length) {
-      return NextResponse.json({
-        ok: true,
-        user: {
-          id: user.id,
-          username: user.username,
-          name: user.name,
-          email: user.email,
-          role: user.role,
-          access: user.access || [],
+      return NextResponse.json(
+        {
+          ok: true,
+          user: {
+            id: user.id,
+            username: user.username,
+            name: user.name,
+            email: user.email,
+            role: user.role,
+            access: user.access || [],
+          },
+          unitIds,
+          pages,
         },
-        unitIds,
-        pages,
-      });
+        { headers: { "Cache-Control": "no-store" } }
+      );
     }
 
-    const rulesRaw = await getUnitAccessRules(unitIds);
-
-    // فقط ruleهای permitted واقعی
-    const rules = (rulesRaw || []).filter((r) => {
-      const page = String(r.page || "").trim();
-      if (!page) return false;
-      return truthy(r.permitted);
-    });
+    const rules = await getUnitAccessRules(unitIds);
 
     const byPage = new Map();
-    for (const r of rules) {
-      const page = String(r.page || "").trim();
+    for (const r of rules || []) {
+      const page = normalizePage(r.page);
+      if (!page) continue;
       if (!byPage.has(page)) byPage.set(page, []);
       byPage.get(page).push(r);
     }
@@ -182,42 +199,51 @@ export async function GET(request) {
         continue;
       }
 
-      // اگر page-level allow (tab=null) داشتیم => همه تب‌ها
-      const pageLevelAllow = rs.some((x) => x.tab == null || String(x.tab).trim() === "");
+      // فقط وقتی page-level allow می‌دیم که tab واقعاً وجود داشته باشه و null/"" باشه
+      const pageLevelAllow = rs.some((x) => {
+        const { tab } = normalizeTab(x);
+        if (tab === "__MISSING__") return false;
+        return (tab === null || tab === "") && truthy(x.permitted);
+      });
+
       if (pageLevelAllow) {
         pages[page] = { permitted: 1, tabs: null };
         continue;
       }
 
-      // وگرنه فقط تب‌های مجاز
       const tabs = {};
       for (const x of rs) {
-        const t = String(x.tab || "").trim();
-        if (!t) continue;
-        tabs[t] = 1;
+        const { tab } = normalizeTab(x);
+        if (tab === "__MISSING__") continue;
+        if (tab === null || tab === "") continue;
+        if (truthy(x.permitted)) tabs[String(tab)] = 1;
       }
 
-      // اگر هیچ تب مجازی جمع نشد => یعنی دسترسی واقعی نداریم
+      // اگر هیچ تبی به دست نیومد یعنی اجازه واقعی نداریم
       if (!Object.keys(tabs).length) {
         pages[page] = null;
-      } else {
-        pages[page] = { permitted: 1, tabs };
+        continue;
       }
+
+      pages[page] = { permitted: 1, tabs };
     }
 
-    return NextResponse.json({
-      ok: true,
-      user: {
-        id: user.id,
-        username: user.username,
-        name: user.name,
-        email: user.email,
-        role: user.role,
-        access: user.access || [],
+    return NextResponse.json(
+      {
+        ok: true,
+        user: {
+          id: user.id,
+          username: user.username,
+          name: user.name,
+          email: user.email,
+          role: user.role,
+          access: user.access || [],
+        },
+        unitIds,
+        pages,
       },
-      unitIds,
-      pages,
-    });
+      { headers: { "Cache-Control": "no-store" } }
+    );
   } catch (e) {
     console.error("access_my_error", e);
     return NextResponse.json(
