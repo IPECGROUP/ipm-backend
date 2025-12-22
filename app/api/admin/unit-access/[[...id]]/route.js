@@ -47,6 +47,14 @@ function mapRow(r) {
   };
 }
 
+function normalizeTabInput(v) {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  if (s.toLowerCase() === "null") return null;
+  return s;
+}
+
 // GET /api/admin/unit-access?unit_id=1
 export async function GET(request) {
   try {
@@ -82,7 +90,7 @@ export async function POST(request) {
 
     const unitId = Number(body.unit_id ?? body.unitId ?? 0);
     const page = String(body.page || "").trim();
-    const tab = body.tab === null || body.tab === undefined ? null : String(body.tab).trim();
+    const tab = normalizeTabInput(body.tab);
     const permitted = toBoolPermitted(body.permitted);
 
     if (!unitId) {
@@ -98,9 +106,16 @@ export async function POST(request) {
       });
     }
 
-    await prisma.unitAccessRule.deleteMany({
-      where: { unitId, page, tab },
-    });
+    const whereDelete =
+      tab === null
+        ? {
+            unitId,
+            page,
+            OR: [{ tab: null }, { tab: "" }, { tab: "null" }, { tab: "NULL" }],
+          }
+        : { unitId, page, tab };
+
+    await prisma.unitAccessRule.deleteMany({ where: whereDelete });
 
     const item = await prisma.unitAccessRule.create({
       data: { unitId, page, tab, permitted },
@@ -122,7 +137,6 @@ export async function DELETE(request, { params }) {
   try {
     const id = pickIdFromParams(params) ?? pickIdFromUrl(request);
 
-    // ✅ حذف گروهی
     if (!id) {
       const url = new URL(request.url);
       const unitId = Number(url.searchParams.get("unit_id") || 0);

@@ -1,5 +1,6 @@
 // app/api/access/my/route.js
 export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
 
 import { NextResponse } from "next/server";
 import { prisma } from "../../../../lib/prisma";
@@ -98,7 +99,6 @@ function normalizePage(v) {
 }
 
 function normalizeTab(rule) {
-  // فقط وقتی tab "واقعاً" وجود داشته باشه باید باهاش تصمیم بگیریم
   let raw;
   if (Object.prototype.hasOwnProperty.call(rule, "tab")) raw = rule.tab;
   else if (Object.prototype.hasOwnProperty.call(rule, "tab_name")) raw = rule.tab_name;
@@ -111,9 +111,37 @@ function normalizeTab(rule) {
   if (raw === undefined) return { tab: "__MISSING__" };
 
   const s = String(raw).trim();
-  if (!s) return { tab: "" };
+  if (!s) return { tab: null };
   if (s.toLowerCase() === "null") return { tab: null };
   return { tab: s };
+}
+
+function dedupeRulesByKey(rules) {
+  const keep = new Map(); // key -> bestRow
+
+  for (const r of rules || []) {
+    const page = normalizePage(r.page);
+    if (!page) continue;
+
+    const { tab } = normalizeTab(r);
+    if (tab === "__MISSING__") continue;
+
+    const key = `${r.unitId}::${page}::${tab === null ? "__NULL__" : String(tab)}`;
+
+    const prev = keep.get(key);
+    if (!prev) {
+      keep.set(key, r);
+      continue;
+    }
+
+    const prevTime = prev.updatedAt ? new Date(prev.updatedAt).getTime() : 0;
+    const curTime = r.updatedAt ? new Date(r.updatedAt).getTime() : 0;
+
+    const curBetter = curTime > prevTime || (curTime === prevTime && (r.id || 0) > (prev.id || 0));
+    if (curBetter) keep.set(key, r);
+  }
+
+  return Array.from(keep.values());
 }
 
 export async function GET(request) {
@@ -182,7 +210,8 @@ export async function GET(request) {
       );
     }
 
-    const rules = await getUnitAccessRules(unitIds);
+    const rulesRaw = await getUnitAccessRules(unitIds);
+    const rules = dedupeRulesByKey(rulesRaw);
 
     const byPage = new Map();
     for (const r of rules || []) {
@@ -199,11 +228,10 @@ export async function GET(request) {
         continue;
       }
 
-      // فقط وقتی page-level allow می‌دیم که tab واقعاً وجود داشته باشه و null/"" باشه
       const pageLevelAllow = rs.some((x) => {
         const { tab } = normalizeTab(x);
         if (tab === "__MISSING__") return false;
-        return (tab === null || tab === "") && truthy(x.permitted);
+        return tab === null && truthy(x.permitted);
       });
 
       if (pageLevelAllow) {
@@ -215,11 +243,10 @@ export async function GET(request) {
       for (const x of rs) {
         const { tab } = normalizeTab(x);
         if (tab === "__MISSING__") continue;
-        if (tab === null || tab === "") continue;
+        if (tab === null) continue;
         if (truthy(x.permitted)) tabs[String(tab)] = 1;
       }
 
-      // اگر هیچ تبی به دست نیومد یعنی اجازه واقعی نداریم
       if (!Object.keys(tabs).length) {
         pages[page] = null;
         continue;
