@@ -24,7 +24,12 @@ function isAdminUser(u) {
 }
 
 function truthy(v) {
-  return v === true || v === 1 || v === "1" || v === "true";
+  if (v === true) return true;
+  if (v === 1 || v === "1" || v === "true") return true;
+  if (typeof v === "bigint") return v === 1n;
+  if (typeof v === "number") return v === 1;
+  if (typeof v === "string") return v.trim().toLowerCase() === "true" || v.trim() === "1";
+  return false;
 }
 
 function pickDelegate(names) {
@@ -39,7 +44,6 @@ async function getSessionByCookie(sid) {
   const sessionDelegate = pickDelegate(["session", "sessions"]);
   if (!sessionDelegate) return null;
 
-  // بعضی اسکیمه‌ها unique رو روی id دارند، بعضی‌ها روی token
   try {
     return await sessionDelegate.findUnique({ where: { id: sid } });
   } catch {}
@@ -51,7 +55,6 @@ async function getSessionByCookie(sid) {
 }
 
 async function getUserUnitIds(userId) {
-  // محتمل‌ترین نام‌های مدل
   const d =
     pickDelegate([
       "userUnit",
@@ -72,7 +75,6 @@ async function getUserUnitIds(userId) {
     return Array.from(new Set((rows || []).map((r) => r.unitId).filter(Boolean)));
   } catch {}
 
-  // بعضی وقت‌ها select/field اسمش فرق می‌کنه
   try {
     const rows = await d.findMany({ where: { userId } });
     const unitIds = (rows || [])
@@ -138,7 +140,6 @@ export async function GET(request) {
 
     const unitIds = await getUserUnitIds(user.id);
 
-    // اگر واحد ندارد => هیچ دسترسی
     const pages = {};
     for (const p of KNOWN_PAGES) pages[p] = null;
 
@@ -158,13 +159,18 @@ export async function GET(request) {
       });
     }
 
-    const rules = await getUnitAccessRules(unitIds);
+    const rulesRaw = await getUnitAccessRules(unitIds);
 
-    // گروه بندی rule ها بر اساس page
-    const byPage = new Map();
-    for (const r of rules || []) {
+    // فقط ruleهای permitted واقعی
+    const rules = (rulesRaw || []).filter((r) => {
       const page = String(r.page || "").trim();
-      if (!page) continue;
+      if (!page) return false;
+      return truthy(r.permitted);
+    });
+
+    const byPage = new Map();
+    for (const r of rules) {
+      const page = String(r.page || "").trim();
       if (!byPage.has(page)) byPage.set(page, []);
       byPage.get(page).push(r);
     }
@@ -177,7 +183,7 @@ export async function GET(request) {
       }
 
       // اگر page-level allow (tab=null) داشتیم => همه تب‌ها
-      const pageLevelAllow = rs.some((x) => (x.tab == null || x.tab === "") && truthy(x.permitted));
+      const pageLevelAllow = rs.some((x) => x.tab == null || String(x.tab).trim() === "");
       if (pageLevelAllow) {
         pages[page] = { permitted: 1, tabs: null };
         continue;
@@ -186,13 +192,17 @@ export async function GET(request) {
       // وگرنه فقط تب‌های مجاز
       const tabs = {};
       for (const x of rs) {
-        if (x.tab == null || x.tab === "") continue;
-        const t = String(x.tab).trim();
+        const t = String(x.tab || "").trim();
         if (!t) continue;
-        if (truthy(x.permitted)) tabs[t] = 1;
+        tabs[t] = 1;
       }
 
-      pages[page] = { permitted: 1, tabs };
+      // اگر هیچ تب مجازی جمع نشد => یعنی دسترسی واقعی نداریم
+      if (!Object.keys(tabs).length) {
+        pages[page] = null;
+      } else {
+        pages[page] = { permitted: 1, tabs };
+      }
     }
 
     return NextResponse.json({
