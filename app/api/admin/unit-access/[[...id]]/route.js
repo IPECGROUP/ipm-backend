@@ -28,7 +28,7 @@ function toBoolPermitted(v) {
   if (v === false) return false;
   if (v === 1 || v === "1" || v === "true") return true;
   if (v === 0 || v === "0" || v === "false") return false;
-  return true; // پیش‌فرض: true
+  return true;
 }
 
 function toIntPermitted(v) {
@@ -82,11 +82,7 @@ export async function POST(request) {
 
     const unitId = Number(body.unit_id ?? body.unitId ?? 0);
     const page = String(body.page || "").trim();
-    const tab =
-      body.tab === null || body.tab === undefined
-        ? null
-        : String(body.tab).trim();
-
+    const tab = body.tab === null || body.tab === undefined ? null : String(body.tab).trim();
     const permitted = toBoolPermitted(body.permitted);
 
     if (!unitId) {
@@ -102,14 +98,12 @@ export async function POST(request) {
       });
     }
 
-    // اگر نمی‌خوای رکورد تکراری ساخته بشه:
-    // اول مشابهش رو پاک کن (یا اگر unique داری، می‌تونی upsert بزنی)
     await prisma.unitAccessRule.deleteMany({
       where: { unitId, page, tab },
     });
 
     const item = await prisma.unitAccessRule.create({
-      data: { unitId, page, tab, permitted }, // داخل DB بولین
+      data: { unitId, page, tab, permitted },
     });
 
     return Response.json({ ok: true, item: mapRow(item) });
@@ -123,15 +117,33 @@ export async function POST(request) {
 }
 
 // DELETE /api/admin/unit-access/:id
+// + DELETE /api/admin/unit-access?unit_id=1[&page=DefineBudgetCentersPage]
 export async function DELETE(request, { params }) {
   try {
     const id = pickIdFromParams(params) ?? pickIdFromUrl(request);
 
+    // ✅ حذف گروهی
     if (!id) {
-      return new Response(JSON.stringify({ error: "invalid_id" }), {
-        status: 400,
-        headers: { "Content-Type": "application/json" },
-      });
+      const url = new URL(request.url);
+      const unitId = Number(url.searchParams.get("unit_id") || 0);
+      const page = url.searchParams.get("page");
+      const tab = url.searchParams.get("tab");
+
+      if (!unitId) {
+        return new Response(JSON.stringify({ error: "unit_id_required" }), {
+          status: 400,
+          headers: { "Content-Type": "application/json" },
+        });
+      }
+
+      const where = {
+        unitId,
+        ...(page ? { page: String(page).trim() } : {}),
+        ...(tab !== null && tab !== undefined && tab !== "" ? { tab: String(tab).trim() } : {}),
+      };
+
+      const r = await prisma.unitAccessRule.deleteMany({ where });
+      return Response.json({ ok: true, deleted: r.count });
     }
 
     const item = await prisma.unitAccessRule.delete({ where: { id } });
