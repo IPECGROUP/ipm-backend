@@ -84,6 +84,14 @@ export async function GET(request) {
 }
 
 // POST /api/admin/unit-access
+function normalizeTabInput(v) {
+  if (v === undefined || v === null) return null;
+  const s = String(v).trim();
+  if (!s) return null;
+  if (s.toLowerCase() === "null") return null;
+  return s;
+}
+
 export async function POST(request) {
   try {
     const body = await request.json();
@@ -106,14 +114,16 @@ export async function POST(request) {
       });
     }
 
+    // ✅ اگر page-level می‌ذاری: همه قوانین همین page پاک بشن و فقط یک رکورد بمونه
+    // ✅ اگر tab-specific می‌ذاری: علاوه بر خود tab، هر page-level قدیمی هم پاک بشه
     const whereDelete =
       tab === null
-        ? {
+        ? { unitId, page }
+        : {
             unitId,
             page,
-            OR: [{ tab: null }, { tab: "" }, { tab: "null" }, { tab: "NULL" }],
-          }
-        : { unitId, page, tab };
+            OR: [{ tab }, { tab: null }, { tab: "" }, { tab: "null" }, { tab: "NULL" }],
+          };
 
     await prisma.unitAccessRule.deleteMany({ where: whereDelete });
 
@@ -130,6 +140,7 @@ export async function POST(request) {
     });
   }
 }
+
 
 // DELETE /api/admin/unit-access/:id
 // + DELETE /api/admin/unit-access?unit_id=1[&page=DefineBudgetCentersPage]
