@@ -204,3 +204,17 @@ model Letter {
   @@index([projectId])
   @@index([createdAt])
 }
+
+model UploadedFile {
+  id           Int      @id @default(autoincrement())
+  sha256       String   @unique
+  originalName String
+  storedName   String
+  mimeType     String?
+  size         Int
+  url          String
+  createdBy    Int?
+  createdAt    DateTime @default(now())
+
+  @@index([createdAt])
+}

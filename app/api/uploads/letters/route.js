@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
+import crypto from "crypto";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -31,19 +32,15 @@ function makeFileName(originalName) {
   const rand = Math.random().toString(16).slice(2);
   const stamp = Date.now();
 
-  // اسم نهایی: 1766..._abcd_originalName.png
   return `${stamp}_${rand}_${safeName(baseNoExt)}${ext}`;
+}
+
+function sha256(buf) {
+  return crypto.createHash("sha256").update(buf).digest("hex");
 }
 
 export async function POST(req) {
   try {
-    // --- Debug / trace: مطمئن می‌شیم route واقعاً hit میشه
-    console.log("[UPLOAD] hit", {
-      time: new Date().toISOString(),
-      cwd: process.cwd(),
-      uploadsDirEnv: process.env.UPLOADS_DIR || "",
-    });
-
     const fd = await req.formData();
 
     const file = fd.get("file");
@@ -59,38 +56,60 @@ export async function POST(req) {
     if (!letter) return bad("letter_not_found", 404);
 
     const bytes = Buffer.from(await file.arrayBuffer());
+    const hash = sha256(bytes);
 
-    // ✅ مسیر پایدار: /uploads/letters (با env و volume)
-    const uploadRoot = process.env.UPLOADS_DIR
-      ? path.resolve(process.env.UPLOADS_DIR)
-      : path.join(process.cwd(), "public", "uploads");
+    // 1) If already uploaded, reuse it (no re-write)
+    let existing = await prisma.uploadedFile.findUnique({ where: { sha256: hash } });
 
-    const uploadDir = path.join(uploadRoot, "letters");
-    await ensureDir(uploadDir);
+    let storedName = "";
+    let url = "";
 
-    console.log("[UPLOAD] saving to", uploadDir);
+    if (existing) {
+      storedName = existing.storedName;
+      url = existing.url;
+    } else {
+      // 2) Save new file
+      const uploadRoot = process.env.UPLOADS_DIR
+        ? path.resolve(process.env.UPLOADS_DIR)
+        : path.join(process.cwd(), "public", "uploads");
 
-    const finalName = makeFileName(file.name || "file");
-    const absPath = path.join(uploadDir, finalName);
+      const uploadDir = path.join(uploadRoot, "letters");
+      await ensureDir(uploadDir);
 
-    await fs.writeFile(absPath, bytes);
+      storedName = makeFileName(file.name || "file");
+      const absPath = path.join(uploadDir, storedName);
 
-    // این url برای دانلود/نمایش در مرورگر استفاده میشه (با nginx سرو می‌کنی)
-    const url = `/uploads/letters/${finalName}`;
+      await fs.writeFile(absPath, bytes);
 
-    const item = {
-      id: `${Date.now()}_${Math.random().toString(16).slice(2)}`,
-      name: file.name || finalName,
-      size: bytes.length,
-      type: file.type || "",
-      url,
-      // مسیر داخلی برای دیباگ/اطلاعات (نه برای UI)
-      path: path.join("uploads", "letters", finalName),
+      url = `/uploads/letters/${storedName}`;
+
+      existing = await prisma.uploadedFile.create({
+        data: {
+          sha256: hash,
+          originalName: file.name || storedName,
+          storedName,
+          mimeType: file.type || null,
+          size: bytes.length,
+          url,
+          createdBy: null,
+        },
+      });
+    }
+
+    // 3) Attach to the letter by reference (file_id)
+    const prev = Array.isArray(letter.attachments) ? letter.attachments : [];
+    const nextItem = {
+      file_id: existing.id,
+      name: existing.originalName,
+      size: existing.size,
+      type: existing.mimeType || "",
+      url: existing.url,
       uploaded_at: new Date().toISOString(),
     };
 
-    const prev = Array.isArray(letter.attachments) ? letter.attachments : [];
-    const next = [...prev, item];
+    // جلوگیری از attach تکراری به همین نامه
+    const alreadyAttached = prev.some((x) => Number(x?.file_id) === existing.id);
+    const next = alreadyAttached ? prev : [...prev, nextItem];
 
     await prisma.letter.update({
       where: { id: letterId },
@@ -100,7 +119,7 @@ export async function POST(req) {
       },
     });
 
-    return json({ ok: true, item, url });
+    return json({ ok: true, file: existing, attachment: nextItem, url: existing.url });
   } catch (e) {
     console.error("[UPLOAD] failed", e);
     return bad(e?.message || "upload_failed", 500);
