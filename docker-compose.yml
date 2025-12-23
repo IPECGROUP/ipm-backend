@@ -11,3 +11,10 @@ services:
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
+
+    # ✅ Persist uploads on the host
+    volumes:
+      - uploads_data:/app/public/uploads
+
+volumes:
+  uploads_data:
