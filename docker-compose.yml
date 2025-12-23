@@ -6,6 +6,7 @@ services:
     environment:
       NODE_ENV: production
       DATABASE_URL: ${DATABASE_URL}
+      UPLOADS_DIR: /app/public/uploads
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
