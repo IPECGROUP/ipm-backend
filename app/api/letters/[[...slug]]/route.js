@@ -385,18 +385,54 @@ export async function PATCH(req, ctx) {
 
 export async function DELETE(req, ctx) {
   try {
-    const slug = ctx?.params?.slug || [];
-    const idRaw = slug[0];
+    // ---- robust URL parsing (absolute/relative safe) ----
+    let url;
+    try {
+      url = new URL(req.url);
+    } catch {
+      url = new URL(req.url, "http://localhost");
+    }
+
+    // ---- 1) from optional catch-all params: /api/letters/9 ----
+    const ps = ctx?.params?.slug;
+    let idRaw = null;
+
+    if (Array.isArray(ps) && ps.length) idRaw = ps[0];
+    else if (typeof ps === "string" && ps) idRaw = ps;
+
+    // ---- 2) from query: /api/letters?id=9 ----
+    if (!idRaw) idRaw = url.searchParams.get("id") || url.searchParams.get("letter_id");
+
+    // ---- 3) from pathname as fallback (handles weird proxy/params issues) ----
+    if (!idRaw) {
+      const parts = url.pathname.split("/").filter(Boolean);
+      for (let i = parts.length - 1; i >= 0; i--) {
+        if (/^\d+$/.test(parts[i])) {
+          idRaw = parts[i];
+          break;
+        }
+      }
+    }
+
+    // ---- 4) from JSON body: {id: 9} ----
+    if (!idRaw) {
+      try {
+        const body = await readJsonSafely(req);
+        idRaw = body?.id ?? body?.letter_id ?? null;
+      } catch {
+        // ignore
+      }
+    }
+
     if (!idRaw || !/^\d+$/.test(String(idRaw))) return bad("missing_id");
     const id = Number(idRaw);
-
-    const existing = await prisma.letter.findUnique({ where: { id } });
-    if (!existing) return bad("not_found", 404);
 
     await prisma.letter.delete({ where: { id } });
 
     return json({ ok: true });
   } catch (e) {
+    // Prisma: Record to delete does not exist.
+    if (e?.code === "P2025") return bad("not_found", 404);
     return bad(e?.message || "request_failed", 500);
   }
 }
