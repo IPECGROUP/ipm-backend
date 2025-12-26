@@ -51,10 +51,31 @@ model CurrencySource {
 }
 
 model Tag {
+  id          Int      @id @default(autoincrement())
+  scope       String   // same as category scope
+  label       String
+  categoryId  Int
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+
+  category    TagCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+
+  @@unique([categoryId, label])
+  @@index([scope])
+  @@index([categoryId])
+}
+
+model TagCategory {
   id        Int      @id @default(autoincrement())
-  label     String   @unique
+  scope     String   // letters | execution | ...
+  label     String
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  tags      Tag[]
+
+  @@unique([scope, label])
+  @@index([scope])
 }
 
 model Project {
