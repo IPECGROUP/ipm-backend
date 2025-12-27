@@ -113,10 +113,6 @@ export async function POST(request) {
 }
 
 // PATCH /api/tags
-// (فعلاً فرانت شما استفاده نمی‌کند، ولی برای آینده گذاشتم)
-// body:
-//  - { id, type:"category", scope, label }
-//  - { id, type:"tag", scope, label, category_id }
 export async function PATCH(request) {
   try {
     const body = await request.json().catch(() => ({}));
@@ -142,7 +138,9 @@ export async function PATCH(request) {
       if (!scope) return json(400, { error: "scope_required" });
 
       const data = { scope, label };
-      const categoryId = body.category_id != null || body.categoryId != null ? Number(body.category_id ?? body.categoryId) : null;
+      const categoryId =
+        body.category_id != null || body.categoryId != null ? Number(body.category_id ?? body.categoryId) : null;
+
       if (categoryId && Number.isFinite(categoryId)) {
         const cat = await prisma.tagCategory.findFirst({
           where: { id: categoryId, scope },
@@ -173,16 +171,40 @@ export async function PATCH(request) {
 }
 
 // DELETE /api/tags
-// فرانت شما فقط tag حذف می‌کند: { id }
+// - حذف تگ:      { id }
+// - حذف دسته‌بندی: { id, type:"category" }
 export async function DELETE(request) {
   try {
     const body = await request.json().catch(() => ({}));
     const id = Number(body.id);
+    const type = normStr(body.type || "tag"); // default: tag delete
 
     if (!id || !Number.isFinite(id)) {
       return json(400, { error: "invalid_id" });
     }
 
+    // ✅ حذف دسته‌بندی + همه‌ی تگ‌های زیرش
+    if (type === "category") {
+      // اگر خواستی سخت‌گیرانه‌تر باشه می‌تونی scope هم بگیری و چک کنی؛ فعلاً کم‌تغییر
+      const cat = await prisma.tagCategory.findUnique({
+        where: { id },
+        select: { id: true, label: true, scope: true },
+      });
+      if (!cat) return json(404, { error: "category_not_found" });
+
+      await prisma.$transaction([
+        prisma.tag.deleteMany({ where: { categoryId: id } }),
+        prisma.tagCategory.delete({ where: { id } }),
+      ]);
+
+      return Response.json({
+        ok: true,
+        deleted: "category",
+        item: { id: cat.id, label: cat.label, scope: cat.scope },
+      });
+    }
+
+    // ✅ حذف تگ (رفتار قبلی)
     const row = await prisma.tag.delete({
       where: { id },
       select: { id: true, label: true, scope: true, categoryId: true },
@@ -190,6 +212,7 @@ export async function DELETE(request) {
 
     return Response.json({
       ok: true,
+      deleted: "tag",
       item: { id: row.id, label: row.label, scope: row.scope, category_id: row.categoryId },
     });
   } catch (e) {
