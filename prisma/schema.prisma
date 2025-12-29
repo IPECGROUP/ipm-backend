@@ -9,15 +9,22 @@ datasource db {
   url      = env("DATABASE_URL")
 }
 
-model Unit {
-  id        Int      @id @default(autoincrement())
-  name      String
-  code      String?  @db.VarChar(50)
-  createdAt DateTime @default(now())
-  updatedAt DateTime @updatedAt
-  accessRules UnitAccessRule[] 
-    users UserUnit[]
+enum PaymentRequestStatus {
+  pending
+  approved
+  rejected
+  returned
+}
 
+model Unit {
+  id          Int              @id @default(autoincrement())
+  name        String
+  code        String?          @db.VarChar(50)
+  createdAt   DateTime         @default(now())
+  updatedAt   DateTime         @updatedAt
+
+  accessRules UnitAccessRule[]
+  users       UserUnit[]
 }
 
 model UnitAccessRule {
@@ -41,6 +48,8 @@ model CurrencyType {
   title     String   @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  paymentRequests PaymentRequest[]
 }
 
 model CurrencySource {
@@ -48,17 +57,19 @@ model CurrencySource {
   title     String   @unique
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
+
+  paymentRequests PaymentRequest[]
 }
 
 model Tag {
-  id          Int      @id @default(autoincrement())
-  scope       String   // same as category scope
-  label       String
-  categoryId  Int
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
+  id         Int      @id @default(autoincrement())
+  scope      String   // same as category scope
+  label      String
+  categoryId Int
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
 
-  category    TagCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
+  category TagCategory @relation(fields: [categoryId], references: [id], onDelete: Cascade)
 
   @@unique([categoryId, label])
   @@index([scope])
@@ -72,7 +83,7 @@ model TagCategory {
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
 
-  tags      Tag[]
+  tags Tag[]
 
   @@unique([scope, label])
   @@index([scope])
@@ -83,24 +94,28 @@ model Project {
   code String @db.VarChar(20)
   name String @db.VarChar(255)
 
-  @@map("projects") // جدول واقعی در Postgres
+  @@map("projects")
 }
 
 model User {
-  id         Int           @id @default(autoincrement())
+  id         Int      @id @default(autoincrement())
   name       String?
-  email      String?       @unique
-  username   String        @unique
+  email      String?  @unique
+  username   String   @unique
   password   String
   department String?
-  role       String        @default("user")
-  // همون access / access_labels
-  access     String[]      @default([])
-  // ارتباط با نقش‌ها
-  roles      UserRoleMap[]
-  sessions   Session[]
-    units UserUnit[]
+  role       String   @default("user")
 
+  // همون access / access_labels
+  access   String[]      @default([])
+  roles    UserRoleMap[]
+  sessions Session[]
+  units    UserUnit[]
+
+  // Payment Requests relations
+  createdPaymentRequests  PaymentRequest[] @relation("PR_CreatedBy")
+  assignedPaymentRequests PaymentRequest[] @relation("PR_AssignedTo")
+  uploadedPaymentDocs     PaymentDoc[]     @relation("PRDoc_UploadedBy")
 }
 
 model UserRole {
@@ -113,8 +128,8 @@ model UserRoleMap {
   userId Int
   roleId Int
 
-  user User     @relation(fields: [userId], references: [id])
-  role UserRole @relation(fields: [roleId], references: [id])
+  user User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  role UserRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
   @@id([userId, roleId])
 }
@@ -184,42 +199,40 @@ model UserUnit {
   @@index([unitId])
 }
 
-
 model Letter {
-  id                Int      @id @default(autoincrement())
+  id Int @id @default(autoincrement())
 
   // incoming | outgoing
-  kind              String
+  kind String
 
-  category          String?  // e.g. "project" or ""
-  projectId         Int?
+  category  String? // e.g. "project" or ""
+  projectId Int?
 
-  letterNo          String?
-  letterDate        String?  // "YYYY/MM/DD" (Jalali as string)
+  letterNo   String?
+  letterDate String? // "YYYY/MM/DD" (Jalali as string)
 
-  fromName          String?
-  toName            String?
-  orgName           String?
-  subject           String?
+  fromName String?
+  toName   String?
+  orgName  String?
+  subject  String?
 
-  hasAttachment     Boolean  @default(false)
-  attachmentTitle   String?
+  hasAttachment   Boolean @default(false)
+  attachmentTitle String?
 
-  returnToIds       Json?    // array of ids (strings/numbers)
-  piroIds           Json?    // array of ids (strings/numbers)
-  tagIds            Json?    // array of ids (strings/numbers)
+  returnToIds Json? // array of ids (strings/numbers)
+  piroIds     Json? // array of ids (strings/numbers)
+  tagIds      Json? // array of ids (strings/numbers)
 
-  secretariatDate   String?
-  secretariatNo     String?
-  receiverName      String?
+  secretariatDate String?
+  secretariatNo   String?
+  receiverName    String?
 
-  // attachments are stored "with the letter" in DB (metadata)
-  // each item: { id, name, size, type, url, path, uploaded_at }
-  attachments       Json?
+  // attachments metadata
+  attachments Json?
 
-  createdBy         String?  // later if you have auth/user
-  createdAt         DateTime @default(now())
-  updatedAt         DateTime @updatedAt
+  createdBy String?
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   @@index([kind])
   @@index([projectId])
@@ -238,4 +251,75 @@ model UploadedFile {
   createdAt    DateTime @default(now())
 
   @@index([createdAt])
+}
+
+model PaymentDoc {
+  id           String   @id @default(cuid())
+  originalName String
+  storedName   String
+  mimeType     String
+  size         Int
+  url          String
+  createdAt    DateTime @default(now())
+
+  uploadedById Int?
+  uploadedBy   User?    @relation("PRDoc_UploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+
+  @@index([createdAt])
+}
+
+model PaymentRequest {
+  id        Int      @id @default(autoincrement())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // ===== UI fields =====
+  serial      String?
+  dateJalali  String?
+  scope       String // office/site/finance/cash/capex/projects
+  title       String
+  description String?
+
+  amount       BigInt
+  cashAmount   BigInt?
+  cashDateJalali String?
+
+  creditAmount BigInt?
+  creditPay    String?
+
+  beneficiaryName String?
+  bankInfo        String?
+
+  // ===== doc section =====
+  docId        String?
+  docOther     String?
+  docNumber    String?
+  docDateJalali String?
+
+  // ===== currency =====
+  currencyTypeId   Int?
+  currencyType     CurrencyType?   @relation(fields: [currencyTypeId], references: [id], onDelete: SetNull)
+  currencySourceId Int?
+  currencySource   CurrencySource? @relation(fields: [currencySourceId], references: [id], onDelete: SetNull)
+
+  // ===== optional links =====
+  projectId  Int?
+  budgetCode String?
+
+  // ===== workflow/action =====
+  status      PaymentRequestStatus @default(pending)
+  historyJson Json?
+  attachments Json?
+
+  // ===== ownership/assignment =====
+  createdById Int
+  createdBy   User @relation("PR_CreatedBy", fields: [createdById], references: [id], onDelete: Restrict)
+
+  currentAssigneeUserId Int?
+  currentAssigneeUser   User? @relation("PR_AssignedTo", fields: [currentAssigneeUserId], references: [id], onDelete: SetNull)
+
+  @@index([scope])
+  @@index([status])
+  @@index([createdById])
+  @@index([currentAssigneeUserId])
 }
