@@ -35,7 +35,6 @@ function getUserId(req) {
   const fromCookie = m ? decodeURIComponent(m[1]) : null;
 
   const fromHeader = req.headers.get("x-user-id");
-
   const idStr = fromHeader || fromCookie;
 
   if (idStr && String(idStr).match(/^\d+$/)) return Number(idStr);
@@ -48,7 +47,6 @@ function toBigIntSafe(v) {
   if (v == null) return null;
   if (typeof v === "bigint") return v;
   if (typeof v === "number" && Number.isFinite(v)) return BigInt(Math.trunc(v));
-  // اجازه بده رشته‌های عددی (با کاما) هم پاس بشن
   const s = String(v).replace(/[,\s]/g, "").trim();
   if (!s) return null;
   if (!/^-?\d+$/.test(s)) return null;
@@ -62,7 +60,6 @@ function toBigIntSafe(v) {
 function bigintToJson(v) {
   if (typeof v === "bigint") {
     const n = Number(v);
-    // اگر امن بود number بده، وگرنه string
     if (Number.isSafeInteger(n)) return n;
     return v.toString();
   }
@@ -116,10 +113,14 @@ function normalizeOut(row) {
 }
 
 function pickUpdatable(body) {
-  // فقط فیلدهایی که در UI هست (همون‌هایی که فرستادی)
   return {
     serial: body?.serial ?? body?.previewSerial ?? undefined,
-    dateJalali: body?.dateJalali ?? body?.dateFa ?? body?.todayFa ?? body?.date_jalali ?? undefined,
+    dateJalali:
+      body?.dateJalali ??
+      body?.dateFa ??
+      body?.todayFa ??
+      body?.date_jalali ??
+      undefined,
     scope: body?.scope ?? undefined,
     title: body?.title ?? body?.titleInput ?? undefined,
     description: body?.description ?? body?.descInput ?? undefined,
@@ -139,15 +140,197 @@ function pickUpdatable(body) {
     docNumber: body?.docNumber ?? undefined,
     docDateJalali: body?.docDateJalali ?? body?.docDate ?? undefined,
 
-    currencyTypeId:
-      body?.currencyTypeId != null ? Number(body.currencyTypeId) : undefined,
-    currencySourceId:
-      body?.currencySourceId != null ? Number(body.currencySourceId) : undefined,
+    currencyTypeId: body?.currencyTypeId != null ? Number(body.currencyTypeId) : undefined,
+    currencySourceId: body?.currencySourceId != null ? Number(body.currencySourceId) : undefined,
 
     projectId: body?.projectId != null ? Number(body.projectId) : undefined,
     budgetCode: body?.budgetCode ?? undefined,
 
     attachments: body?.attachments ?? body?.docFiles ?? undefined,
+  };
+}
+
+// =======================
+// Workflow (طبق تصویر شما)
+// =======================
+const UNIT_KINDS = ["office", "site", "finance", "cash", "capex", "projects"];
+
+const ROLE_KEYS = {
+  REQUESTER: "requester",
+  PROJECT_CONTROL: "project_control",
+  PROJECT_MANAGER: "project_manager",
+  ACCOUNTING: "accounting",
+  FINANCE_MANAGER: "finance_manager",
+  PAYMENT_ORDER: "payment_order",
+};
+
+function norm(s) {
+  return String(s || "").trim();
+}
+
+function unitNameToKind(unitNameOrCode) {
+  const s = norm(unitNameOrCode);
+
+  // اگر کد گذاشتی مثل "office" / "finance" ...
+  if (UNIT_KINDS.includes(s)) return s;
+
+  // نگاشت بر اساس اسم فارسی رایج
+  if (s.includes("دفتر") || s.includes("مرکز")) return "office";
+  if (s.includes("سایت")) return "site";
+  if (s.includes("مالی")) return "finance";
+  if (s.includes("نقد")) return "cash";
+  if (s.includes("سرمایه")) return "capex";
+  if (s.includes("پروژه")) return "projects";
+
+  return null;
+}
+
+function detectUserRoleKeys(roleNames) {
+  const arr = (Array.isArray(roleNames) ? roleNames : []).map(norm).filter(Boolean);
+  const keys = new Set();
+
+  // نقش‌های دقیق از UserRole.name
+  for (const r of arr) {
+    // payment order
+    if (r.includes("دستور") || r.includes("پرداخت") || r.includes("نوری") || r.includes("مرندی")) {
+      keys.add(ROLE_KEYS.PAYMENT_ORDER);
+      continue;
+    }
+    if (r.includes("مدیر مالی")) {
+      keys.add(ROLE_KEYS.FINANCE_MANAGER);
+      continue;
+    }
+    if (r.includes("حسابدار") || r.includes("حسابداری")) {
+      keys.add(ROLE_KEYS.ACCOUNTING);
+      continue;
+    }
+    if (r.includes("کنترل پروژه")) {
+      keys.add(ROLE_KEYS.PROJECT_CONTROL);
+      continue;
+    }
+    if (r.includes("مدیر پروژه")) {
+      keys.add(ROLE_KEYS.PROJECT_MANAGER);
+      continue;
+    }
+
+    // سایر نقش‌های درخواست‌کننده‌ها
+    if (r.includes("کارشناس اداری") || r.includes("بازرگانی") || r.includes("سرپرست سایت") || r.includes("سرپرست کارگاه") || r.includes("درخواست")) {
+      keys.add(ROLE_KEYS.REQUESTER);
+    }
+  }
+
+  // اگر هیچ نقش خاصی نبود ولی نقش دارد، حداقل requester را بده (برای قفل نشدن dev)
+  if (keys.size === 0 && arr.length) keys.add(ROLE_KEYS.REQUESTER);
+
+  return Array.from(keys);
+}
+
+function getWorkflowChainForUnit(unitKind) {
+  switch (unitKind) {
+    case "office":
+      return [ROLE_KEYS.REQUESTER, ROLE_KEYS.ACCOUNTING, ROLE_KEYS.FINANCE_MANAGER, ROLE_KEYS.PAYMENT_ORDER];
+    case "site":
+      return [ROLE_KEYS.REQUESTER, ROLE_KEYS.PROJECT_CONTROL, ROLE_KEYS.ACCOUNTING, ROLE_KEYS.FINANCE_MANAGER, ROLE_KEYS.PAYMENT_ORDER];
+    case "finance":
+      return [ROLE_KEYS.REQUESTER, ROLE_KEYS.FINANCE_MANAGER, ROLE_KEYS.PAYMENT_ORDER];
+    case "cash":
+      return [ROLE_KEYS.REQUESTER, ROLE_KEYS.PAYMENT_ORDER];
+    case "capex":
+      return [ROLE_KEYS.REQUESTER, ROLE_KEYS.PROJECT_CONTROL, ROLE_KEYS.ACCOUNTING, ROLE_KEYS.FINANCE_MANAGER, ROLE_KEYS.PAYMENT_ORDER];
+    case "projects":
+      return [ROLE_KEYS.REQUESTER, ROLE_KEYS.PROJECT_CONTROL, ROLE_KEYS.PROJECT_MANAGER, ROLE_KEYS.ACCOUNTING, ROLE_KEYS.FINANCE_MANAGER, ROLE_KEYS.PAYMENT_ORDER];
+    default:
+      return null;
+  }
+}
+
+function getCurrentStep(historyJson) {
+  const h = Array.isArray(historyJson) ? historyJson : [];
+  for (let i = h.length - 1; i >= 0; i--) {
+    const it = h[i];
+    if (it && it.type === "step_set" && it.roleKey) return it;
+    if (it && it.type === "step_clear") return null;
+  }
+  return null;
+}
+
+function canActOnStep({ row, userId, userUnitKind, userRoleKeys }) {
+  const step = getCurrentStep(row.historyJson);
+  if (!step) return false;
+
+  // اگر برگشت خورده و step روی requester است، فقط سازنده حق اقدام دارد
+  if (step.roleKey === ROLE_KEYS.REQUESTER) {
+    return row.createdById === userId;
+  }
+
+  // نقش لازم را دارد؟
+  if (!userRoleKeys.includes(step.roleKey)) return false;
+
+  // شرط واحد برای نقش‌های مالی
+  if (
+    (step.roleKey === ROLE_KEYS.ACCOUNTING || step.roleKey === ROLE_KEYS.FINANCE_MANAGER) &&
+    userUnitKind !== "finance"
+  ) return false;
+
+  return true;
+}
+
+// --- user context (با مدل‌های واقعی Prisma شما)
+async function getUserContext(req, userId) {
+  // 1) Units
+  const userUnits = await prisma.userUnit.findMany({
+    where: { userId: Number(userId) },
+    include: { unit: true },
+  });
+
+  // 2) Roles
+  const roleMaps = await prisma.userRoleMap.findMany({
+    where: { userId: Number(userId) },
+    include: { role: true },
+  });
+  const roleNames = (roleMaps || []).map((rm) => rm?.role?.name).filter(Boolean);
+
+  // unitKind انتخابی:
+  // اگر چندتا واحد داشت:
+  // - اولویت با واحدی که قابل نگاشت باشد
+  // - اگر نقش مالی/حسابداری دارد، finance را ترجیح بده
+  const mappedUnits = (userUnits || [])
+    .map((uu) => {
+      const u = uu?.unit;
+      const kind = unitNameToKind(u?.code || u?.name);
+      return { kind, unit: u };
+    })
+    .filter((x) => !!x.kind);
+
+  const roleKeys = detectUserRoleKeys(roleNames);
+
+  let unitKind = mappedUnits[0]?.kind || null;
+
+  if (mappedUnits.length > 1) {
+    const wantsFinance = roleKeys.includes(ROLE_KEYS.ACCOUNTING) || roleKeys.includes(ROLE_KEYS.FINANCE_MANAGER);
+    if (wantsFinance) {
+      const fin = mappedUnits.find((x) => x.kind === "finance");
+      if (fin) unitKind = "finance";
+    }
+  }
+
+  // fallback هدرها برای dev
+  if (!unitKind) {
+    const hxUnit = norm(req.headers.get("x-user-unit"));
+    if (UNIT_KINDS.includes(hxUnit)) unitKind = hxUnit;
+  }
+  if ((!roleNames || roleNames.length === 0)) {
+    const hxRoles = norm(req.headers.get("x-user-roles"));
+    if (hxRoles) {
+      const hdr = hxRoles.split(",").map((s) => s.trim()).filter(Boolean);
+      for (const r of hdr) roleNames.push(r);
+    }
+  }
+
+  return {
+    unitKind,
+    roleNames,
+    roleKeys: detectUserRoleKeys(roleNames),
   };
 }
 
@@ -174,6 +357,7 @@ export async function GET(req, ctx) {
   const scope = url.searchParams.get("scope") || "";
   const status = url.searchParams.get("status") || "";
   const q = url.searchParams.get("q") || "";
+  const view = url.searchParams.get("view") || ""; // mine | inbox
 
   const where = {
     ...(scope ? { scope } : {}),
@@ -189,11 +373,31 @@ export async function GET(req, ctx) {
       : {}),
   };
 
-  const rows = await prisma.paymentRequest.findMany({
+  let rows = await prisma.paymentRequest.findMany({
     where,
     orderBy: { id: "desc" },
     take: 500,
   });
+
+  if (view === "mine") {
+    rows = rows.filter((r) => r.createdById === userId);
+  } else if (view === "inbox") {
+    const uctx = await getUserContext(req, userId);
+    rows = rows.filter((r) => {
+      if (r.status !== "pending") return false;
+      const step = getCurrentStep(r.historyJson);
+      if (!step) return false;
+
+      if (step.roleKey === ROLE_KEYS.REQUESTER) return r.createdById === userId;
+
+      return canActOnStep({
+        row: r,
+        userId,
+        userUnitKind: uctx.unitKind,
+        userRoleKeys: uctx.roleKeys,
+      });
+    });
+  }
 
   return json({ items: rows.map(normalizeOut) });
 }
@@ -208,34 +412,103 @@ export async function POST(req, ctx) {
   if (slug.length === 1 && slug[0] === "status") {
     const body = (await readJson(req)) || {};
     const id = Number(body?.id);
-    const status = String(body?.status || "").trim(); // approved/rejected/returned
+    const nextStatus = String(body?.status || "").trim(); // approved/rejected/returned
     const note = (body?.note ?? "").toString();
 
     if (!Number.isFinite(id)) return json({ error: "invalid_id" }, 400);
-    if (!["approved", "rejected", "returned"].includes(status))
+    if (!["approved", "rejected", "returned"].includes(nextStatus))
       return json({ error: "invalid_status" }, 400);
 
     const row = await prisma.paymentRequest.findUnique({ where: { id } });
     if (!row) return json({ error: "not_found" }, 404);
 
+    const uctx = await getUserContext(req, userId);
     const history = Array.isArray(row.historyJson) ? row.historyJson : [];
+    const step = getCurrentStep(history);
+
+    if (nextStatus === "approved") {
+      if (!canActOnStep({ row, userId, userUnitKind: uctx.unitKind, userRoleKeys: uctx.roleKeys })) {
+        return json({ error: "forbidden" }, 403);
+      }
+
+      const unitKind = row.scope;
+      const chain = getWorkflowChainForUnit(unitKind);
+      if (!chain) return json({ error: "workflow_not_defined" }, 400);
+
+      const curIndex = typeof step?.index === "number" ? step.index : 1;
+      const nextIndex = curIndex + 1;
+
+      history.push({
+        byUserId: userId,
+        type: "approved",
+        status: "pending",
+        note,
+        at: new Date().toISOString(),
+        roleKey: step?.roleKey || null,
+        index: curIndex,
+      });
+
+      if (nextIndex >= chain.length) {
+        history.push({ type: "step_clear", at: new Date().toISOString() });
+
+        const updated = await prisma.paymentRequest.update({
+          where: { id },
+          data: {
+            status: "approved",
+            historyJson: history,
+          },
+        });
+        return json({ ok: true, item: normalizeOut(updated) });
+      }
+
+      const nextRoleKey = chain[nextIndex];
+      history.push({
+        type: "step_set",
+        at: new Date().toISOString(),
+        unitKind,
+        roleKey: nextRoleKey,
+        index: nextIndex,
+      });
+
+      const updated = await prisma.paymentRequest.update({
+        where: { id },
+        data: {
+          status: "pending",
+          historyJson: history,
+        },
+      });
+
+      return json({ ok: true, item: normalizeOut(updated) });
+    }
+
+    // returned/rejected
     history.push({
       byUserId: userId,
-      type: status,
-      status,
+      type: nextStatus,
+      status: nextStatus,
       note,
       at: new Date().toISOString(),
+      roleKey: step?.roleKey || null,
+      index: typeof step?.index === "number" ? step.index : null,
     });
 
-    // ساده: با همین اکشن status آپدیت میشه. (اگر خواستی بعداً ورک‌فلو/assignee هم اضافه می‌کنیم)
-    const updated = await prisma.paymentRequest.update({
-      where: { id },
-      data: {
-        status,
-        historyJson: history,
-      },
-    });
+    let data = { status: nextStatus, historyJson: history };
 
+    if (nextStatus === "rejected") {
+      history.push({ type: "step_clear", at: new Date().toISOString() });
+      data = { status: "rejected", historyJson: history };
+    } else if (nextStatus === "returned") {
+      history.push({
+        type: "step_set",
+        at: new Date().toISOString(),
+        unitKind: row.scope,
+        roleKey: ROLE_KEYS.REQUESTER,
+        index: 0,
+      });
+      data = { status: "returned", historyJson: history };
+    }
+
+    const updated = await prisma.paymentRequest.update({ where: { id }, data });
     return json({ ok: true, item: normalizeOut(updated) });
   }
 
@@ -243,22 +516,32 @@ export async function POST(req, ctx) {
   const body = (await readJson(req)) || {};
   const data = pickUpdatable(body);
 
-  // حداقل‌ها
-  const scope = data.scope || body?.active || body?.filterScope;
-  const title = data.title;
+  const uctx = await getUserContext(req, userId);
+  if (!uctx.unitKind) return json({ error: "user_unit_required" }, 400);
 
+  const unitKind = uctx.unitKind;
+  const chain = getWorkflowChainForUnit(unitKind);
+  if (!chain) return json({ error: "workflow_not_defined" }, 400);
+
+  const title = data.title;
   const amountBI = data.amount ?? toBigIntSafe(body?.amountStr) ?? BigInt(0);
 
-  if (!scope) return json({ error: "scope_required" }, 400);
   if (!title) return json({ error: "title_required" }, 400);
   if (amountBI <= 0n) return json({ error: "amount_must_be_positive" }, 400);
+
+  const enforcedScope = unitKind;
+
+  const pendingIndex = chain.length > 1 ? 1 : 0;
+  const pendingRoleKey = chain[pendingIndex];
+
+  const nowIso = new Date().toISOString();
 
   const created = await prisma.paymentRequest.create({
     data: {
       serial: data.serial ?? null,
       dateJalali: data.dateJalali ?? null,
-      scope: scope,
-      title: title,
+      scope: enforcedScope,
+      title,
       description: data.description ?? null,
 
       amount: amountBI,
@@ -287,13 +570,24 @@ export async function POST(req, ctx) {
       createdById: userId,
       currentAssigneeUserId: null,
 
+      status: "pending",
       historyJson: [
         {
           byUserId: userId,
           type: "created",
           status: "pending",
           note: "",
-          at: new Date().toISOString(),
+          at: nowIso,
+          enforcedScope,
+          userUnitKind: unitKind,
+          userRoleNames: uctx.roleNames,
+        },
+        {
+          type: "step_set",
+          at: nowIso,
+          unitKind,
+          roleKey: pendingRoleKey,
+          index: pendingIndex,
         },
       ],
     },
@@ -321,7 +615,6 @@ export async function PATCH(req, ctx) {
   const body = (await readJson(req)) || {};
   const data = pickUpdatable(body);
 
-  // amount اگر undefined بود، آپدیت نکن
   if (data.amount == null) delete data.amount;
   if (data.cashAmount == null) delete data.cashAmount;
   if (data.creditAmount == null) delete data.creditAmount;
