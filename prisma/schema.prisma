@@ -358,4 +358,3 @@ model PaymentRequest {
   @@index([createdById])
   @@index([currentAssigneeUserId])
 }
-

@@ -17,6 +17,11 @@ function toSnakeLetter(l) {
   return {
     id: l.id,
     kind: l.kind,
+
+    // ✅ new fields
+    doc_class: l.docClass ?? "",
+    classification_id: l.classificationId ?? null,
+
     category: l.category ?? "",
     project_id: l.projectId ?? null,
     letter_no: l.letterNo ?? "",
@@ -94,11 +99,21 @@ function normalizeIncomingPayload(body) {
   const projectIdParsed = parseOptionalId(projectIdVal);
   const projectId = projectIdParsed === undefined ? null : projectIdParsed;
 
+  // ✅ classificationId
+  const classificationIdVal = b.classificationId ?? b.classification_id ?? null;
+  const classificationIdParsed = parseOptionalId(classificationIdVal);
+  const classificationId = classificationIdParsed === undefined ? null : classificationIdParsed;
+
   const hasAttachment = !!(b.hasAttachment ?? b.has_attachment);
   const attachments = Array.isArray(b.attachments) ? b.attachments : [];
 
   return {
     kind,
+
+    // ✅ new fields
+    docClass: b.docClass ?? b.doc_class ?? "",
+    classificationId,
+
     category: b.category ?? "",
     projectId,
     letterNo: b.letterNo ?? b.letter_no ?? "",
@@ -140,12 +155,20 @@ function normalizePatchPayload(body) {
     else out.projectId = parsed;
   }
 
+  // ✅ classificationId (only if explicitly provided)
+  if (hasOwn(b, "classificationId") || hasOwn(b, "classification_id")) {
+    const parsed = parseOptionalId(b.classificationId ?? b.classification_id);
+    if (parsed === undefined) out.__invalid_classification_id = true;
+    else out.classificationId = parsed;
+  }
+
   // booleans (only if explicitly provided)
   if (hasOwn(b, "hasAttachment") || hasOwn(b, "has_attachment")) {
     out.hasAttachment = !!(b.hasAttachment ?? b.has_attachment);
   }
 
   // strings (only if explicitly provided)
+  if (hasOwn(b, "docClass") || hasOwn(b, "doc_class")) out.docClass = b.docClass ?? b.doc_class ?? "";
   if (hasOwn(b, "category")) out.category = b.category ?? "";
   if (hasOwn(b, "letterNo") || hasOwn(b, "letter_no")) out.letterNo = b.letterNo ?? b.letter_no ?? "";
   if (hasOwn(b, "letterDate") || hasOwn(b, "letter_date")) out.letterDate = b.letterDate ?? b.letter_date ?? "";
@@ -244,7 +267,10 @@ export async function GET(req, ctx) {
 
     if (p0 === "mine") {
       const userId = getUserIdFromReq(req);
-      const items = await listLetters({ createdBy: userId });
+      if (!userId) return bad("unauthorized", 401);
+
+      // ✅ createdBy is String in DB
+      const items = await listLetters({ createdBy: String(userId) });
       return json({ items });
     }
 
@@ -291,6 +317,11 @@ export async function POST(req) {
     const created = await prisma.letter.create({
       data: {
         kind: payload.kind,
+
+        // ✅ new fields
+        docClass: payload.docClass ? String(payload.docClass) : null,
+        classificationId: payload.classificationId ?? null,
+
         category: payload.category || null,
         projectId: payload.projectId ?? null,
         letterNo: payload.letterNo || null,
@@ -308,7 +339,9 @@ export async function POST(req) {
         secretariatNo: payload.secretariatNo || null,
         receiverName: payload.receiverName || null,
         attachments: payload.attachments ?? [],
-        createdBy: userId ?? null,
+
+        // ✅ store as String because DB column is text
+        createdBy: userId ? String(userId) : null,
       },
     });
 
@@ -330,6 +363,7 @@ export async function PATCH(req, ctx) {
     const body = normalizePatchPayload(raw);
 
     if (body.__invalid_project_id) return bad("invalid_project_id");
+    if (body.__invalid_classification_id) return bad("invalid_classification_id");
     if (body.__invalid_return_to_ids) return bad("invalid_return_to_ids");
     if (body.__invalid_piro_ids) return bad("invalid_piro_ids");
     if (body.__invalid_tag_ids) return bad("invalid_tag_ids");
@@ -341,6 +375,13 @@ export async function PATCH(req, ctx) {
     const data = {};
 
     if (hasOwn(body, "kind")) data.kind = body.kind;
+
+    // ✅ new fields
+    if (hasOwn(body, "docClass"))
+      data.docClass = body.docClass === "" ? null : (body.docClass ?? existing.docClass);
+
+    if (hasOwn(body, "classificationId"))
+      data.classificationId = body.classificationId;
 
     if (hasOwn(body, "category"))
       data.category = body.category === "" ? null : (body.category ?? existing.category);
