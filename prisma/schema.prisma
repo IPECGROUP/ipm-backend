@@ -202,14 +202,20 @@ model UserUnit {
 model Letter {
   id Int @id @default(autoincrement())
 
-  // incoming | outgoing
   kind String
 
-  category  String? // e.g. "project" or ""
+  // کلاس سند
+  docClass String? @map("doc_class")
+
+  // طبقه‌بندی (Category از جدول TagCategory)
+  classificationId Int? @map("classification_id")
+  classification   TagCategory? @relation(fields: [classificationId], references: [id], onDelete: SetNull)
+
+  category  String?
   projectId Int?
 
   letterNo   String?
-  letterDate String? // "YYYY/MM/DD" (Jalali as string)
+  letterDate String?
 
   fromName String?
   toName   String?
@@ -219,15 +225,14 @@ model Letter {
   hasAttachment   Boolean @default(false)
   attachmentTitle String?
 
-  returnToIds Json? // array of ids (strings/numbers)
-  piroIds     Json? // array of ids (strings/numbers)
-  tagIds      Json? // array of ids (strings/numbers)
+  returnToIds Json?
+  piroIds     Json?
+  tagIds      Json?
 
   secretariatDate String?
   secretariatNo   String?
   receiverName    String?
 
-  // attachments metadata
   attachments Json?
 
   createdBy String?
@@ -237,7 +242,33 @@ model Letter {
   @@index([kind])
   @@index([projectId])
   @@index([createdAt])
+  @@index([classificationId])
 }
+
+
+model UserLetterPrefs {
+  userId Int @id
+  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  // برای هر تب جدا (وارده/صادره/داخلی/همه)
+  allTagIds      Json? @map("all_tag_ids")
+  incomingTagIds Json? @map("incoming_tag_ids")
+  outgoingTagIds Json? @map("outgoing_tag_ids")
+  internalTagIds Json? @map("internal_tag_ids")
+
+  // اگر طبقه‌بندی (Category) هم در فیلتر دارید و می‌خواید ذخیره بشه
+  allClassificationId      Int? @map("all_classification_id")
+  incomingClassificationId Int? @map("incoming_classification_id")
+  outgoingClassificationId Int? @map("outgoing_classification_id")
+  internalClassificationId Int? @map("internal_classification_id")
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  @@index([updatedAt])
+  @@map("user_letter_prefs")
+}
+
 
 model UploadedFile {
   id           Int      @id @default(autoincrement())
