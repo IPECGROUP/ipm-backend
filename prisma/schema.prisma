@@ -85,6 +85,8 @@ model TagCategory {
 
   tags Tag[]
 
+  lettersClassified Letter[] @relation("LetterClassification")
+
   @@unique([scope, label])
   @@index([scope])
 }
@@ -116,6 +118,8 @@ model User {
   createdPaymentRequests  PaymentRequest[] @relation("PR_CreatedBy")
   assignedPaymentRequests PaymentRequest[] @relation("PR_AssignedTo")
   uploadedPaymentDocs     PaymentDoc[]     @relation("PRDoc_UploadedBy")
+
+  letterPrefs UserLetterPrefs? @relation("UserLetterPrefsUser")
 }
 
 model UserRole {
@@ -209,7 +213,7 @@ model Letter {
 
   // طبقه‌بندی (Category از جدول TagCategory)
   classificationId Int? @map("classification_id")
-  classification   TagCategory? @relation(fields: [classificationId], references: [id], onDelete: SetNull)
+  classification   TagCategory? @relation("LetterClassification", fields: [classificationId], references: [id], onDelete: SetNull)
 
   category  String?
   projectId Int?
@@ -248,15 +252,13 @@ model Letter {
 
 model UserLetterPrefs {
   userId Int @id
-  user   User @relation(fields: [userId], references: [id], onDelete: Cascade)
+  user   User @relation("UserLetterPrefsUser", fields: [userId], references: [id], onDelete: Cascade)
 
-  // برای هر تب جدا (وارده/صادره/داخلی/همه)
   allTagIds      Json? @map("all_tag_ids")
   incomingTagIds Json? @map("incoming_tag_ids")
   outgoingTagIds Json? @map("outgoing_tag_ids")
   internalTagIds Json? @map("internal_tag_ids")
 
-  // اگر طبقه‌بندی (Category) هم در فیلتر دارید و می‌خواید ذخیره بشه
   allClassificationId      Int? @map("all_classification_id")
   incomingClassificationId Int? @map("incoming_classification_id")
   outgoingClassificationId Int? @map("outgoing_classification_id")
@@ -268,6 +270,7 @@ model UserLetterPrefs {
   @@index([updatedAt])
   @@map("user_letter_prefs")
 }
+
 
 
 model UploadedFile {
