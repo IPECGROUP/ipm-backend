@@ -17,22 +17,22 @@ enum PaymentRequestStatus {
 }
 
 model Unit {
-  id          Int              @id @default(autoincrement())
-  name        String
-  code        String?          @db.VarChar(50)
-  createdAt   DateTime         @default(now())
-  updatedAt   DateTime         @updatedAt
+  id        Int      @id @default(autoincrement())
+  name      String
+  code      String?  @db.VarChar(50)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   accessRules UnitAccessRule[]
   users       UserUnit[]
 }
 
 model UnitAccessRule {
-  id        Int      @id @default(autoincrement())
+  id        Int     @id @default(autoincrement())
   unitId    Int
   page      String
-  tab       String?  // null یعنی کل تب‌های اون صفحه
-  permitted Boolean  @default(true)
+  tab       String? // null یعنی کل تب‌های اون صفحه
+  permitted Boolean @default(true)
 
   createdAt DateTime @default(now())
   updatedAt DateTime @updatedAt
@@ -85,6 +85,7 @@ model TagCategory {
 
   tags Tag[]
 
+  // opposite relation for Letter.classification
   lettersClassified Letter[] @relation("LetterClassification")
 
   @@unique([scope, label])
@@ -119,6 +120,7 @@ model User {
   assignedPaymentRequests PaymentRequest[] @relation("PR_AssignedTo")
   uploadedPaymentDocs     PaymentDoc[]     @relation("PRDoc_UploadedBy")
 
+  // opposite relation for UserLetterPrefs.user
   letterPrefs UserLetterPrefs? @relation("UserLetterPrefsUser")
 }
 
@@ -249,16 +251,17 @@ model Letter {
   @@index([classificationId])
 }
 
-
 model UserLetterPrefs {
   userId Int @id
   user   User @relation("UserLetterPrefsUser", fields: [userId], references: [id], onDelete: Cascade)
 
+  // برای هر تب جدا (وارده/صادره/داخلی/همه)
   allTagIds      Json? @map("all_tag_ids")
   incomingTagIds Json? @map("incoming_tag_ids")
   outgoingTagIds Json? @map("outgoing_tag_ids")
   internalTagIds Json? @map("internal_tag_ids")
 
+  // اگر طبقه‌بندی (Category) هم در فیلتر دارید و می‌خواید ذخیره بشه
   allClassificationId      Int? @map("all_classification_id")
   incomingClassificationId Int? @map("incoming_classification_id")
   outgoingClassificationId Int? @map("outgoing_classification_id")
@@ -270,8 +273,6 @@ model UserLetterPrefs {
   @@index([updatedAt])
   @@map("user_letter_prefs")
 }
-
-
 
 model UploadedFile {
   id           Int      @id @default(autoincrement())
@@ -297,7 +298,7 @@ model PaymentDoc {
   createdAt    DateTime @default(now())
 
   uploadedById Int?
-  uploadedBy   User?    @relation("PRDoc_UploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
+  uploadedBy   User? @relation("PRDoc_UploadedBy", fields: [uploadedById], references: [id], onDelete: SetNull)
 
   @@index([createdAt])
 }
@@ -314,8 +315,8 @@ model PaymentRequest {
   title       String
   description String?
 
-  amount       BigInt
-  cashAmount   BigInt?
+  amount         BigInt
+  cashAmount     BigInt?
   cashDateJalali String?
 
   creditAmount BigInt?
@@ -325,14 +326,14 @@ model PaymentRequest {
   bankInfo        String?
 
   // ===== doc section =====
-  docId        String?
-  docOther     String?
-  docNumber    String?
+  docId         String?
+  docOther      String?
+  docNumber     String?
   docDateJalali String?
 
   // ===== currency =====
   currencyTypeId   Int?
-  currencyType     CurrencyType?   @relation(fields: [currencyTypeId], references: [id], onDelete: SetNull)
+  currencyType     CurrencyType? @relation(fields: [currencyTypeId], references: [id], onDelete: SetNull)
   currencySourceId Int?
   currencySource   CurrencySource? @relation(fields: [currencySourceId], references: [id], onDelete: SetNull)
 
