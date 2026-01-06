@@ -18,7 +18,6 @@ function toSnakeLetter(l) {
     id: l.id,
     kind: l.kind,
 
-    // ✅ new fields
     doc_class: l.docClass ?? "",
     classification_id: l.classificationId ?? null,
 
@@ -45,6 +44,27 @@ function toSnakeLetter(l) {
   };
 }
 
+function toSnakePrefs(p) {
+  // خروجی با snake_case که فرانت راحت بخونه
+  const safeArr = (v) => (Array.isArray(v) ? v : []);
+  return {
+    user_id: p?.userId ?? null,
+
+    all_tag_ids: safeArr(p?.allTagIds),
+    incoming_tag_ids: safeArr(p?.incomingTagIds),
+    outgoing_tag_ids: safeArr(p?.outgoingTagIds),
+    internal_tag_ids: safeArr(p?.internalTagIds),
+
+    all_classification_id: p?.allClassificationId ?? null,
+    incoming_classification_id: p?.incomingClassificationId ?? null,
+    outgoing_classification_id: p?.outgoingClassificationId ?? null,
+    internal_classification_id: p?.internalClassificationId ?? null,
+
+    created_at: p?.createdAt ?? null,
+    updated_at: p?.updatedAt ?? null,
+  };
+}
+
 function hasOwn(obj, key) {
   return Object.prototype.hasOwnProperty.call(obj || {}, key);
 }
@@ -60,7 +80,39 @@ function parseOptionalId(v) {
   return n;
 }
 
-function getUserIdFromReq(req) {
+// تلاش برای گرفتن userId از Session (اگر session cookie دارید)
+async function getUserIdFromSession(req) {
+  try {
+    const sid =
+      (req?.cookies?.get?.("session_id")?.value ||
+        req?.cookies?.get?.("session")?.value ||
+        req?.cookies?.get?.("sid")?.value ||
+        "")
+        .toString()
+        .trim();
+
+    if (!sid) return null;
+
+    const s = await prisma.session.findUnique({ where: { id: sid } });
+    if (!s) return null;
+
+    // expire check
+    const now = Date.now();
+    const exp = new Date(s.expiresAt).getTime();
+    if (!Number.isFinite(exp) || exp <= now) return null;
+
+    return s.userId || null;
+  } catch {
+    return null;
+  }
+}
+
+async function getUserIdFromReq(req) {
+  // ✅ اول session (امن‌تر)
+  const sidUser = await getUserIdFromSession(req);
+  if (sidUser) return sidUser;
+
+  // ✅ fallback روش قبلی تو (برای اینکه چیزی خراب نشه)
   try {
     const h =
       (req?.headers?.get?.("x-user-id") || req?.headers?.get?.("x-userid") || "")
@@ -99,10 +151,10 @@ function normalizeIncomingPayload(body) {
   const projectIdParsed = parseOptionalId(projectIdVal);
   const projectId = projectIdParsed === undefined ? null : projectIdParsed;
 
-  // ✅ classificationId
   const classificationIdVal = b.classificationId ?? b.classification_id ?? null;
   const classificationIdParsed = parseOptionalId(classificationIdVal);
-  const classificationId = classificationIdParsed === undefined ? null : classificationIdParsed;
+  const classificationId =
+    classificationIdParsed === undefined ? null : classificationIdParsed;
 
   const hasAttachment = !!(b.hasAttachment ?? b.has_attachment);
   const attachments = Array.isArray(b.attachments) ? b.attachments : [];
@@ -110,7 +162,6 @@ function normalizeIncomingPayload(body) {
   return {
     kind,
 
-    // ✅ new fields
     docClass: b.docClass ?? b.doc_class ?? "",
     classificationId,
 
@@ -138,7 +189,6 @@ function normalizePatchPayload(body) {
   const b = body || {};
   const out = {};
 
-  // kind (only if explicitly provided)
   if (hasOwn(b, "kind") || hasOwn(b, "type") || hasOwn(b, "direction")) {
     const kindRaw = String(b.kind ?? b.type ?? b.direction ?? "").toLowerCase();
     out.kind = kindRaw.includes("out")
@@ -148,33 +198,35 @@ function normalizePatchPayload(body) {
         : String(b.kind ?? b.type ?? b.direction ?? "");
   }
 
-  // projectId (only if explicitly provided)
   if (hasOwn(b, "projectId") || hasOwn(b, "project_id")) {
     const parsed = parseOptionalId(b.projectId ?? b.project_id);
     if (parsed === undefined) out.__invalid_project_id = true;
     else out.projectId = parsed;
   }
 
-  // ✅ classificationId (only if explicitly provided)
   if (hasOwn(b, "classificationId") || hasOwn(b, "classification_id")) {
     const parsed = parseOptionalId(b.classificationId ?? b.classification_id);
     if (parsed === undefined) out.__invalid_classification_id = true;
     else out.classificationId = parsed;
   }
 
-  // booleans (only if explicitly provided)
   if (hasOwn(b, "hasAttachment") || hasOwn(b, "has_attachment")) {
     out.hasAttachment = !!(b.hasAttachment ?? b.has_attachment);
   }
 
-  // strings (only if explicitly provided)
-  if (hasOwn(b, "docClass") || hasOwn(b, "doc_class")) out.docClass = b.docClass ?? b.doc_class ?? "";
+  if (hasOwn(b, "docClass") || hasOwn(b, "doc_class"))
+    out.docClass = b.docClass ?? b.doc_class ?? "";
   if (hasOwn(b, "category")) out.category = b.category ?? "";
-  if (hasOwn(b, "letterNo") || hasOwn(b, "letter_no")) out.letterNo = b.letterNo ?? b.letter_no ?? "";
-  if (hasOwn(b, "letterDate") || hasOwn(b, "letter_date")) out.letterDate = b.letterDate ?? b.letter_date ?? "";
-  if (hasOwn(b, "fromName") || hasOwn(b, "from_name")) out.fromName = b.fromName ?? b.from_name ?? "";
-  if (hasOwn(b, "toName") || hasOwn(b, "to_name")) out.toName = b.toName ?? b.to_name ?? "";
-  if (hasOwn(b, "orgName") || hasOwn(b, "org_name")) out.orgName = b.orgName ?? b.org_name ?? "";
+  if (hasOwn(b, "letterNo") || hasOwn(b, "letter_no"))
+    out.letterNo = b.letterNo ?? b.letter_no ?? "";
+  if (hasOwn(b, "letterDate") || hasOwn(b, "letter_date"))
+    out.letterDate = b.letterDate ?? b.letter_date ?? "";
+  if (hasOwn(b, "fromName") || hasOwn(b, "from_name"))
+    out.fromName = b.fromName ?? b.from_name ?? "";
+  if (hasOwn(b, "toName") || hasOwn(b, "to_name"))
+    out.toName = b.toName ?? b.to_name ?? "";
+  if (hasOwn(b, "orgName") || hasOwn(b, "org_name"))
+    out.orgName = b.orgName ?? b.org_name ?? "";
   if (hasOwn(b, "subject")) out.subject = b.subject ?? "";
   if (hasOwn(b, "attachmentTitle") || hasOwn(b, "attachment_title"))
     out.attachmentTitle = b.attachmentTitle ?? b.attachment_title ?? "";
@@ -185,7 +237,6 @@ function normalizePatchPayload(body) {
   if (hasOwn(b, "receiverName") || hasOwn(b, "receiver_name"))
     out.receiverName = b.receiverName ?? b.receiver_name ?? "";
 
-  // arrays (only if explicitly provided)
   if (hasOwn(b, "returnToIds") || hasOwn(b, "return_to_ids")) {
     const v = b.returnToIds ?? b.return_to_ids;
     if (!Array.isArray(v)) out.__invalid_return_to_ids = true;
@@ -210,6 +261,66 @@ function normalizePatchPayload(body) {
   return out;
 }
 
+function normalizeIdArray(v) {
+  if (!Array.isArray(v)) return [];
+  // اجازه می‌دهیم string/number بیاید؛ تبدیل به عدد اگر شد
+  const out = [];
+  for (const x of v) {
+    if (x === "" || x == null) continue;
+    const n = Number(x);
+    out.push(Number.isFinite(n) ? n : x);
+  }
+  return out;
+}
+
+function normalizePrefsPayload(body) {
+  const b = body || {};
+  const out = {};
+
+  // tag arrays
+  if (hasOwn(b, "allTagIds") || hasOwn(b, "all_tag_ids"))
+    out.allTagIds = normalizeIdArray(b.allTagIds ?? b.all_tag_ids);
+
+  if (hasOwn(b, "incomingTagIds") || hasOwn(b, "incoming_tag_ids"))
+    out.incomingTagIds = normalizeIdArray(b.incomingTagIds ?? b.incoming_tag_ids);
+
+  if (hasOwn(b, "outgoingTagIds") || hasOwn(b, "outgoing_tag_ids"))
+    out.outgoingTagIds = normalizeIdArray(b.outgoingTagIds ?? b.outgoing_tag_ids);
+
+  if (hasOwn(b, "internalTagIds") || hasOwn(b, "internal_tag_ids"))
+    out.internalTagIds = normalizeIdArray(b.internalTagIds ?? b.internal_tag_ids);
+
+  // classification ids
+  if (hasOwn(b, "allClassificationId") || hasOwn(b, "all_classification_id")) {
+    const parsed = parseOptionalId(b.allClassificationId ?? b.all_classification_id);
+    if (parsed === undefined) out.__invalid_all_classification_id = true;
+    else out.allClassificationId = parsed;
+  }
+  if (hasOwn(b, "incomingClassificationId") || hasOwn(b, "incoming_classification_id")) {
+    const parsed = parseOptionalId(
+      b.incomingClassificationId ?? b.incoming_classification_id
+    );
+    if (parsed === undefined) out.__invalid_incoming_classification_id = true;
+    else out.incomingClassificationId = parsed;
+  }
+  if (hasOwn(b, "outgoingClassificationId") || hasOwn(b, "outgoing_classification_id")) {
+    const parsed = parseOptionalId(
+      b.outgoingClassificationId ?? b.outgoing_classification_id
+    );
+    if (parsed === undefined) out.__invalid_outgoing_classification_id = true;
+    else out.outgoingClassificationId = parsed;
+  }
+  if (hasOwn(b, "internalClassificationId") || hasOwn(b, "internal_classification_id")) {
+    const parsed = parseOptionalId(
+      b.internalClassificationId ?? b.internal_classification_id
+    );
+    if (parsed === undefined) out.__invalid_internal_classification_id = true;
+    else out.internalClassificationId = parsed;
+  }
+
+  return out;
+}
+
 async function readJsonSafely(req) {
   const txt = await req.text();
   if (!txt) return {};
@@ -229,7 +340,6 @@ async function listLetters({ createdBy = null } = {}) {
   return items.map(toSnakeLetter);
 }
 
-// ✅ helper: extract id from params OR query OR pathname
 function getIdFromReq(req, ctx) {
   let url;
   try {
@@ -265,11 +375,41 @@ export async function GET(req, ctx) {
     const slug = ctx?.params?.slug || [];
     const p0 = slug[0] || "";
 
-    if (p0 === "mine") {
-      const userId = getUserIdFromReq(req);
+    // ✅ prefs
+    if (p0 === "prefs") {
+      const userId = await getUserIdFromReq(req);
       if (!userId) return bad("unauthorized", 401);
 
-      // ✅ createdBy is String in DB
+      const prefs = await prisma.userLetterPrefs.findUnique({
+        where: { userId },
+      });
+
+      // اگر نداریم، خالی برگردون
+      if (!prefs) {
+        return json({
+          prefs: toSnakePrefs({
+            userId,
+            allTagIds: [],
+            incomingTagIds: [],
+            outgoingTagIds: [],
+            internalTagIds: [],
+            allClassificationId: null,
+            incomingClassificationId: null,
+            outgoingClassificationId: null,
+            internalClassificationId: null,
+            createdAt: null,
+            updatedAt: null,
+          }),
+        });
+      }
+
+      return json({ prefs: toSnakePrefs(prefs) });
+    }
+
+    if (p0 === "mine") {
+      const userId = await getUserIdFromReq(req);
+      if (!userId) return bad("unauthorized", 401);
+
       const items = await listLetters({ createdBy: String(userId) });
       return json({ items });
     }
@@ -288,15 +428,43 @@ export async function GET(req, ctx) {
   }
 }
 
-export async function POST(req) {
+export async function POST(req, ctx) {
   try {
+    const slug = ctx?.params?.slug || [];
+    const p0 = slug[0] || "";
+
+    // ✅ allow POST /api/letters/prefs as well
+    if (p0 === "prefs") {
+      const userId = await getUserIdFromReq(req);
+      if (!userId) return bad("unauthorized", 401);
+
+      const raw = await readJsonSafely(req);
+      const patch = normalizePrefsPayload(raw);
+
+      if (
+        patch.__invalid_all_classification_id ||
+        patch.__invalid_incoming_classification_id ||
+        patch.__invalid_outgoing_classification_id ||
+        patch.__invalid_internal_classification_id
+      ) {
+        return bad("invalid_classification_id");
+      }
+
+      const updated = await prisma.userLetterPrefs.upsert({
+        where: { userId },
+        create: { userId, ...patch },
+        update: { ...patch },
+      });
+
+      return json({ prefs: toSnakePrefs(updated) }, 201);
+    }
+
     const ct = req.headers.get("content-type") || "";
     let payload = {};
 
     if (ct.includes("application/json")) {
       payload = normalizeIncomingPayload(await readJsonSafely(req));
     } else {
-      // optional: allow multipart that contains field "data" (json)
       const fd = await req.formData();
       const dataRaw = fd.get("data");
       if (dataRaw) {
@@ -312,13 +480,12 @@ export async function POST(req) {
       }
     }
 
-    const userId = getUserIdFromReq(req);
+    const userId = await getUserIdFromReq(req);
 
     const created = await prisma.letter.create({
       data: {
         kind: payload.kind,
 
-        // ✅ new fields
         docClass: payload.docClass ? String(payload.docClass) : null,
         classificationId: payload.classificationId ?? null,
 
@@ -340,7 +507,6 @@ export async function POST(req) {
         receiverName: payload.receiverName || null,
         attachments: payload.attachments ?? [],
 
-        // ✅ store as String because DB column is text
         createdBy: userId ? String(userId) : null,
       },
     });
@@ -355,11 +521,56 @@ export async function POST(req) {
 export async function PATCH(req, ctx) {
   try {
     const slug = ctx?.params?.slug || [];
-    const idRaw = slug[0];
-    if (!idRaw || !/^\d+$/.test(String(idRaw))) return bad("missing_id");
-    const id = Number(idRaw);
+    const p0 = slug[0] || "";
 
+    // ✅ prefs
+    if (p0 === "prefs") {
+      const userId = await getUserIdFromReq(req);
+      if (!userId) return bad("unauthorized", 401);
+
+      const raw = await readJsonSafely(req);
+      const patch = normalizePrefsPayload(raw);
+
+      if (
+        patch.__invalid_all_classification_id ||
+        patch.__invalid_incoming_classification_id ||
+        patch.__invalid_outgoing_classification_id ||
+        patch.__invalid_internal_classification_id
+      ) {
+        return bad("invalid_classification_id");
+      }
+
+      const updated = await prisma.userLetterPrefs.upsert({
+        where: { userId },
+        create: { userId, ...patch },
+        update: { ...patch },
+      });
+
+      return json({ prefs: toSnakePrefs(updated) });
+    }
+
+    // ✅ یک بار body رو بخون
     const raw = await readJsonSafely(req);
+
+    // ✅ id را از مسیر/کوئری/بدنه دربیار
+    let id = getIdFromReq(req, ctx);
+
+    if (!id) {
+      const idMaybe =
+        raw?.id ??
+        raw?.letter_id ??
+        raw?.letterId ??
+        raw?.letterID ??
+        raw?.letter?.id ??
+        null;
+
+      if (idMaybe != null && /^\d+$/.test(String(idMaybe))) {
+        id = Number(idMaybe);
+      }
+    }
+
+    if (!id) return bad("missing_id");
+
     const body = normalizePatchPayload(raw);
 
     if (body.__invalid_project_id) return bad("invalid_project_id");
@@ -376,7 +587,6 @@ export async function PATCH(req, ctx) {
 
     if (hasOwn(body, "kind")) data.kind = body.kind;
 
-    // ✅ new fields
     if (hasOwn(body, "docClass"))
       data.docClass = body.docClass === "" ? null : (body.docClass ?? existing.docClass);
 
@@ -438,7 +648,6 @@ export async function PATCH(req, ctx) {
     if (hasOwn(body, "attachments"))
       data.attachments = body.attachments;
 
-    // If no effective changes, return the existing record as-is
     if (Object.keys(data).length === 0) {
       return json({ item: toSnakeLetter(existing) });
     }
@@ -455,6 +664,7 @@ export async function PATCH(req, ctx) {
   }
 }
 
+
 export async function DELETE(req, ctx) {
   try {
     const id = getIdFromReq(req, ctx);
@@ -464,7 +674,6 @@ export async function DELETE(req, ctx) {
 
     return json({ ok: true });
   } catch (e) {
-    // Prisma: Record to delete does not exist.
     if (e?.code === "P2025") return bad("not_found", 404);
     return bad(e?.message || "request_failed", 500);
   }
