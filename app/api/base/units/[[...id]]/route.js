@@ -30,16 +30,27 @@ export async function GET(request, { params }) {
   try {
     const id = getId(request, params);
 
-    if (id) {
-      const item = await prisma.unit.findUnique({ where: { id } });
-      return Response.json({ ok: true, item });
-    }
+   if (id) {
+  const item = await prisma.unit.findUnique({ where: { id } });
 
-    const units = await prisma.unit.findMany({
-      orderBy: { name: "asc" },
-    });
+  return Response.json({
+    ok: true,
+    item: item ? { ...item, label: item.name } : null,
+  });
+}
 
-    return Response.json({ units });
+   const units = await prisma.unit.findMany({
+  orderBy: { name: "asc" },
+});
+
+return Response.json({
+  ok: true,
+  units: (units || []).map((u) => ({
+    ...u,
+    label: u.name, // ✅ برای فرانت LettersPage
+  })),
+});
+
   } catch (e) {
     console.error("units_get_error", e);
     return new Response(JSON.stringify({ error: "internal_error" }), {
