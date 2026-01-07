@@ -138,14 +138,14 @@ async function getUserIdFromReq(req) {
 function normalizeIncomingPayload(body) {
   const b = body || {};
 
-  const kindRaw = String(b.kind || b.type || b.direction || "").toLowerCase();
-  const kind = kindRaw.includes("out")
-    ? "outgoing"
-    : kindRaw.includes("in")
-      ? "incoming"
-      : b.kind
-        ? String(b.kind)
-        : "incoming";
+  // داخل normalizeIncomingPayload
+const kindRaw = String(b.kind || b.type || b.direction || "").toLowerCase();
+const kind =
+  kindRaw.includes("out") ? "outgoing"
+  : kindRaw.includes("in") ? "incoming"
+  : kindRaw.includes("int") ? "internal"
+  : (b.kind ? String(b.kind) : "incoming");
+
 
   const projectIdVal = b.projectId ?? b.project_id ?? null;
   const projectIdParsed = parseOptionalId(projectIdVal);
@@ -190,12 +190,14 @@ function normalizePatchPayload(body) {
   const out = {};
 
   if (hasOwn(b, "kind") || hasOwn(b, "type") || hasOwn(b, "direction")) {
-    const kindRaw = String(b.kind ?? b.type ?? b.direction ?? "").toLowerCase();
-    out.kind = kindRaw.includes("out")
-      ? "outgoing"
-      : kindRaw.includes("in")
-        ? "incoming"
-        : String(b.kind ?? b.type ?? b.direction ?? "");
+    // داخل normalizePatchPayload
+const kindRaw = String(b.kind ?? b.type ?? b.direction ?? "").toLowerCase();
+out.kind =
+  kindRaw.includes("out") ? "outgoing"
+  : kindRaw.includes("in") ? "incoming"
+  : kindRaw.includes("int") ? "internal"
+  : String(b.kind ?? b.type ?? b.direction ?? "");
+
   }
 
   if (hasOwn(b, "projectId") || hasOwn(b, "project_id")) {
