@@ -36,6 +36,7 @@ function toSnakeLetter(l) {
     tag_ids: l.tagIds ?? [],
     secretariat_date: l.secretariatDate ?? "",
     secretariat_no: l.secretariatNo ?? "",
+    secretariat_note: l.secretariatNote ?? "",
     receiver_name: l.receiverName ?? "",
     attachments: l.attachments ?? [],
     created_by: l.createdBy ?? null,
@@ -139,13 +140,12 @@ function normalizeIncomingPayload(body) {
   const b = body || {};
 
   // داخل normalizeIncomingPayload
-const kindRaw = String(b.kind || b.type || b.direction || "").toLowerCase();
-const kind =
-  kindRaw.includes("out") ? "outgoing"
-  : kindRaw.includes("in") ? "incoming"
-  : kindRaw.includes("int") ? "internal"
-  : (b.kind ? String(b.kind) : "incoming");
-
+  const kindRaw = String(b.kind || b.type || b.direction || "").toLowerCase();
+  const kind =
+    kindRaw.includes("out") ? "outgoing"
+    : kindRaw.includes("in") ? "incoming"
+    : kindRaw.includes("int") ? "internal"
+    : (b.kind ? String(b.kind) : "incoming");
 
   const projectIdVal = b.projectId ?? b.project_id ?? null;
   const projectIdParsed = parseOptionalId(projectIdVal);
@@ -180,6 +180,7 @@ const kind =
     tagIds: ensureArray(b.tagIds ?? b.tag_ids),
     secretariatDate: b.secretariatDate ?? b.secretariat_date ?? "",
     secretariatNo: b.secretariatNo ?? b.secretariat_no ?? "",
+    secretariatNote: b.secretariatNote ?? b.secretariat_note ?? "",
     receiverName: b.receiverName ?? b.receiver_name ?? "",
     attachments,
   };
@@ -191,13 +192,12 @@ function normalizePatchPayload(body) {
 
   if (hasOwn(b, "kind") || hasOwn(b, "type") || hasOwn(b, "direction")) {
     // داخل normalizePatchPayload
-const kindRaw = String(b.kind ?? b.type ?? b.direction ?? "").toLowerCase();
-out.kind =
-  kindRaw.includes("out") ? "outgoing"
-  : kindRaw.includes("in") ? "incoming"
-  : kindRaw.includes("int") ? "internal"
-  : String(b.kind ?? b.type ?? b.direction ?? "");
-
+    const kindRaw = String(b.kind ?? b.type ?? b.direction ?? "").toLowerCase();
+    out.kind =
+      kindRaw.includes("out") ? "outgoing"
+      : kindRaw.includes("in") ? "incoming"
+      : kindRaw.includes("int") ? "internal"
+      : String(b.kind ?? b.type ?? b.direction ?? "");
   }
 
   if (hasOwn(b, "projectId") || hasOwn(b, "project_id")) {
@@ -236,6 +236,8 @@ out.kind =
     out.secretariatDate = b.secretariatDate ?? b.secretariat_date ?? "";
   if (hasOwn(b, "secretariatNo") || hasOwn(b, "secretariat_no"))
     out.secretariatNo = b.secretariatNo ?? b.secretariat_no ?? "";
+  if (hasOwn(b, "secretariatNote") || hasOwn(b, "secretariat_note"))
+    out.secretariatNote = b.secretariatNote ?? b.secretariat_note ?? "";
   if (hasOwn(b, "receiverName") || hasOwn(b, "receiver_name"))
     out.receiverName = b.receiverName ?? b.receiver_name ?? "";
 
@@ -506,6 +508,7 @@ export async function POST(req, ctx) {
         tagIds: payload.tagIds ?? [],
         secretariatDate: payload.secretariatDate || null,
         secretariatNo: payload.secretariatNo || null,
+        secretariatNote: payload.secretariatNote || null,
         receiverName: payload.receiverName || null,
         attachments: payload.attachments ?? [],
 
@@ -643,6 +646,10 @@ export async function PATCH(req, ctx) {
       data.secretariatNo =
         body.secretariatNo === "" ? null : (body.secretariatNo ?? existing.secretariatNo);
 
+    if (hasOwn(body, "secretariatNote"))
+      data.secretariatNote =
+        body.secretariatNote === "" ? null : (body.secretariatNote ?? existing.secretariatNote);
+
     if (hasOwn(body, "receiverName"))
       data.receiverName =
         body.receiverName === "" ? null : (body.receiverName ?? existing.receiverName);
@@ -665,7 +672,6 @@ export async function PATCH(req, ctx) {
     return bad(e?.message || "request_failed", 500);
   }
 }
-
 
 export async function DELETE(req, ctx) {
   try {

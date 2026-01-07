@@ -238,6 +238,7 @@ model Letter {
   secretariatDate String?
   secretariatNo   String?
   receiverName    String?
+  secretariatNote String? @map("secretariat_note")
 
   attachments Json?
 
