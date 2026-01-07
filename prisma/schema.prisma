@@ -220,6 +220,9 @@ model Letter {
   category  String?
   projectId Int?
 
+  // ✅ NEW: فقط برای نامه‌های داخلی (internal)
+  internalUnitId Int? @map("internal_unit_id")
+
   letterNo   String?
   letterDate String?
 
@@ -250,6 +253,7 @@ model Letter {
   @@index([projectId])
   @@index([createdAt])
   @@index([classificationId])
+  @@index([internalUnitId])
 }
 
 model UserLetterPrefs {
