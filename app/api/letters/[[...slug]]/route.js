@@ -140,12 +140,20 @@ function normalizeIncomingPayload(body) {
   const b = body || {};
 
   // داخل normalizeIncomingPayload
-  const kindRaw = String(b.kind || b.type || b.direction || "").toLowerCase();
-  const kind =
-    kindRaw.includes("out") ? "outgoing"
-    : kindRaw.includes("in") ? "incoming"
-    : kindRaw.includes("int") ? "internal"
-    : (b.kind ? String(b.kind) : "incoming");
+// داخل normalizeIncomingPayload
+const rawKindText = String(b.kind || b.type || b.direction || "").trim();
+const kindRaw = rawKindText.toLowerCase();
+
+// ⚠️ ترتیب مهمه: internal قبل از in  (چون "internal" شامل "in" هست)
+const kind =
+  kindRaw.includes("out") || rawKindText.includes("صادر") ? "outgoing"
+  : kindRaw.includes("int") ||
+    kindRaw.includes("internal") ||
+    kindRaw.includes("dakheli") ||
+    rawKindText.includes("داخلی")
+    ? "internal"
+  : kindRaw.includes("in") || rawKindText.includes("وارده") ? "incoming"
+  : "incoming";
 
   const projectIdVal = b.projectId ?? b.project_id ?? null;
   const projectIdParsed = parseOptionalId(projectIdVal);
@@ -190,15 +198,22 @@ function normalizePatchPayload(body) {
   const b = body || {};
   const out = {};
 
-  if (hasOwn(b, "kind") || hasOwn(b, "type") || hasOwn(b, "direction")) {
-    // داخل normalizePatchPayload
-    const kindRaw = String(b.kind ?? b.type ?? b.direction ?? "").toLowerCase();
-    out.kind =
-      kindRaw.includes("out") ? "outgoing"
-      : kindRaw.includes("in") ? "incoming"
-      : kindRaw.includes("int") ? "internal"
-      : String(b.kind ?? b.type ?? b.direction ?? "");
-  }
+ if (hasOwn(b, "kind") || hasOwn(b, "type") || hasOwn(b, "direction")) {
+  // داخل normalizePatchPayload
+  const rawKindText = String(b.kind ?? b.type ?? b.direction ?? "").trim();
+  const kindRaw = rawKindText.toLowerCase();
+
+  // ⚠️ ترتیب مهمه: internal قبل از in
+  out.kind =
+    kindRaw.includes("out") || rawKindText.includes("صادر") ? "outgoing"
+    : kindRaw.includes("int") ||
+      kindRaw.includes("internal") ||
+      kindRaw.includes("dakheli") ||
+      rawKindText.includes("داخلی")
+      ? "internal"
+    : kindRaw.includes("in") || rawKindText.includes("وارده") ? "incoming"
+    : String(b.kind ?? b.type ?? b.direction ?? "");
+}
 
   if (hasOwn(b, "projectId") || hasOwn(b, "project_id")) {
     const parsed = parseOptionalId(b.projectId ?? b.project_id);
