@@ -93,9 +93,12 @@ model TagCategory {
 }
 
 model Project {
-  id   Int    @id @default(autoincrement())
-  code String @db.VarChar(20)
-  name String @db.VarChar(255)
+  id       Int     @id @default(autoincrement())
+  code     String  @db.VarChar(20)
+  name     String  @db.VarChar(255)
+
+  // ✅ NEW: وضعیت پروژه (پیش‌فرض فعال)
+  isActive Boolean @default(true) @map("is_active")
 
   @@map("projects")
 }
