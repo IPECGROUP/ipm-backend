@@ -14,6 +14,19 @@ async function readJson(request) {
   }
 }
 
+// ✅ کمک‌تابع: تبدیل امن isActive (boolean / "true"/"false" / 1/0)
+function parseBool(v, defaultValue) {
+  if (v === undefined) return defaultValue;
+  if (typeof v === "boolean") return v;
+  if (typeof v === "number") return v === 1;
+  if (typeof v === "string") {
+    const s = v.trim().toLowerCase();
+    if (s === "true" || s === "1" || s === "yes" || s === "on") return true;
+    if (s === "false" || s === "0" || s === "no" || s === "off") return false;
+  }
+  return !!v;
+}
+
 // GET /api/projects   -> لیست پروژه‌ها
 export async function GET() {
   try {
@@ -38,8 +51,7 @@ export async function POST(request) {
     const name = String(body.name || "").trim();
 
     // ✅ وضعیت: پیش‌فرض فعال
-    const isActiveRaw = body.isActive;
-    const isActive = isActiveRaw === undefined ? true : !!isActiveRaw;
+    const isActive = parseBool(body.isActive, true);
 
     if (!code || !name) {
       return new Response(JSON.stringify({ error: "code_and_name_required" }), {
@@ -92,7 +104,7 @@ export async function PATCH(request) {
 
     // ✅ وضعیت: فقط اگر ارسال شد آپدیت کن
     const isActive =
-      body.isActive !== undefined ? !!body.isActive : undefined;
+      body.isActive !== undefined ? parseBool(body.isActive, undefined) : undefined;
 
     if ((code !== undefined && !code) || (name !== undefined && !name)) {
       return new Response(JSON.stringify({ error: "code_and_name_required" }), {
