@@ -1,7 +1,6 @@
 export const runtime = "nodejs";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
-import prisma from "@/lib/prisma"; // مسیر prisma خودت را دقیق مطابق پروژه تنظیم کن
 
 export async function DELETE(req) {
   try {
