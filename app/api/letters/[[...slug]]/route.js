@@ -1,5 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import fs from "fs/promises";
+import path from "path";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -140,20 +142,20 @@ function normalizeIncomingPayload(body) {
   const b = body || {};
 
   // داخل normalizeIncomingPayload
-// داخل normalizeIncomingPayload
-const rawKindText = String(b.kind || b.type || b.direction || "").trim();
-const kindRaw = rawKindText.toLowerCase();
+  // داخل normalizeIncomingPayload
+  const rawKindText = String(b.kind || b.type || b.direction || "").trim();
+  const kindRaw = rawKindText.toLowerCase();
 
-// ⚠️ ترتیب مهمه: internal قبل از in  (چون "internal" شامل "in" هست)
-const kind =
-  kindRaw.includes("out") || rawKindText.includes("صادر") ? "outgoing"
-  : kindRaw.includes("int") ||
-    kindRaw.includes("internal") ||
-    kindRaw.includes("dakheli") ||
-    rawKindText.includes("داخلی")
-    ? "internal"
-  : kindRaw.includes("in") || rawKindText.includes("وارده") ? "incoming"
-  : "incoming";
+  // ⚠️ ترتیب مهمه: internal قبل از in  (چون "internal" شامل "in" هست)
+  const kind =
+    kindRaw.includes("out") || rawKindText.includes("صادر") ? "outgoing"
+    : kindRaw.includes("int") ||
+      kindRaw.includes("internal") ||
+      kindRaw.includes("dakheli") ||
+      rawKindText.includes("داخلی")
+      ? "internal"
+    : kindRaw.includes("in") || rawKindText.includes("وارده") ? "incoming"
+    : "incoming";
 
   const projectIdVal = b.projectId ?? b.project_id ?? null;
   const projectIdParsed = parseOptionalId(projectIdVal);
@@ -198,22 +200,22 @@ function normalizePatchPayload(body) {
   const b = body || {};
   const out = {};
 
- if (hasOwn(b, "kind") || hasOwn(b, "type") || hasOwn(b, "direction")) {
-  // داخل normalizePatchPayload
-  const rawKindText = String(b.kind ?? b.type ?? b.direction ?? "").trim();
-  const kindRaw = rawKindText.toLowerCase();
+  if (hasOwn(b, "kind") || hasOwn(b, "type") || hasOwn(b, "direction")) {
+    // داخل normalizePatchPayload
+    const rawKindText = String(b.kind ?? b.type ?? b.direction ?? "").trim();
+    const kindRaw = rawKindText.toLowerCase();
 
-  // ⚠️ ترتیب مهمه: internal قبل از in
-  out.kind =
-    kindRaw.includes("out") || rawKindText.includes("صادر") ? "outgoing"
-    : kindRaw.includes("int") ||
-      kindRaw.includes("internal") ||
-      kindRaw.includes("dakheli") ||
-      rawKindText.includes("داخلی")
-      ? "internal"
-    : kindRaw.includes("in") || rawKindText.includes("وارده") ? "incoming"
-    : String(b.kind ?? b.type ?? b.direction ?? "");
-}
+    // ⚠️ ترتیب مهمه: internal قبل از in
+    out.kind =
+      kindRaw.includes("out") || rawKindText.includes("صادر") ? "outgoing"
+      : kindRaw.includes("int") ||
+        kindRaw.includes("internal") ||
+        kindRaw.includes("dakheli") ||
+        rawKindText.includes("داخلی")
+        ? "internal"
+      : kindRaw.includes("in") || rawKindText.includes("وارده") ? "incoming"
+      : String(b.kind ?? b.type ?? b.direction ?? "");
+  }
 
   if (hasOwn(b, "projectId") || hasOwn(b, "project_id")) {
     const parsed = parseOptionalId(b.projectId ?? b.project_id);
@@ -387,6 +389,49 @@ function getIdFromReq(req, ctx) {
 
   if (!idRaw || !/^\d+$/.test(String(idRaw))) return null;
   return Number(idRaw);
+}
+
+// ✅ حذف فایل‌های ضمیمه (بهترین تلاش) — اگر آدرس‌ها لوکال باشند از public حذف می‌کند
+async function tryDeleteAttachmentFiles(letters) {
+  try {
+    const pub = path.join(process.cwd(), "public");
+    const files = new Set();
+
+    for (const l of Array.isArray(letters) ? letters : []) {
+      const atts = Array.isArray(l?.attachments) ? l.attachments : [];
+      for (const a of atts) {
+        const u =
+          (a && (a.url || a.href || a.path || a.filePath || a.file_path || a.src)) || "";
+        const s = String(u || "").trim();
+        if (!s) continue;
+
+        // فقط مسیرهای لوکال را حذف می‌کنیم
+        if (s.startsWith("http://") || s.startsWith("https://")) continue;
+
+        // اگر با / شروع شود یعنی زیر public
+        if (s.startsWith("/")) {
+          files.add(path.join(pub, s.replace(/^\/+/, "")));
+          continue;
+        }
+
+        // اگر مثل uploads/... باشد
+        if (s.startsWith("uploads/") || s.startsWith("files/")) {
+          files.add(path.join(pub, s));
+          continue;
+        }
+      }
+    }
+
+    for (const fp of files) {
+      try {
+        await fs.unlink(fp);
+      } catch {
+        // اگر نبود یا دسترسی نداشت، بی‌صدا رد شو
+      }
+    }
+  } catch {
+    // بی‌صدا
+  }
 }
 
 export async function GET(req, ctx) {
@@ -690,8 +735,35 @@ export async function PATCH(req, ctx) {
 
 export async function DELETE(req, ctx) {
   try {
+    const slug = ctx?.params?.slug || [];
+    const p0 = slug[0] || "";
+
+    // ✅ حذف همه نامه‌ها + فایل‌های ضمیمه
+    // مسیر: DELETE /api/letters/all
+    if (p0 === "all") {
+      const userId = await getUserIdFromReq(req);
+      if (!userId) return bad("unauthorized", 401);
+
+      const letters = await prisma.letter.findMany({
+        select: { id: true, attachments: true },
+        orderBy: { id: "desc" },
+      });
+
+      await tryDeleteAttachmentFiles(letters);
+
+      const r = await prisma.letter.deleteMany({});
+      return json({ ok: true, deleted: r.count });
+    }
+
     const id = getIdFromReq(req, ctx);
     if (!id) return bad("missing_id");
+
+    // ✅ قبل از حذف تکی، فایل‌های ضمیمه‌اش را هم پاک کن
+    const l = await prisma.letter.findUnique({
+      where: { id },
+      select: { id: true, attachments: true },
+    });
+    if (l) await tryDeleteAttachmentFiles([l]);
 
     await prisma.letter.delete({ where: { id } });
 
@@ -701,4 +773,3 @@ export async function DELETE(req, ctx) {
     return bad(e?.message || "request_failed", 500);
   }
 }
-
