@@ -25,6 +25,8 @@ function toSnakeLetter(l) {
 
     category: l.category ?? "",
     project_id: l.projectId ?? null,
+    internal_unit_id: l.internalUnitId ?? null,
+    unit_id: l.internalUnitId ?? null,
     letter_no: l.letterNo ?? "",
     letter_date: l.letterDate ?? "",
     from_name: l.fromName ?? "",
@@ -166,6 +168,12 @@ function normalizeIncomingPayload(body) {
   const classificationId =
     classificationIdParsed === undefined ? null : classificationIdParsed;
 
+  const internalUnitIdVal =
+    b.internalUnitId ?? b.internal_unit_id ?? b.unitId ?? b.unit_id ?? null;
+  const internalUnitIdParsed = parseOptionalId(internalUnitIdVal);
+  const internalUnitId =
+    internalUnitIdParsed === undefined ? null : internalUnitIdParsed;
+
   const hasAttachment = !!(b.hasAttachment ?? b.has_attachment);
   const attachments = Array.isArray(b.attachments) ? b.attachments : [];
 
@@ -177,6 +185,7 @@ function normalizeIncomingPayload(body) {
 
     category: b.category ?? "",
     projectId,
+    internalUnitId,
     letterNo: b.letterNo ?? b.letter_no ?? "",
     letterDate: b.letterDate ?? b.letter_date ?? "",
     fromName: b.fromName ?? b.from_name ?? "",
@@ -221,6 +230,19 @@ function normalizePatchPayload(body) {
     const parsed = parseOptionalId(b.projectId ?? b.project_id);
     if (parsed === undefined) out.__invalid_project_id = true;
     else out.projectId = parsed;
+  }
+
+  if (
+    hasOwn(b, "internalUnitId") ||
+    hasOwn(b, "internal_unit_id") ||
+    hasOwn(b, "unitId") ||
+    hasOwn(b, "unit_id")
+  ) {
+    const parsed = parseOptionalId(
+      b.internalUnitId ?? b.internal_unit_id ?? b.unitId ?? b.unit_id
+    );
+    if (parsed === undefined) out.__invalid_internal_unit_id = true;
+    else out.internalUnitId = parsed;
   }
 
   if (hasOwn(b, "classificationId") || hasOwn(b, "classification_id")) {
@@ -555,6 +577,7 @@ export async function POST(req, ctx) {
 
         category: payload.category || null,
         projectId: payload.projectId ?? null,
+        internalUnitId: payload.internalUnitId ?? null,
         letterNo: payload.letterNo || null,
         letterDate: payload.letterDate || null,
         fromName: payload.fromName || null,
@@ -639,6 +662,7 @@ export async function PATCH(req, ctx) {
     const body = normalizePatchPayload(raw);
 
     if (body.__invalid_project_id) return bad("invalid_project_id");
+    if (body.__invalid_internal_unit_id) return bad("invalid_internal_unit_id");
     if (body.__invalid_classification_id) return bad("invalid_classification_id");
     if (body.__invalid_return_to_ids) return bad("invalid_return_to_ids");
     if (body.__invalid_piro_ids) return bad("invalid_piro_ids");
@@ -663,6 +687,9 @@ export async function PATCH(req, ctx) {
 
     if (hasOwn(body, "projectId"))
       data.projectId = body.projectId;
+
+    if (hasOwn(body, "internalUnitId"))
+      data.internalUnitId = body.internalUnitId;
 
     if (hasOwn(body, "letterNo"))
       data.letterNo = body.letterNo === "" ? null : (body.letterNo ?? existing.letterNo);
