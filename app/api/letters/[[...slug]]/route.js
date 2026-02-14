@@ -126,6 +126,29 @@ function normalizeClassificationLabel(raw) {
   return src;
 }
 
+function isConfidentialLabel(raw) {
+  const v = normFa(raw);
+  if (!v) return false;
+  if (v.includes("خیلی محرمانه")) return true;
+  if (v.includes("محرمانه")) return true;
+  if (v.includes("confidential")) return true;
+  if (v.includes("secret")) return true;
+  return false;
+}
+
+function canViewConfidentialLetter(item, viewerUserId, viewerIsMainAdmin) {
+  const raw =
+    item?.classification ??
+    item?.classification_label ??
+    item?.confidentiality ??
+    item?.doc_classification ??
+    "";
+  const isConf = isConfidentialLabel(raw);
+  if (!isConf) return true;
+  if (viewerIsMainAdmin) return true;
+  return String(item?.created_by ?? item?.createdBy ?? "") === String(viewerUserId ?? "");
+}
+
 async function ensureLettersClassificationId(rawLabel) {
   const label = normalizeClassificationLabel(rawLabel);
   if (!label) return null;
@@ -158,6 +181,18 @@ async function resolveClassificationId({ classificationId, classificationText, k
   if (classificationId !== undefined) return classificationId;
   if (classificationText === undefined) return keepUndefined ? undefined : null;
   return await ensureLettersClassificationId(classificationText);
+}
+
+async function isMainAdminUserId(userId) {
+  const idNum = Number(userId);
+  if (!Number.isFinite(idNum)) return false;
+  const u = await prisma.user.findUnique({
+    where: { id: idNum },
+    select: { username: true, name: true },
+  });
+  const uname = String(u?.username || "").trim().toLowerCase();
+  const name = String(u?.name || "").trim().toLowerCase();
+  return uname === "marandi" || name === "marandi";
 }
 
 // تلاش برای گرفتن userId از Session (اگر session cookie دارید)
@@ -238,10 +273,15 @@ function normalizeIncomingPayload(body) {
   const projectIdParsed = parseOptionalId(projectIdVal);
   const projectId = projectIdParsed === undefined ? null : projectIdParsed;
 
-  const classificationIdVal = b.classificationId ?? b.classification_id ?? null;
-  const classificationIdParsed = parseOptionalId(classificationIdVal);
-  const classificationId =
-    classificationIdParsed === undefined ? null : classificationIdParsed;
+  const hasClassificationId =
+    hasOwn(b, "classificationId") || hasOwn(b, "classification_id");
+  let classificationId = undefined;
+  if (hasClassificationId) {
+    const classificationIdVal = b.classificationId ?? b.classification_id ?? null;
+    const classificationIdParsed = parseOptionalId(classificationIdVal);
+    classificationId =
+      classificationIdParsed === undefined ? null : classificationIdParsed;
+  }
 
   const hasClassificationText =
     hasOwn(b, "classification") ||
@@ -600,8 +640,13 @@ export async function GET(req, ctx) {
     if (p0 === "mine") {
       const userId = await getUserIdFromReq(req);
       if (!userId) return bad("unauthorized", 401);
-
-      const items = await listLetters({ createdBy: String(userId) });
+      const viewerIsMainAdmin = await isMainAdminUserId(userId);
+      const itemsRaw = await listLetters({
+        createdBy: viewerIsMainAdmin ? null : String(userId),
+      });
+      const items = itemsRaw.filter((it) =>
+        canViewConfidentialLetter(it, userId, viewerIsMainAdmin)
+      );
       return json({ items });
     }
 
