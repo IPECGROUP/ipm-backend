@@ -516,8 +516,16 @@ async function readJsonSafely(req) {
   }
 }
 
-async function listLetters({ createdBy = null } = {}) {
-  const where = createdBy ? { createdBy } : {};
+async function listLetters({ createdBy = null, includePublic = false } = {}) {
+  let where = {};
+  if (createdBy && includePublic) {
+    where = {
+      OR: [{ createdBy }, { createdBy: null }, { createdBy: "" }],
+    };
+  } else if (createdBy) {
+    where = { createdBy };
+  }
+
   const items = await prisma.letter.findMany({
     where,
     orderBy: { id: "desc" },
@@ -643,6 +651,7 @@ export async function GET(req, ctx) {
       const viewerIsMainAdmin = await isMainAdminUserId(userId);
       const itemsRaw = await listLetters({
         createdBy: viewerIsMainAdmin ? null : String(userId),
+        includePublic: !viewerIsMainAdmin,
       });
       const items = itemsRaw.filter((it) =>
         canViewConfidentialLetter(it, userId, viewerIsMainAdmin)
