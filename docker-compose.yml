@@ -7,6 +7,8 @@ services:
       NODE_ENV: production
       DATABASE_URL: ${DATABASE_URL}
       UPLOADS_DIR: /app/public/uploads
+      ONLYOFFICE_SERVER_URL: ${ONLYOFFICE_SERVER_URL:-http://localhost:8082}
+      ONLYOFFICE_APP_BASE_URL: ${ONLYOFFICE_APP_BASE_URL:-http://app:3000}
     extra_hosts:
       - "host.docker.internal:host-gateway"
     restart: unless-stopped
@@ -32,6 +34,14 @@ services:
 
       # (optional) SSL certs if you already bind them like before
       # - /etc/letsencrypt/live/ips.ipecgroup.net:/etc/nginx/ssl:ro
+
+  onlyoffice:
+    image: onlyoffice/documentserver:latest
+    ports:
+      - "8082:80"
+    restart: unless-stopped
+    environment:
+      JWT_ENABLED: "false"
 
 volumes:
   uploads_data:

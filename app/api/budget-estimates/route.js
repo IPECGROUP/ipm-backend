@@ -153,11 +153,15 @@ async function buildItems({ kind, projectIdRaw }) {
 
     for (const [code, hit] of latestMap.entries()) {
       if (seen.has(code)) continue;
+      const amount = Number(hit?.last_amount ?? 0);
+      const desc = String(hit?.last_desc ?? "").trim();
+      // If center row no longer exists and latest estimate is a delete marker, hide it.
+      if (amount === 0 && !desc) continue;
       items.push({
         code,
         center_desc: "",
         last_desc: hit?.last_desc ?? "",
-        last_amount: hit?.last_amount ?? 0,
+        last_amount: amount,
       });
     }
 
