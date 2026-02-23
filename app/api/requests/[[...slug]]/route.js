@@ -22,22 +22,58 @@ async function readJson(req) {
   }
 }
 
-/**
- * IMPORTANT: این قسمت رو با Auth واقعی خودت هماهنگ کن.
- * فعلاً:
- * - اگر cookie با نام user_id داشته باشی می‌خونه
- * - یا header x-user-id
- * - در حالت dev اگر هیچکدام نبود، userId=1 می‌گذارد
- */
-function getUserId(req) {
+function readCookieValue(cookie, name) {
+  const safe = String(name || "").replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
+  const re = new RegExp(`(?:^|;\\s*)${safe}=([^;]+)`);
+  const m = String(cookie || "").match(re);
+  return m ? decodeURIComponent(m[1]) : null;
+}
+
+async function getUserId(req) {
   const cookie = req.headers.get("cookie") || "";
-  const m = cookie.match(/(?:^|;\s*)user_id=([^;]+)/);
-  const fromCookie = m ? decodeURIComponent(m[1]) : null;
 
+  // Legacy support: x-user-id / user_id cookie
   const fromHeader = req.headers.get("x-user-id");
-  const idStr = fromHeader || fromCookie;
+  const fromCookie = readCookieValue(cookie, "user_id");
+  const direct = fromHeader || fromCookie;
+  if (direct && /^\d+$/.test(String(direct))) return Number(direct);
 
-  if (idStr && String(idStr).match(/^\d+$/)) return Number(idStr);
+  // Primary auth: ipm_session cookie
+  const sessionId = readCookieValue(cookie, "ipm_session");
+  if (sessionId) {
+    // 1) Current schema path: Session.id
+    try {
+      const sess = await prisma.session.findUnique({
+        where: { id: sessionId },
+        include: { user: true },
+      });
+      if (sess?.user?.id && (!sess.expiresAt || new Date(sess.expiresAt).getTime() >= Date.now())) {
+        return Number(sess.user.id);
+      }
+    } catch {}
+
+    // 2) Backward compatibility: token-based sessions or alternate query path
+    try {
+      const sess = await prisma.session.findUnique({
+        where: { token: sessionId },
+      });
+      if (sess?.userId && (!sess.expiresAt || new Date(sess.expiresAt).getTime() >= Date.now())) {
+        return Number(sess.userId);
+      }
+    } catch {}
+
+    // 3) Last fallback for odd schemas
+    try {
+      const sess = await prisma.session.findFirst({
+        where: {
+          OR: [{ id: sessionId }, { token: sessionId }],
+        },
+      });
+      if (sess?.userId && (!sess.expiresAt || new Date(sess.expiresAt).getTime() >= Date.now())) {
+        return Number(sess.userId);
+      }
+    } catch {}
+  }
 
   if (process.env.NODE_ENV !== "production") return 1;
   return null;
@@ -168,8 +204,15 @@ function norm(s) {
   return String(s || "").trim();
 }
 
+function isMainAdminObserver(user) {
+  if (!user) return false;
+  const uname = String(user.username || "").trim().toLowerCase();
+  const email = String(user.email || "").trim().toLowerCase();
+  return uname === "marandi" || email === "marandi@ipecgroup.net";
+}
+
 function unitNameToKind(unitNameOrCode) {
-  const s = norm(unitNameOrCode);
+  const s = norm(unitNameOrCode).toLowerCase();
 
   // اگر کد گذاشتی مثل "office" / "finance" ...
   if (UNIT_KINDS.includes(s)) return s;
@@ -182,11 +225,21 @@ function unitNameToKind(unitNameOrCode) {
   if (s.includes("سرمایه")) return "capex";
   if (s.includes("پروژه")) return "projects";
 
+  // نگاشت انگلیسی رایج (برای code/name سفارشی)
+  if (s.includes("office") || s.includes("hq") || s.includes("head") || s.includes("central")) return "office";
+  if (s.includes("site")) return "site";
+  if (s.includes("finance") || s.includes("account")) return "finance";
+  if (s.includes("cash")) return "cash";
+  if (s.includes("capex") || s.includes("capital")) return "capex";
+  if (s.includes("project")) return "projects";
+
   return null;
 }
 
 function detectUserRoleKeys(roleNames) {
-  const arr = (Array.isArray(roleNames) ? roleNames : []).map(norm).filter(Boolean);
+  const arr = (Array.isArray(roleNames) ? roleNames : [])
+    .map((x) => norm(x).toLowerCase())
+    .filter(Boolean);
   const keys = new Set();
 
   // نقش‌های دقیق از UserRole.name
@@ -254,7 +307,7 @@ function getCurrentStep(historyJson) {
   return null;
 }
 
-function canActOnStep({ row, userId, userUnitKind, userRoleKeys }) {
+function canActOnStep({ row, userId, userUnitKinds, userRoleKeys }) {
   const step = getCurrentStep(row.historyJson);
   if (!step) return false;
 
@@ -266,17 +319,22 @@ function canActOnStep({ row, userId, userUnitKind, userRoleKeys }) {
   // نقش لازم را دارد؟
   if (!userRoleKeys.includes(step.roleKey)) return false;
 
-  // شرط واحد برای نقش‌های مالی
-  if (
-    (step.roleKey === ROLE_KEYS.ACCOUNTING || step.roleKey === ROLE_KEYS.FINANCE_MANAGER) &&
-    userUnitKind !== "finance"
-  ) return false;
+  // به‌جز نقش دستور پرداخت، بقیه نقش‌ها باید در همان واحد درخواست باشند
+  if (step.roleKey !== ROLE_KEYS.PAYMENT_ORDER) {
+    const rowUnit = String(row.scope || "").toLowerCase();
+    const units = Array.isArray(userUnitKinds) ? userUnitKinds : [];
+    if (!rowUnit || !units.includes(rowUnit)) return false;
+  }
 
   return true;
 }
 
 // --- user context (با مدل‌های واقعی Prisma شما)
 async function getUserContext(req, userId) {
+  const user = await prisma.user.findUnique({
+    where: { id: Number(userId) },
+  });
+
   // 1) Units
   const userUnits = await prisma.userUnit.findMany({
     where: { userId: Number(userId) },
@@ -303,8 +361,9 @@ async function getUserContext(req, userId) {
     .filter((x) => !!x.kind);
 
   const roleKeys = detectUserRoleKeys(roleNames);
+  const unitKinds = Array.from(new Set(mappedUnits.map((x) => x.kind).filter(Boolean)));
 
-  let unitKind = mappedUnits[0]?.kind || null;
+  let unitKind = unitKinds[0] || null;
 
   if (mappedUnits.length > 1) {
     const wantsFinance = roleKeys.includes(ROLE_KEYS.ACCOUNTING) || roleKeys.includes(ROLE_KEYS.FINANCE_MANAGER);
@@ -316,9 +375,10 @@ async function getUserContext(req, userId) {
 
   // fallback هدرها برای dev
   if (!unitKind) {
-    const hxUnit = norm(req.headers.get("x-user-unit"));
+    const hxUnit = norm(req.headers.get("x-user-unit")).toLowerCase();
     if (UNIT_KINDS.includes(hxUnit)) unitKind = hxUnit;
   }
+  if (unitKind && !unitKinds.includes(unitKind)) unitKinds.push(unitKind);
   if ((!roleNames || roleNames.length === 0)) {
     const hxRoles = norm(req.headers.get("x-user-roles"));
     if (hxRoles) {
@@ -328,7 +388,9 @@ async function getUserContext(req, userId) {
   }
 
   return {
+    isMainAdmin: isMainAdminObserver(user),
     unitKind,
+    unitKinds,
     roleNames,
     roleKeys: detectUserRoleKeys(roleNames),
   };
@@ -336,8 +398,9 @@ async function getUserContext(req, userId) {
 
 // --- handlers
 export async function GET(req, ctx) {
-  const userId = getUserId(req);
+  const userId = await getUserId(req);
   if (!userId) return json({ error: "unauthorized" }, 401);
+  const uctx = await getUserContext(req, userId);
 
   const slug = (ctx?.params?.slug || []).map(String);
 
@@ -348,8 +411,16 @@ export async function GET(req, ctx) {
 
     const row = await prisma.paymentRequest.findUnique({ where: { id } });
     if (!row) return json({ error: "not_found" }, 404);
+    const canAct = canActOnStep({
+      row,
+      userId,
+      userUnitKinds: uctx.unitKinds,
+      userRoleKeys: uctx.roleKeys,
+    });
+    const canView = uctx.isMainAdmin || row.createdById === userId || canAct;
+    if (!canView) return json({ error: "forbidden" }, 403);
 
-    return json({ item: normalizeOut(row) });
+    return json({ item: { ...normalizeOut(row), canAct } });
   }
 
   // GET /api/requests (list)
@@ -379,31 +450,39 @@ export async function GET(req, ctx) {
     take: 500,
   });
 
-  if (view === "mine") {
-    rows = rows.filter((r) => r.createdById === userId);
-  } else if (view === "inbox") {
-    const uctx = await getUserContext(req, userId);
-    rows = rows.filter((r) => {
-      if (r.status !== "pending") return false;
-      const step = getCurrentStep(r.historyJson);
-      if (!step) return false;
-
-      if (step.roleKey === ROLE_KEYS.REQUESTER) return r.createdById === userId;
-
-      return canActOnStep({
-        row: r,
-        userId,
-        userUnitKind: uctx.unitKind,
-        userRoleKeys: uctx.roleKeys,
-      });
+  const rowsWithFlags = rows.map((r) => {
+    const canAct = canActOnStep({
+      row: r,
+      userId,
+      userUnitKinds: uctx.unitKinds,
+      userRoleKeys: uctx.roleKeys,
     });
+    const isMine = r.createdById === userId;
+    const canView = uctx.isMainAdmin || isMine || canAct;
+    return { row: r, canAct, isMine, canView };
+  });
+
+  let filtered = rowsWithFlags;
+  if (view === "mine") {
+    filtered = rowsWithFlags.filter((x) => x.isMine);
+  } else if (view === "inbox") {
+    filtered = uctx.isMainAdmin
+      ? rowsWithFlags.filter((x) => !x.isMine)
+      : rowsWithFlags.filter((x) => !x.isMine && x.canAct);
+  } else {
+    filtered = rowsWithFlags.filter((x) => x.canView);
   }
 
-  return json({ items: rows.map(normalizeOut) });
+  return json({
+    items: filtered.map((x) => ({
+      ...normalizeOut(x.row),
+      canAct: x.canAct,
+    })),
+  });
 }
 
 export async function POST(req, ctx) {
-  const userId = getUserId(req);
+  const userId = await getUserId(req);
   if (!userId) return json({ error: "unauthorized" }, 401);
 
   const slug = (ctx?.params?.slug || []).map(String);
@@ -425,12 +504,13 @@ export async function POST(req, ctx) {
     const uctx = await getUserContext(req, userId);
     const history = Array.isArray(row.historyJson) ? row.historyJson : [];
     const step = getCurrentStep(history);
+    if (!step) return json({ error: "no_active_step" }, 400);
+
+    if (!canActOnStep({ row, userId, userUnitKinds: uctx.unitKinds, userRoleKeys: uctx.roleKeys })) {
+      return json({ error: "forbidden" }, 403);
+    }
 
     if (nextStatus === "approved") {
-      if (!canActOnStep({ row, userId, userUnitKind: uctx.unitKind, userRoleKeys: uctx.roleKeys })) {
-        return json({ error: "forbidden" }, 403);
-      }
-
       const unitKind = row.scope;
       const chain = getWorkflowChainForUnit(unitKind);
       if (!chain) return json({ error: "workflow_not_defined" }, 400);
@@ -517,9 +597,13 @@ export async function POST(req, ctx) {
   const data = pickUpdatable(body);
 
   const uctx = await getUserContext(req, userId);
-  if (!uctx.unitKind) return json({ error: "user_unit_required" }, 400);
+  const requestedScope = String(data.scope ?? body?.scope ?? "").trim().toLowerCase();
+  let unitKind = uctx.unitKind;
+  if (!unitKind && uctx.isMainAdmin) {
+    unitKind = UNIT_KINDS.includes(requestedScope) ? requestedScope : "office";
+  }
+  if (!unitKind) return json({ error: "user_unit_required" }, 400);
 
-  const unitKind = uctx.unitKind;
   const chain = getWorkflowChainForUnit(unitKind);
   if (!chain) return json({ error: "workflow_not_defined" }, 400);
 
@@ -597,7 +681,7 @@ export async function POST(req, ctx) {
 }
 
 export async function PATCH(req, ctx) {
-  const userId = getUserId(req);
+  const userId = await getUserId(req);
   if (!userId) return json({ error: "unauthorized" }, 401);
 
   const slug = (ctx?.params?.slug || []).map(String);
@@ -637,7 +721,7 @@ export async function PATCH(req, ctx) {
 }
 
 export async function DELETE(req, ctx) {
-  const userId = getUserId(req);
+  const userId = await getUserId(req);
   if (!userId) return json({ error: "unauthorized" }, 401);
 
   const slug = (ctx?.params?.slug || []).map(String);
