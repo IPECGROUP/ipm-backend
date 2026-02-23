@@ -3,7 +3,8 @@ export const dynamic = "force-dynamic";
 
 import { prisma } from "@/lib/prisma";
 import {
-  ensureAllocTable,
+  amountAsSafeBigIntExpr,
+  getAllocColumnSet,
   json,
   normalizeAmount,
   parseKindProject,
@@ -21,25 +22,27 @@ export async function GET(req) {
       return json({ totals: {} });
     }
 
-    await ensureAllocTable();
+    const cols = await getAllocColumnSet();
+    const hasProjectId = cols.has("project_id");
+    const safeAmountExpr = amountAsSafeBigIntExpr(cols);
 
     const rows =
       kind === "projects"
         ? await prisma.$queryRawUnsafe(
             `
-              SELECT code, COALESCE(SUM(amount), 0)::text AS total
+              SELECT code, COALESCE(SUM(${safeAmountExpr}), 0)::text AS total
               FROM budget_allocations
-              WHERE kind = $1 AND project_id = $2
+              WHERE kind = $1 ${hasProjectId ? "AND project_id = $2" : ""}
               GROUP BY code
             `,
             kind,
-            projectId,
+            ...(hasProjectId ? [projectId] : []),
           )
         : await prisma.$queryRawUnsafe(
             `
-              SELECT code, COALESCE(SUM(amount), 0)::text AS total
+              SELECT code, COALESCE(SUM(${safeAmountExpr}), 0)::text AS total
               FROM budget_allocations
-              WHERE kind = $1 AND project_id IS NULL
+              WHERE kind = $1 ${hasProjectId ? "AND project_id IS NULL" : ""}
               GROUP BY code
             `,
             kind,

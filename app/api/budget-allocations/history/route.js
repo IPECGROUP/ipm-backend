@@ -3,7 +3,8 @@ export const dynamic = "force-dynamic";
 
 import { prisma } from "@/lib/prisma";
 import {
-  ensureAllocTable,
+  amountAsSafeBigIntExpr,
+  getAllocColumnSet,
   json,
   normalizeAmount,
   parseKindProject,
@@ -22,7 +23,17 @@ export async function GET(req) {
       return json({ history: {} });
     }
 
-    await ensureAllocTable();
+    const cols = await getAllocColumnSet();
+    const hasProjectId = cols.has("project_id");
+    const descExpr = cols.has("description")
+      ? "description"
+      : cols.has("desc")
+        ? "\"desc\""
+        : "NULL";
+    const dateExpr = cols.has("date_jalali") ? "date_jalali" : "NULL";
+    const serialExpr = cols.has("serial") ? "serial" : "NULL";
+    const createdExpr = cols.has("created_at") ? "created_at" : "NOW()";
+    const amountExpr = `${amountAsSafeBigIntExpr(cols)}::text`;
 
     const rows =
       kind === "projects"
@@ -30,30 +41,30 @@ export async function GET(req) {
             `
               SELECT
                 code,
-                amount::text AS amount,
-                description,
-                serial,
-                date_jalali,
-                created_at
+                ${amountExpr} AS amount,
+                ${descExpr} AS description,
+                ${serialExpr} AS serial,
+                ${dateExpr} AS date_jalali,
+                ${createdExpr} AS created_at
               FROM budget_allocations
-              WHERE kind = $1 AND project_id = $2
-              ORDER BY code ASC, created_at DESC, id DESC
+              WHERE kind = $1 ${hasProjectId ? "AND project_id = $2" : ""}
+              ORDER BY code ASC, ${createdExpr} DESC
             `,
             kind,
-            projectId,
+            ...(hasProjectId ? [projectId] : []),
           )
         : await prisma.$queryRawUnsafe(
             `
               SELECT
                 code,
-                amount::text AS amount,
-                description,
-                serial,
-                date_jalali,
-                created_at
+                ${amountExpr} AS amount,
+                ${descExpr} AS description,
+                ${serialExpr} AS serial,
+                ${dateExpr} AS date_jalali,
+                ${createdExpr} AS created_at
               FROM budget_allocations
-              WHERE kind = $1 AND project_id IS NULL
-              ORDER BY code ASC, created_at DESC, id DESC
+              WHERE kind = $1 ${hasProjectId ? "AND project_id IS NULL" : ""}
+              ORDER BY code ASC, ${createdExpr} DESC
             `,
             kind,
           );

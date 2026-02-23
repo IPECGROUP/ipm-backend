@@ -25,6 +25,10 @@ function toEnDigits(s) {
     .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660));
 }
 
+function qIdent(name) {
+  return `"${String(name || "").replace(/"/g, "\"\"")}"`;
+}
+
 export function toIntOrNull(v) {
   if (v === null || v === undefined || v === "") return null;
   const en = toEnDigits(v);
@@ -129,9 +133,22 @@ export async function ensureAllocTable() {
       code TEXT NOT NULL,
       amount BIGINT NOT NULL DEFAULT 0,
       description TEXT NULL,
+      "desc" TEXT NULL,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
   `);
+
+  // Keep compatibility with older deployments that may have partial schema.
+  await runDdl(`ALTER TABLE budget_allocations ADD COLUMN IF NOT EXISTS date_jalali TEXT NULL`);
+  await runDdl(`ALTER TABLE budget_allocations ADD COLUMN IF NOT EXISTS kind TEXT NULL`);
+  await runDdl(`ALTER TABLE budget_allocations ADD COLUMN IF NOT EXISTS project_id BIGINT NULL`);
+  await runDdl(`ALTER TABLE budget_allocations ADD COLUMN IF NOT EXISTS project_name TEXT NULL`);
+  await runDdl(`ALTER TABLE budget_allocations ADD COLUMN IF NOT EXISTS code TEXT NULL`);
+  await runDdl(`ALTER TABLE budget_allocations ADD COLUMN IF NOT EXISTS amount BIGINT NULL`);
+  await runDdl(`ALTER TABLE budget_allocations ADD COLUMN IF NOT EXISTS alloc BIGINT NULL`);
+  await runDdl(`ALTER TABLE budget_allocations ADD COLUMN IF NOT EXISTS description TEXT NULL`);
+  await runDdl(`ALTER TABLE budget_allocations ADD COLUMN IF NOT EXISTS "desc" TEXT NULL`);
+  await runDdl(`ALTER TABLE budget_allocations ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ NULL`);
 
   await runDdl(`
     CREATE INDEX IF NOT EXISTS idx_budget_allocations_kind_project_code_created_at
@@ -149,6 +166,42 @@ export async function ensureAllocTable() {
   `);
 
   globalThis.__budgetAllocTableReady = true;
+}
+
+export async function getAllocColumnSet() {
+  await ensureAllocTable();
+
+  const cache = globalThis.__budgetAllocColsCache;
+  const now = Date.now();
+  if (cache && now - Number(cache.ts || 0) < 30_000 && cache.set instanceof Set) {
+    return cache.set;
+  }
+
+  const rows = await prisma.$queryRawUnsafe(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = 'budget_allocations'
+  `);
+
+  const set = new Set((rows || []).map((r) => String(r?.column_name || "").trim()).filter(Boolean));
+  globalThis.__budgetAllocColsCache = { ts: now, set };
+  return set;
+}
+
+export function pickAllocAmountColumn(cols) {
+  const has = (name) => cols instanceof Set && cols.has(name);
+  if (has("amount")) return "amount";
+  if (has("alloc")) return "alloc";
+  if (has("allocation")) return "allocation";
+  return null;
+}
+
+export function amountAsSafeBigIntExpr(cols) {
+  const amountCol = pickAllocAmountColumn(cols);
+  if (!amountCol) return "0::bigint";
+  const colExpr = qIdent(amountCol);
+  const signedDigits = `(CASE WHEN COALESCE(${colExpr}::text, '') LIKE '-%' THEN '-' ELSE '' END) || REGEXP_REPLACE(COALESCE(${colExpr}::text, ''), '[^0-9]', '', 'g')`;
+  return `COALESCE(NULLIF(NULLIF(${signedDigits}, ''), '-'), '0')::bigint`;
 }
 
 export async function makeNextSerial() {
