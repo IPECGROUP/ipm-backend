@@ -30,7 +30,7 @@ export async function GET(req) {
       kind === "projects"
         ? await prisma.$queryRawUnsafe(
             `
-              SELECT code, COALESCE(SUM(${safeAmountExpr}), 0)::text AS total
+              SELECT code::text AS code, COALESCE(SUM(${safeAmountExpr}), 0)::text AS total
               FROM budget_allocations
               WHERE kind = $1 ${hasProjectId ? "AND project_id = $2" : ""}
               GROUP BY code
@@ -40,7 +40,7 @@ export async function GET(req) {
           )
         : await prisma.$queryRawUnsafe(
             `
-              SELECT code, COALESCE(SUM(${safeAmountExpr}), 0)::text AS total
+              SELECT code::text AS code, COALESCE(SUM(${safeAmountExpr}), 0)::text AS total
               FROM budget_allocations
               WHERE kind = $1 ${hasProjectId ? "AND project_id IS NULL" : ""}
               GROUP BY code

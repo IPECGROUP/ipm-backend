@@ -178,7 +178,7 @@ export async function getAllocColumnSet() {
   }
 
   const rows = await prisma.$queryRawUnsafe(`
-    SELECT column_name
+    SELECT column_name::text AS column_name
     FROM information_schema.columns
     WHERE table_schema = 'public' AND table_name = 'budget_allocations'
   `);

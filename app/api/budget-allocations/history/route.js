@@ -40,11 +40,11 @@ export async function GET(req) {
         ? await prisma.$queryRawUnsafe(
             `
               SELECT
-                code,
+                code::text AS code,
                 ${amountExpr} AS amount,
-                ${descExpr} AS description,
-                ${serialExpr} AS serial,
-                ${dateExpr} AS date_jalali,
+                (${descExpr})::text AS description,
+                (${serialExpr})::text AS serial,
+                (${dateExpr})::text AS date_jalali,
                 ${createdExpr} AS created_at
               FROM budget_allocations
               WHERE kind = $1 ${hasProjectId ? "AND project_id = $2" : ""}
@@ -56,11 +56,11 @@ export async function GET(req) {
         : await prisma.$queryRawUnsafe(
             `
               SELECT
-                code,
+                code::text AS code,
                 ${amountExpr} AS amount,
-                ${descExpr} AS description,
-                ${serialExpr} AS serial,
-                ${dateExpr} AS date_jalali,
+                (${descExpr})::text AS description,
+                (${serialExpr})::text AS serial,
+                (${dateExpr})::text AS date_jalali,
                 ${createdExpr} AS created_at
               FROM budget_allocations
               WHERE kind = $1 ${hasProjectId ? "AND project_id IS NULL" : ""}
