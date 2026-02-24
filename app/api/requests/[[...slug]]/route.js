@@ -347,6 +347,14 @@ async function getUserContext(req, userId) {
     include: { role: true },
   });
   const roleNames = (roleMaps || []).map((rm) => rm?.role?.name).filter(Boolean);
+  const roleDerivedUnitKinds = Array.from(
+    new Set(
+      roleNames
+        .map((r) => unitNameToKind(r))
+        .filter(Boolean)
+    )
+  );
+  const departmentUnitKind = unitNameToKind(user?.department || "");
 
   // unitKind انتخابی:
   // اگر چندتا واحد داشت:
@@ -361,9 +369,15 @@ async function getUserContext(req, userId) {
     .filter((x) => !!x.kind);
 
   const roleKeys = detectUserRoleKeys(roleNames);
-  const unitKinds = Array.from(new Set(mappedUnits.map((x) => x.kind).filter(Boolean)));
+  const unitKinds = Array.from(
+    new Set([
+      ...mappedUnits.map((x) => x.kind).filter(Boolean),
+      ...roleDerivedUnitKinds,
+      ...(departmentUnitKind ? [departmentUnitKind] : []),
+    ])
+  );
 
-  let unitKind = unitKinds[0] || null;
+  let unitKind = mappedUnits[0]?.kind || departmentUnitKind || roleDerivedUnitKinds[0] || null;
 
   if (mappedUnits.length > 1) {
     const wantsFinance = roleKeys.includes(ROLE_KEYS.ACCOUNTING) || roleKeys.includes(ROLE_KEYS.FINANCE_MANAGER);
@@ -599,10 +613,21 @@ export async function POST(req, ctx) {
   const uctx = await getUserContext(req, userId);
   const requestedScope = String(data.scope ?? body?.scope ?? "").trim().toLowerCase();
   let unitKind = uctx.unitKind;
+  if (!unitKind && requestedScope && uctx.unitKinds.includes(requestedScope)) {
+    unitKind = requestedScope;
+  }
   if (!unitKind && uctx.isMainAdmin) {
     unitKind = UNIT_KINDS.includes(requestedScope) ? requestedScope : "office";
   }
-  if (!unitKind) return json({ error: "user_unit_required" }, 400);
+  if (!unitKind) {
+    return json(
+      {
+        error: "user_unit_required",
+        hint: "کاربر باید به یک واحد معتبر متصل باشد (UserUnit / department / role name).",
+      },
+      400
+    );
+  }
 
   const chain = getWorkflowChainForUnit(unitKind);
   if (!chain) return json({ error: "workflow_not_defined" }, 400);
