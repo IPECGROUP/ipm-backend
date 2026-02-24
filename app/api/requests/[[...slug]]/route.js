@@ -316,6 +316,9 @@ function canActOnStep({ row, userId, userUnitKinds, userRoleKeys }) {
     return row.createdById === userId;
   }
 
+  // جلوگیری از تایید/رد درخواستِ خودِ کاربر در سایر مراحل
+  if (row.createdById === userId) return false;
+
   // نقش لازم را دارد؟
   if (!userRoleKeys.includes(step.roleKey)) return false;
 
@@ -519,6 +522,10 @@ export async function POST(req, ctx) {
     const history = Array.isArray(row.historyJson) ? row.historyJson : [];
     const step = getCurrentStep(history);
     if (!step) return json({ error: "no_active_step" }, 400);
+
+    if (row.createdById === userId && step.roleKey !== ROLE_KEYS.REQUESTER) {
+      return json({ error: "self_action_forbidden" }, 403);
+    }
 
     if (!canActOnStep({ row, userId, userUnitKinds: uctx.unitKinds, userRoleKeys: uctx.roleKeys })) {
       return json({ error: "forbidden" }, 403);
