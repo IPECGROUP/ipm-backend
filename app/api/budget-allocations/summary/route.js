@@ -10,69 +10,6 @@ import {
   parseKindProject,
 } from "../_shared";
 
-async function readLegacyBudgetEstimateTotals({ kind, projectId }) {
-  try {
-    const rows =
-      kind === "projects"
-        ? await prisma.$queryRawUnsafe(
-            `
-              WITH ranked AS (
-                SELECT
-                  code,
-                  amount,
-                  created_at,
-                  ROW_NUMBER() OVER (
-                    PARTITION BY code
-                    ORDER BY created_at DESC
-                  ) AS rn
-                FROM budget_estimates
-                WHERE kind = $1 AND project_id = $2
-              )
-              SELECT
-                code::text AS code,
-                COALESCE(amount, 0)::text AS total
-              FROM ranked
-              WHERE rn = 1
-            `,
-            kind,
-            projectId,
-          )
-        : await prisma.$queryRawUnsafe(
-            `
-              WITH ranked AS (
-                SELECT
-                  code,
-                  amount,
-                  created_at,
-                  ROW_NUMBER() OVER (
-                    PARTITION BY code
-                    ORDER BY created_at DESC
-                  ) AS rn
-                FROM budget_estimates
-                WHERE kind = $1 AND project_id IS NULL
-              )
-              SELECT
-                code::text AS code,
-                COALESCE(amount, 0)::text AS total
-              FROM ranked
-              WHERE rn = 1
-            `,
-            kind,
-          );
-
-    const out = {};
-    for (const r of rows || []) {
-      const code = String(r?.code || "").trim();
-      if (!code) continue;
-      out[code] = normalizeAmount(r?.total || 0);
-    }
-    return out;
-  } catch {
-    // legacy table may be unavailable on some environments
-    return {};
-  }
-}
-
 export async function GET(req) {
   try {
     const { searchParams } = new URL(req.url);
@@ -118,14 +55,33 @@ export async function GET(req) {
       totals[code] = normalizeAmount(r?.total || 0);
     }
 
-    // Backward compatibility: if allocations were historically stored in
-    // budget_estimates, expose their latest amount as summary too.
-    const legacyTotals = await readLegacyBudgetEstimateTotals({ kind, projectId });
-    for (const [code, amount] of Object.entries(legacyTotals)) {
-      if (!(code in totals)) totals[code] = amount;
+    // Consumption from payment requests (global for that kind/code, not limited by requester visibility)
+    const usageWhere = {
+      scope: kind,
+      status: { in: ["pending", "approved"] },
+    };
+    if (kind === "projects") usageWhere.projectId = projectId;
+
+    const usageRows = await prisma.paymentRequest.groupBy({
+      by: ["budgetCode"],
+      where: usageWhere,
+      _sum: { amount: true },
+    });
+
+    const used = {};
+    for (const r of usageRows || []) {
+      const code = String(r?.budgetCode || "").trim();
+      if (!code) continue;
+      used[code] = normalizeAmount(r?._sum?.amount || 0);
     }
 
-    return json({ totals });
+    const remaining = {};
+    for (const [code, total] of Object.entries(totals)) {
+      const u = Number(used[code] || 0);
+      remaining[code] = Math.max(0, Number(total || 0) - u);
+    }
+
+    return json({ totals, used, remaining });
   } catch (e) {
     return json(
       { error: "internal_error", message: String(e?.message || "internal_error") },
