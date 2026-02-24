@@ -10,6 +10,69 @@ import {
   parseKindProject,
 } from "../_shared";
 
+async function readLegacyBudgetEstimateTotals({ kind, projectId }) {
+  try {
+    const rows =
+      kind === "projects"
+        ? await prisma.$queryRawUnsafe(
+            `
+              WITH ranked AS (
+                SELECT
+                  code,
+                  amount,
+                  created_at,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY code
+                    ORDER BY created_at DESC
+                  ) AS rn
+                FROM budget_estimates
+                WHERE kind = $1 AND project_id = $2
+              )
+              SELECT
+                code::text AS code,
+                COALESCE(amount, 0)::text AS total
+              FROM ranked
+              WHERE rn = 1
+            `,
+            kind,
+            projectId,
+          )
+        : await prisma.$queryRawUnsafe(
+            `
+              WITH ranked AS (
+                SELECT
+                  code,
+                  amount,
+                  created_at,
+                  ROW_NUMBER() OVER (
+                    PARTITION BY code
+                    ORDER BY created_at DESC
+                  ) AS rn
+                FROM budget_estimates
+                WHERE kind = $1 AND project_id IS NULL
+              )
+              SELECT
+                code::text AS code,
+                COALESCE(amount, 0)::text AS total
+              FROM ranked
+              WHERE rn = 1
+            `,
+            kind,
+          );
+
+    const out = {};
+    for (const r of rows || []) {
+      const code = String(r?.code || "").trim();
+      if (!code) continue;
+      out[code] = normalizeAmount(r?.total || 0);
+    }
+    return out;
+  } catch {
+    // legacy table may be unavailable on some environments
+    return {};
+  }
+}
+
 export async function GET(req) {
   try {
     const { searchParams } = new URL(req.url);
@@ -53,6 +116,13 @@ export async function GET(req) {
       const code = String(r?.code || "").trim();
       if (!code) continue;
       totals[code] = normalizeAmount(r?.total || 0);
+    }
+
+    // Backward compatibility: if allocations were historically stored in
+    // budget_estimates, expose their latest amount as summary too.
+    const legacyTotals = await readLegacyBudgetEstimateTotals({ kind, projectId });
+    for (const [code, amount] of Object.entries(legacyTotals)) {
+      if (!(code in totals)) totals[code] = amount;
     }
 
     return json({ totals });
