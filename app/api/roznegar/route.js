@@ -5,6 +5,8 @@ import { NextResponse } from "next/server";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+let ensureRoznegarSchemaPromise = null;
+
 function json(data, status = 200) {
   return NextResponse.json(data, { status });
 }
@@ -109,8 +111,106 @@ function mapDatabaseError(e) {
   if (msg.includes("authentication failed")) {
     return { message: "database_auth_failed", status: 503 };
   }
+  if (msg.includes("permission denied")) {
+    return { message: "database_permission_denied", status: 503 };
+  }
 
   return null;
+}
+
+async function ensureRoznegarSchema() {
+  if (ensureRoznegarSchemaPromise) return ensureRoznegarSchemaPromise;
+
+  ensureRoznegarSchemaPromise = (async () => {
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "roznegar_entries" (
+        "id" SERIAL NOT NULL,
+        "project_id" INTEGER NOT NULL,
+        "user_id" INTEGER NOT NULL,
+        "date_ymd" VARCHAR(10) NOT NULL,
+        "day_name" VARCHAR(30) NOT NULL,
+        "activity" TEXT,
+        "tag_ids" JSONB,
+        "related_doc_ids" JSONB,
+        "files" JSONB,
+        "confirmed" BOOLEAN NOT NULL DEFAULT false,
+        "confirmed_at" TIMESTAMP(3),
+        "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        "updated_at" TIMESTAMP(3) NOT NULL,
+        CONSTRAINT "roznegar_entries_pkey" PRIMARY KEY ("id")
+      );
+    `);
+
+    await prisma.$executeRawUnsafe(`
+      CREATE UNIQUE INDEX IF NOT EXISTS "roznegar_entries_project_id_user_id_date_ymd_key"
+      ON "roznegar_entries"("project_id", "user_id", "date_ymd");
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE INDEX IF NOT EXISTS "roznegar_entries_project_id_idx"
+      ON "roznegar_entries"("project_id");
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE INDEX IF NOT EXISTS "roznegar_entries_user_id_idx"
+      ON "roznegar_entries"("user_id");
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE INDEX IF NOT EXISTS "roznegar_entries_date_ymd_idx"
+      ON "roznegar_entries"("date_ymd");
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE INDEX IF NOT EXISTS "roznegar_entries_confirmed_idx"
+      ON "roznegar_entries"("confirmed");
+    `);
+
+    await prisma.$executeRawUnsafe(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'roznegar_entries_project_id_fkey'
+        ) THEN
+          ALTER TABLE "roznegar_entries"
+          ADD CONSTRAINT "roznegar_entries_project_id_fkey"
+          FOREIGN KEY ("project_id")
+          REFERENCES "projects"("id")
+          ON DELETE CASCADE
+          ON UPDATE CASCADE;
+        END IF;
+      END $$;
+    `);
+
+    await prisma.$executeRawUnsafe(`
+      DO $$
+      BEGIN
+        IF NOT EXISTS (
+          SELECT 1 FROM pg_constraint WHERE conname = 'roznegar_entries_user_id_fkey'
+        ) THEN
+          ALTER TABLE "roznegar_entries"
+          ADD CONSTRAINT "roznegar_entries_user_id_fkey"
+          FOREIGN KEY ("user_id")
+          REFERENCES "User"("id")
+          ON DELETE CASCADE
+          ON UPDATE CASCADE;
+        END IF;
+      END $$;
+    `);
+  })().catch((err) => {
+    ensureRoznegarSchemaPromise = null;
+    throw err;
+  });
+
+  return ensureRoznegarSchemaPromise;
+}
+
+async function withRoznegarSchema(action) {
+  try {
+    return await action();
+  } catch (e) {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2021") {
+      await ensureRoznegarSchema();
+      return action();
+    }
+    throw e;
+  }
 }
 
 function handleRequestError(e) {
@@ -164,10 +264,12 @@ export async function GET(req) {
       ...(confirmedParam != null ? { confirmed: parseBool(confirmedParam, false) } : {}),
     };
 
-    const items = await prisma.roznegarEntry.findMany({
-      where,
-      orderBy: [{ dateYmd: "desc" }, { id: "desc" }],
-    });
+    const items = await withRoznegarSchema(() =>
+      prisma.roznegarEntry.findMany({
+        where,
+        orderBy: [{ dateYmd: "desc" }, { id: "desc" }],
+      })
+    );
 
     return json({ items: items.map(mapEntry) });
   } catch (e) {
@@ -195,30 +297,32 @@ export async function POST(req) {
     if (!validDateYmd(dateYmd)) return bad("invalid_date_ymd");
     if (!dayName) return bad("day_name_required");
 
-    const item = await prisma.roznegarEntry.upsert({
-      where: { projectId_userId_dateYmd: { projectId, userId, dateYmd } },
-      create: {
-        projectId,
-        userId,
-        dateYmd,
-        dayName,
-        activity: activity || null,
-        tagIds,
-        relatedDocIds,
-        files,
-        confirmed,
-        confirmedAt: confirmed ? confirmedAt || new Date() : null,
-      },
-      update: {
-        dayName,
-        activity: activity || null,
-        tagIds,
-        relatedDocIds,
-        files,
-        confirmed,
-        confirmedAt: confirmed ? confirmedAt || new Date() : null,
-      },
-    });
+    const item = await withRoznegarSchema(() =>
+      prisma.roznegarEntry.upsert({
+        where: { projectId_userId_dateYmd: { projectId, userId, dateYmd } },
+        create: {
+          projectId,
+          userId,
+          dateYmd,
+          dayName,
+          activity: activity || null,
+          tagIds,
+          relatedDocIds,
+          files,
+          confirmed,
+          confirmedAt: confirmed ? confirmedAt || new Date() : null,
+        },
+        update: {
+          dayName,
+          activity: activity || null,
+          tagIds,
+          relatedDocIds,
+          files,
+          confirmed,
+          confirmedAt: confirmed ? confirmedAt || new Date() : null,
+        },
+      })
+    );
 
     return json({ item: mapEntry(item) }, 201);
   } catch (e) {
@@ -246,13 +350,17 @@ export async function PATCH(req) {
       data.confirmedAt = parseOptionalDate(b.confirmedAt ?? b.confirmed_at);
     }
 
-    const exists = await prisma.roznegarEntry.findFirst({ where: { id, userId }, select: { id: true } });
+    const exists = await withRoznegarSchema(() =>
+      prisma.roznegarEntry.findFirst({ where: { id, userId }, select: { id: true } })
+    );
     if (!exists) return bad("not_found", 404);
 
-    const item = await prisma.roznegarEntry.update({
-      where: { id },
-      data,
-    });
+    const item = await withRoznegarSchema(() =>
+      prisma.roznegarEntry.update({
+        where: { id },
+        data,
+      })
+    );
 
     return json({ item: mapEntry(item) });
   } catch (e) {
@@ -269,10 +377,12 @@ export async function DELETE(req) {
     const id = Number(url.searchParams.get("id") || "");
     if (!Number.isFinite(id) || id <= 0) return bad("invalid_id");
 
-    const exists = await prisma.roznegarEntry.findFirst({ where: { id, userId }, select: { id: true } });
+    const exists = await withRoznegarSchema(() =>
+      prisma.roznegarEntry.findFirst({ where: { id, userId }, select: { id: true } })
+    );
     if (!exists) return bad("not_found", 404);
 
-    await prisma.roznegarEntry.delete({ where: { id } });
+    await withRoznegarSchema(() => prisma.roznegarEntry.delete({ where: { id } }));
     return json({ ok: true });
   } catch (e) {
     return handleRequestError(e);
