@@ -71,6 +71,7 @@ function toStringArray(v) {
 function normalizeFiles(v) {
   return (Array.isArray(v) ? v : [])
     .map((f) => ({
+      serverId: Number(f?.serverId || f?.server_id || 0) || null,
       name: String(f?.name || "").trim(),
       size: Number(f?.size || 0) || 0,
       type: String(f?.type || "").trim(),
