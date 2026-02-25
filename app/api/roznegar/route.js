@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -81,6 +82,49 @@ function validDateYmd(v) {
   return /^\d{4}-\d{2}-\d{2}$/.test(String(v || "").trim());
 }
 
+function mapDatabaseError(e) {
+  if (!e) return null;
+
+  if (e instanceof Prisma.PrismaClientInitializationError) {
+    const initMsg = String(e?.message || "").toLowerCase();
+    if (initMsg.includes("authentication failed")) {
+      return { message: "database_auth_failed", status: 503 };
+    }
+    if (initMsg.includes("can't reach database server")) {
+      return { message: "database_unreachable", status: 503 };
+    }
+    return { message: "database_init_failed", status: 503 };
+  }
+
+  if (e instanceof Prisma.PrismaClientKnownRequestError) {
+    if (e.code === "P2021") return { message: "roznegar_table_not_ready", status: 503 };
+    if (e.code === "P2003") return { message: "invalid_relation_reference", status: 400 };
+    if (e.code === "P2025") return { message: "not_found", status: 404 };
+  }
+
+  const msg = String(e?.message || "").toLowerCase();
+  if (msg.includes("can't reach database server")) {
+    return { message: "database_unreachable", status: 503 };
+  }
+  if (msg.includes("authentication failed")) {
+    return { message: "database_auth_failed", status: 503 };
+  }
+
+  return null;
+}
+
+function handleRequestError(e) {
+  console.error("roznegar_api_error", {
+    name: e?.name,
+    code: e?.code,
+    message: e?.message,
+  });
+  if (e?.message === "invalid_json") return bad("invalid_json");
+  const dbErr = mapDatabaseError(e);
+  if (dbErr) return bad(dbErr.message, dbErr.status);
+  return bad(e?.message || "request_failed", 500);
+}
+
 function mapEntry(row) {
   if (!row) return null;
   return {
@@ -127,7 +171,7 @@ export async function GET(req) {
 
     return json({ items: items.map(mapEntry) });
   } catch (e) {
-    return bad(e?.message || "request_failed", 500);
+    return handleRequestError(e);
   }
 }
 
@@ -178,8 +222,7 @@ export async function POST(req) {
 
     return json({ item: mapEntry(item) }, 201);
   } catch (e) {
-    if (e?.message === "invalid_json") return bad("invalid_json");
-    return bad(e?.message || "request_failed", 500);
+    return handleRequestError(e);
   }
 }
 
@@ -213,8 +256,7 @@ export async function PATCH(req) {
 
     return json({ item: mapEntry(item) });
   } catch (e) {
-    if (e?.message === "invalid_json") return bad("invalid_json");
-    return bad(e?.message || "request_failed", 500);
+    return handleRequestError(e);
   }
 }
 
@@ -233,6 +275,6 @@ export async function DELETE(req) {
     await prisma.roznegarEntry.delete({ where: { id } });
     return json({ ok: true });
   } catch (e) {
-    return bad(e?.message || "request_failed", 500);
+    return handleRequestError(e);
   }
 }
