@@ -17,7 +17,9 @@ function bad(message, status = 400) {
 function toSnakeLetter(l) {
   if (!l) return null;
   const classificationLabel =
-    (typeof l?.classification === "object" ? l?.classification?.label : l?.classificationLabel) ?? "";
+    l?.classificationLabel ??
+    (typeof l?.classification === "object" ? l?.classification?.label : l?.classificationLabel) ??
+    "";
   const cls = String(classificationLabel || "").trim();
   return {
     id: l.id,
@@ -126,6 +128,23 @@ function normalizeClassificationLabel(raw) {
   return src;
 }
 
+function isMissingLettersClassificationInfraError(err) {
+  const code = String(err?.code || "").trim();
+  const msg = String(err?.message || "");
+  if (code === "P2021" || code === "P2022") return true;
+  if (!msg) return false;
+  return (
+    msg.includes("TagCategory") ||
+    msg.includes("classification_label") ||
+    msg.includes("classification_id")
+  ) && (
+    msg.includes("does not exist") ||
+    msg.includes("Unknown argument") ||
+    msg.includes("Unknown field") ||
+    msg.includes("column")
+  );
+}
+
 function isConfidentialLabel(raw) {
   const v = normFa(raw);
   if (!v) return false;
@@ -136,8 +155,20 @@ function isConfidentialLabel(raw) {
   return false;
 }
 
-function canViewConfidentialLetter(item, viewerUserId, viewerIsMainAdmin) {
+const CONFIDENTIAL_ALLOWED_USERS = new Set(["marandi", "rastegar"]);
+
+function normalizeViewerName(raw) {
+  return String(raw ?? "").trim().toLowerCase();
+}
+
+function isAllowedConfidentialViewerName(raw) {
+  const name = normalizeViewerName(raw);
+  return !!name && CONFIDENTIAL_ALLOWED_USERS.has(name);
+}
+
+function canViewConfidentialLetter(item, viewerCanSeeConfidential) {
   const raw =
+    item?.classificationLabel ??
     item?.classification ??
     item?.classification_label ??
     item?.confidentiality ??
@@ -145,8 +176,7 @@ function canViewConfidentialLetter(item, viewerUserId, viewerIsMainAdmin) {
     "";
   const isConf = isConfidentialLabel(raw);
   if (!isConf) return true;
-  if (viewerIsMainAdmin) return true;
-  return String(item?.created_by ?? item?.createdBy ?? "") === String(viewerUserId ?? "");
+  return !!viewerCanSeeConfidential;
 }
 
 async function ensureLettersClassificationId(rawLabel) {
@@ -183,23 +213,187 @@ async function resolveClassificationId({ classificationId, classificationText, k
   return await ensureLettersClassificationId(classificationText);
 }
 
-async function isMainAdminUserId(userId) {
-  const idNum = Number(userId);
-  if (!Number.isFinite(idNum)) return false;
-  const u = await prisma.user.findUnique({
-    where: { id: idNum },
+async function resolveClassificationState({
+  classificationId,
+  classificationText,
+  keepUndefined = false,
+}) {
+  const normalizedLabel =
+    classificationText === undefined
+      ? keepUndefined
+        ? undefined
+        : null
+      : normalizeClassificationLabel(classificationText) || null;
+
+  try {
+    const resolvedClassificationId = await resolveClassificationId({
+      classificationId,
+      classificationText,
+      keepUndefined,
+    });
+
+    return {
+      classificationId: resolvedClassificationId,
+      classificationLabel: normalizedLabel,
+    };
+  } catch (err) {
+    if (!isMissingLettersClassificationInfraError(err)) throw err;
+
+    console.warn("[letters] classification relation unavailable, saving text label only");
+
+    return {
+      classificationId: keepUndefined ? undefined : null,
+      classificationLabel: normalizedLabel,
+    };
+  }
+}
+
+async function getViewerAccessInfo(req) {
+  const userId = await getUserIdFromReq(req);
+  if (!userId) {
+    return {
+      userId: null,
+      canSeeConfidential: false,
+      isMainAdmin: false,
+    };
+  }
+
+  const user = await prisma.user.findUnique({
+    where: { id: Number(userId) },
     select: { username: true, name: true },
   });
-  const uname = String(u?.username || "").trim().toLowerCase();
-  const name = String(u?.name || "").trim().toLowerCase();
-  return uname === "marandi" || name === "marandi";
+
+  const username = normalizeViewerName(user?.username || user?.name || "");
+  const isMainAdmin = username === "marandi";
+
+  return {
+    userId,
+    canSeeConfidential: isAllowedConfidentialViewerName(username),
+    isMainAdmin,
+  };
+}
+
+function hasMeaningfulLetterPayload(payload) {
+  const hasText = (v) => String(v ?? "").trim() !== "";
+  const hasItems = (v) => Array.isArray(v) && v.length > 0;
+
+  return [
+    payload?.docClass,
+    payload?.classificationText,
+    payload?.category,
+    payload?.letterNo,
+    payload?.letterDate,
+    payload?.fromName,
+    payload?.toName,
+    payload?.orgName,
+    payload?.subject,
+    payload?.attachmentTitle,
+    payload?.secretariatDate,
+    payload?.secretariatNo,
+    payload?.secretariatNote,
+    payload?.receiverName,
+  ].some(hasText) ||
+    payload?.projectId != null ||
+    payload?.internalUnitId != null ||
+    payload?.classificationId != null ||
+    payload?.hasAttachment === true ||
+    hasItems(payload?.returnToIds) ||
+    hasItems(payload?.piroIds) ||
+    hasItems(payload?.tagIds) ||
+    hasItems(payload?.attachments);
+}
+
+function toEnDigits(s) {
+  return String(s ?? "")
+    .replace(/[۰-۹]/g, (d) => "0123456789"["۰۱۲۳۴۵۶۷۸۹".indexOf(d)])
+    .replace(/[٠-٩]/g, (d) => "0123456789"["٠١٢٣٤٥٦٧٨٩".indexOf(d)]);
+}
+
+function pad5(n) {
+  return String(Number(n) || 0).padStart(5, "0");
+}
+
+function getJalaliYY(date = new Date()) {
+  const y = new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric" }).format(date);
+  const en = toEnDigits(y);
+  return en.slice(-2);
+}
+
+function parseAutoCode(s) {
+  const m = String(s || "").trim().match(/^(\d{2})\/([^/]+)\/(\d{5})$/);
+  if (!m) return null;
+  return { yy: m[1], pcode: m[2], seq: Number(m[3]) };
+}
+
+async function getProjectBaseCode(projectId) {
+  const pid = Number(projectId);
+  if (!Number.isFinite(pid) || pid <= 0) return "";
+
+  const project = await prisma.project.findUnique({
+    where: { id: pid },
+    select: { code: true },
+  });
+
+  const raw = String(project?.code || "").trim();
+  const base = raw.split(".")[0].trim();
+  return /^\d{3}$/.test(base) ? base : "";
+}
+
+async function computeNextAutoCodeFromDb(projectId) {
+  const yy = getJalaliYY(new Date());
+  const pcode = await getProjectBaseCode(projectId);
+  if (!pcode) return "";
+
+  const startByYearMap = {
+    "04": 10536,
+  };
+  const startByYear = Number(startByYearMap[yy]) || 10000;
+
+  const items = await prisma.letter.findMany({
+    select: {
+      letterNo: true,
+      secretariatNo: true,
+    },
+  });
+
+  let maxSeq = 0;
+
+  for (const l of items) {
+    const rawCandidates = [
+      l?.letterNo,
+      l?.secretariatNo,
+    ].filter((x) => String(x ?? "").trim());
+
+    for (const rawNo of rawCandidates) {
+      const parsed = parseAutoCode(rawNo);
+      if (!parsed) continue;
+      if (parsed.yy !== yy) continue;
+      if (String(parsed.pcode || "").trim() !== pcode) continue;
+      if (Number.isFinite(parsed.seq) && parsed.seq > maxSeq) maxSeq = parsed.seq;
+    }
+  }
+
+  const nextSeq = maxSeq >= startByYear ? (maxSeq + 1) : startByYear;
+  return `${yy}/${pcode}/${pad5(nextSeq)}`;
+}
+
+async function resolveSecretariatNoForCreate(payload) {
+  const raw = String(payload?.secretariatNo || "").trim();
+  if (!raw) return raw;
+
+  const parsed = parseAutoCode(raw);
+  if (!parsed) return raw;
+
+  const nextCode = await computeNextAutoCodeFromDb(payload?.projectId);
+  return nextCode || raw;
 }
 
 // تلاش برای گرفتن userId از Session (اگر session cookie دارید)
 async function getUserIdFromSession(req) {
   try {
     const sid =
-      (req?.cookies?.get?.("session_id")?.value ||
+      (req?.cookies?.get?.("ipm_session")?.value ||
+        req?.cookies?.get?.("session_id")?.value ||
         req?.cookies?.get?.("session")?.value ||
         req?.cookies?.get?.("sid")?.value ||
         "")
@@ -645,22 +839,66 @@ export async function GET(req, ctx) {
       return json({ prefs: toSnakePrefs(prefs) });
     }
 
-    if (p0 === "mine") {
+    if (p0 === "next-code") {
       const userId = await getUserIdFromReq(req);
       if (!userId) return bad("unauthorized", 401);
-      const viewerIsMainAdmin = await isMainAdminUserId(userId);
-      const itemsRaw = await listLetters({
-        createdBy: viewerIsMainAdmin ? null : String(userId),
-        includePublic: !viewerIsMainAdmin,
-      });
-      const items = itemsRaw.filter((it) =>
-        canViewConfidentialLetter(it, userId, viewerIsMainAdmin)
+
+      let url;
+      try {
+        url = new URL(req.url);
+      } catch {
+        url = new URL(req.url, "http://localhost");
+      }
+
+      const projectId = parseOptionalId(
+        url.searchParams.get("project_id") ?? url.searchParams.get("projectId")
       );
+      if (projectId === undefined) return bad("invalid_project_id");
+
+      const code = await computeNextAutoCodeFromDb(projectId);
+      return json({ code: code || "" });
+    }
+
+    if (p0 === "mine") {
+      const viewer = await getViewerAccessInfo(req);
+      if (!viewer.userId) return bad("unauthorized", 401);
+      let itemsRaw = [];
+
+      if (viewer.isMainAdmin) {
+        itemsRaw = await listLetters({ createdBy: null });
+      } else {
+        const mineAndPublic = await listLetters({
+          createdBy: String(viewer.userId),
+          includePublic: true,
+        });
+
+        if (viewer.canSeeConfidential) {
+          const allItems = await listLetters({ createdBy: null });
+          const merged = new Map(
+            mineAndPublic.map((it) => [String(it?.id ?? ""), it])
+          );
+          allItems
+            .filter((it) => isConfidentialLabel(
+              it?.classification ??
+              it?.classification_label ??
+              it?.confidentiality ??
+              it?.doc_classification ??
+              ""
+            ))
+            .forEach((it) => merged.set(String(it?.id ?? ""), it));
+          itemsRaw = Array.from(merged.values());
+        } else {
+          itemsRaw = mineAndPublic;
+        }
+      }
+
+      const items = itemsRaw.filter((it) => canViewConfidentialLetter(it, viewer.canSeeConfidential));
       return json({ items });
     }
 
     if (p0 && /^\d+$/.test(String(p0))) {
       const id = Number(p0);
+      const viewer = await getViewerAccessInfo(req);
       const l = await prisma.letter.findUnique({
         where: { id },
         include: {
@@ -668,10 +906,17 @@ export async function GET(req, ctx) {
         },
       });
       if (!l) return bad("not_found", 404);
-      return json({ item: toSnakeLetter(l) });
+      const item = toSnakeLetter(l);
+      if (!canViewConfidentialLetter(item, viewer.canSeeConfidential)) {
+        return bad("not_found", 404);
+      }
+      return json({ item });
     }
 
-    const items = await listLetters({ createdBy: null });
+    const viewer = await getViewerAccessInfo(req);
+    const items = (await listLetters({ createdBy: null })).filter((it) =>
+      canViewConfidentialLetter(it, viewer.canSeeConfidential)
+    );
     return json({ items });
   } catch (e) {
     return bad(e?.message || "request_failed", 500);
@@ -726,23 +971,27 @@ export async function POST(req, ctx) {
         }
         payload = normalizeIncomingPayload(obj);
       } else {
-        payload = normalizeIncomingPayload({});
+        return bad("missing_data");
       }
     }
 
+    if (!hasMeaningfulLetterPayload(payload)) return bad("empty_letter_payload");
+
     const userId = await getUserIdFromReq(req);
-    const resolvedClassificationId = await resolveClassificationId({
+    const resolvedClassification = await resolveClassificationState({
       classificationId: payload.classificationId,
       classificationText: payload.classificationText,
       keepUndefined: false,
     });
+    const resolvedSecretariatNo = await resolveSecretariatNoForCreate(payload);
 
     const created = await prisma.letter.create({
       data: {
         kind: payload.kind,
 
         docClass: payload.docClass ? String(payload.docClass) : null,
-        classificationId: resolvedClassificationId ?? null,
+        classificationLabel: resolvedClassification.classificationLabel ?? null,
+        classificationId: resolvedClassification.classificationId ?? null,
 
         category: payload.category || null,
         projectId: payload.projectId ?? null,
@@ -759,7 +1008,7 @@ export async function POST(req, ctx) {
         piroIds: payload.piroIds ?? [],
         tagIds: payload.tagIds ?? [],
         secretariatDate: payload.secretariatDate || null,
-        secretariatNo: payload.secretariatNo || null,
+        secretariatNo: resolvedSecretariatNo || null,
         secretariatNote: payload.secretariatNote || null,
         receiverName: payload.receiverName || null,
         attachments: payload.attachments ?? [],
@@ -849,7 +1098,7 @@ export async function PATCH(req, ctx) {
     });
     if (!existing) return bad("not_found", 404);
 
-    const resolvedClassificationId = await resolveClassificationId({
+    const resolvedClassification = await resolveClassificationState({
       classificationId: hasOwn(body, "classificationId") ? body.classificationId : undefined,
       classificationText: hasOwn(body, "classificationText") ? body.classificationText : undefined,
       keepUndefined: true,
@@ -862,8 +1111,11 @@ export async function PATCH(req, ctx) {
     if (hasOwn(body, "docClass"))
       data.docClass = body.docClass === "" ? null : (body.docClass ?? existing.docClass);
 
-    if (resolvedClassificationId !== undefined)
-      data.classificationId = resolvedClassificationId;
+    if (resolvedClassification.classificationId !== undefined)
+      data.classificationId = resolvedClassification.classificationId;
+
+    if (resolvedClassification.classificationLabel !== undefined)
+      data.classificationLabel = resolvedClassification.classificationLabel;
 
     if (hasOwn(body, "category"))
       data.category = body.category === "" ? null : (body.category ?? existing.category);

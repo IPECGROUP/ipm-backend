@@ -219,6 +219,9 @@ model Letter {
   // کلاس سند
   docClass String? @map("doc_class")
 
+  // متن طبقه‌بندی روی خود نامه ذخیره می‌شود تا نمایش/دسترسی به relation وابسته نباشد.
+  classificationLabel String? @map("classification_label")
+
   // طبقه‌بندی (Category از جدول TagCategory)
   classificationId Int? @map("classification_id")
   classification   TagCategory? @relation("LetterClassification", fields: [classificationId], references: [id], onDelete: SetNull)

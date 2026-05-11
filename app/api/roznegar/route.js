@@ -25,7 +25,7 @@ async function readJsonSafely(req) {
   }
 }
 
-function getUserIdFromReq(req) {
+async function getUserIdFromReq(req) {
   try {
     const h =
       (req?.headers?.get?.("x-user-id") || req?.headers?.get?.("x-userid") || "")
@@ -38,9 +38,21 @@ function getUserIdFromReq(req) {
         .toString()
         .trim();
     const raw = h || c;
-    if (!raw) return null;
-    const n = Number(raw);
-    return Number.isFinite(n) && n > 0 ? n : null;
+    if (raw) {
+      const n = Number(raw);
+      if (Number.isFinite(n) && n > 0) return n;
+    }
+
+    const sid = (req?.cookies?.get?.("ipm_session")?.value || "").toString().trim();
+    if (!sid) return null;
+    const sess = await prisma.session.findUnique({
+      where: { id: sid },
+      select: { userId: true, expiresAt: true },
+    });
+    if (!sess?.userId) return null;
+    if (sess?.expiresAt && new Date(sess.expiresAt).getTime() < Date.now()) return null;
+    const uid = Number(sess.userId);
+    return Number.isFinite(uid) && uid > 0 ? uid : null;
   } catch {
     return null;
   }
@@ -247,7 +259,7 @@ function mapEntry(row) {
 
 export async function GET(req) {
   try {
-    const userId = getUserIdFromReq(req);
+    const userId = await getUserIdFromReq(req);
     if (!userId) return bad("unauthorized", 401);
 
     const url = new URL(req.url);
@@ -280,7 +292,7 @@ export async function GET(req) {
 
 export async function POST(req) {
   try {
-    const userId = getUserIdFromReq(req);
+    const userId = await getUserIdFromReq(req);
     if (!userId) return bad("unauthorized", 401);
 
     const b = await readJsonSafely(req);
@@ -333,7 +345,7 @@ export async function POST(req) {
 
 export async function PATCH(req) {
   try {
-    const userId = getUserIdFromReq(req);
+    const userId = await getUserIdFromReq(req);
     if (!userId) return bad("unauthorized", 401);
 
     const b = await readJsonSafely(req);
@@ -371,7 +383,7 @@ export async function PATCH(req) {
 
 export async function DELETE(req) {
   try {
-    const userId = getUserIdFromReq(req);
+    const userId = await getUserIdFromReq(req);
     if (!userId) return bad("unauthorized", 401);
 
     const url = new URL(req.url);
