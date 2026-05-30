@@ -101,8 +101,34 @@ model Project {
   isActive Boolean @default(true) @map("is_active")
 
   roznegarEntries RoznegarEntry[]
+  contracts        ContractInformation[]
 
   @@map("projects")
+}
+
+model ContractInformation {
+  id               String   @id @db.Text
+  projectId        Int?     @map("project_id")
+  documentType     String   @default("main") @map("document_type") @db.VarChar(20)
+  contractNo       String?  @map("contract_no") @db.Text
+  parentContractId String?  @map("parent_contract_id") @db.Text
+  relatedLetterId  String?  @map("related_letter_id") @db.Text
+  general          Json     @default("{}")
+  calendar         Json     @default("{}")
+  technical        Json     @default("{}")
+  financial        Json     @default("{}")
+  insurance        Json     @default("{}")
+  lastSavedSection String?  @map("last_saved_section") @db.VarChar(40)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  project Project? @relation(fields: [projectId], references: [id], onDelete: SetNull)
+
+  @@index([projectId])
+  @@index([documentType])
+  @@index([parentContractId])
+  @@index([relatedLetterId])
+  @@map("contract_information")
 }
 
 model User {

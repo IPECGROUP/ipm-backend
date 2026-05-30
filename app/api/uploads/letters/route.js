@@ -1,8 +1,12 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import fs from "fs/promises";
+import { createWriteStream } from "fs";
 import path from "path";
 import crypto from "crypto";
+import { Readable } from "stream";
+import { pipeline } from "stream/promises";
+import Busboy from "next/dist/compiled/busboy/index.js";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -35,61 +39,168 @@ function makeFileName(originalName) {
   return `${stamp}_${rand}_${safeName(baseNoExt)}${ext}`;
 }
 
-function sha256(buf) {
-  return crypto.createHash("sha256").update(buf).digest("hex");
+function requestHeaders(req) {
+  const headers = {};
+  for (const [key, value] of req.headers.entries()) headers[key.toLowerCase()] = value;
+  return headers;
+}
+
+function uploadRootDir() {
+  return process.env.UPLOADS_DIR
+    ? path.resolve(process.env.UPLOADS_DIR)
+    : path.join(process.cwd(), "public", "uploads");
+}
+
+async function removeFileIfExists(filePath) {
+  if (!filePath) return;
+  try {
+    await fs.unlink(filePath);
+  } catch (e) {
+    if (e?.code !== "ENOENT") throw e;
+  }
+}
+
+function parseMultipartUpload(req, uploadDir) {
+  return new Promise((resolve, reject) => {
+    const fields = {};
+    const files = [];
+    const pendingWrites = [];
+    const tempPaths = [];
+    let settled = false;
+
+    const fail = async (err) => {
+      if (settled) return;
+      settled = true;
+      await Promise.allSettled(tempPaths.map(removeFileIfExists));
+      reject(err);
+    };
+
+    let bb;
+    try {
+      bb = Busboy({
+        headers: requestHeaders(req),
+        limits: {
+          fieldSize: Number.MAX_SAFE_INTEGER,
+          fields: Number.MAX_SAFE_INTEGER,
+          files: Number.MAX_SAFE_INTEGER,
+          parts: Number.MAX_SAFE_INTEGER,
+        },
+      });
+    } catch (e) {
+      reject(e);
+      return;
+    }
+
+    bb.on("field", (name, value) => {
+      fields[name] = value;
+    });
+
+    bb.on("file", (name, fileStream, info = {}) => {
+      const originalName = info.filename || "file";
+      const mimeType = info.mimeType || "";
+      const tempName = `${Date.now()}_${Math.random().toString(16).slice(2)}.uploading`;
+      const tempPath = path.join(uploadDir, tempName);
+      const hash = crypto.createHash("sha256");
+      let size = 0;
+
+      tempPaths.push(tempPath);
+
+      fileStream.on("data", (chunk) => {
+        size += chunk.length;
+        hash.update(chunk);
+      });
+
+      const writePromise = pipeline(fileStream, createWriteStream(tempPath)).then(() => {
+        files.push({
+          fieldName: name,
+          originalName,
+          mimeType,
+          tempPath,
+          size,
+          sha256: hash.digest("hex"),
+        });
+      });
+
+      pendingWrites.push(writePromise);
+      writePromise.catch(fail);
+    });
+
+    bb.on("error", fail);
+
+    bb.on("close", async () => {
+      if (settled) return;
+      try {
+        await Promise.all(pendingWrites);
+        settled = true;
+        resolve({ fields, files });
+      } catch (e) {
+        await fail(e);
+      }
+    });
+
+    const body = req.body;
+    if (!body) {
+      fail(new Error("missing_request_body"));
+      return;
+    }
+
+    Readable.fromWeb(body).pipe(bb);
+  });
 }
 
 export async function POST(req) {
+  let tempPathToClean = "";
   try {
-    const fd = await req.formData();
+    const uploadDir = path.join(uploadRootDir(), "letters");
+    await ensureDir(uploadDir);
 
-    const file = fd.get("file");
-    const letterIdRaw = fd.get("letter_id") ?? fd.get("letterId");
+    const { fields, files } = await parseMultipartUpload(req, uploadDir);
+    const file = files.find((x) => x.fieldName === "file") || files[0];
+    tempPathToClean = file?.tempPath || "";
+    const letterIdRaw = fields.letter_id ?? fields.letterId;
+    const cleanupAndBad = async (message, status = 400) => {
+      await removeFileIfExists(tempPathToClean);
+      tempPathToClean = "";
+      return bad(message, status);
+    };
 
-    if (!letterIdRaw) return bad("missing_letter_id");
+    if (!letterIdRaw) return cleanupAndBad("missing_letter_id");
     const letterId = Number(letterIdRaw);
-    if (!Number.isFinite(letterId) || letterId <= 0) return bad("invalid_letter_id");
+    if (!Number.isFinite(letterId) || letterId <= 0) return cleanupAndBad("invalid_letter_id");
 
-    if (!file || typeof file.arrayBuffer !== "function") return bad("missing_file");
+    if (!file) return cleanupAndBad("missing_file");
 
     const letter = await prisma.letter.findUnique({ where: { id: letterId } });
-    if (!letter) return bad("letter_not_found", 404);
-
-    const bytes = Buffer.from(await file.arrayBuffer());
-    const hash = sha256(bytes);
+    if (!letter) return cleanupAndBad("letter_not_found", 404);
 
     // 1) If already uploaded, reuse it (no re-write)
-    let existing = await prisma.uploadedFile.findUnique({ where: { sha256: hash } });
+    let existing = await prisma.uploadedFile.findUnique({ where: { sha256: file.sha256 } });
 
     let storedName = "";
     let url = "";
 
     if (existing) {
+      await removeFileIfExists(file.tempPath);
+      tempPathToClean = "";
       storedName = existing.storedName;
       url = existing.url;
     } else {
       // 2) Save new file
-      const uploadRoot = process.env.UPLOADS_DIR
-        ? path.resolve(process.env.UPLOADS_DIR)
-        : path.join(process.cwd(), "public", "uploads");
-
-      const uploadDir = path.join(uploadRoot, "letters");
-      await ensureDir(uploadDir);
-
-      storedName = makeFileName(file.name || "file");
+      storedName = makeFileName(file.originalName || "file");
       const absPath = path.join(uploadDir, storedName);
 
-      await fs.writeFile(absPath, bytes);
+      await fs.rename(file.tempPath, absPath);
+      tempPathToClean = "";
 
       url = `/uploads/letters/${storedName}`;
 
       existing = await prisma.uploadedFile.create({
         data: {
-          sha256: hash,
-          originalName: file.name || storedName,
+          sha256: file.sha256,
+          originalName: file.originalName || storedName,
           storedName,
-          mimeType: file.type || null,
-          size: bytes.length,
+          mimeType: file.mimeType || null,
+          size: file.size,
           url,
           createdBy: null,
         },
@@ -119,9 +230,24 @@ export async function POST(req) {
       },
     });
 
-    return json({ ok: true, file: existing, attachment: nextItem, url: existing.url });
+    return json({
+      ok: true,
+      id: existing.id,
+      url: existing.url,
+      file: existing,
+      item: {
+        id: existing.id,
+        url: existing.url,
+        name: existing.originalName,
+        type: existing.mimeType || "",
+        size: existing.size,
+      },
+      attachment: nextItem,
+      attachments: next,
+    });
   } catch (e) {
     console.error("[UPLOAD] failed", e);
+    await removeFileIfExists(tempPathToClean);
     return bad(e?.message || "upload_failed", 500);
   }
 }

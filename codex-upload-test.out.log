@@ -1,0 +1,20 @@
+
+> ipm-v2@0.1.0 dev
+> next dev --hostname 127.0.0.1 --port 3011
+
+   ▲ Next.js 16.0.6 (Turbopack)
+   - Local:         http://127.0.0.1:3011
+   - Network:       http://127.0.0.1:3011
+   - Environments: .env
+   - Experiments (use with caution):
+     · proxyClientMaxBodySize: 9007199254740991
+     · serverActions
+
+ ✓ Starting...
+Creating turbopack project {
+  dir: 'C:\\Users\\gholizadeh\\Desktop\\budget\\server\\ipm-v2',
+  testMode: true
+}
+ ✓ Ready in 5.2s
+ ○ Compiling /api/uploads/letters ...
+ POST /api/uploads/letters 400 in 5.3s (compile: 5.0s, render: 307ms)

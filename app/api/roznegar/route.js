@@ -112,7 +112,7 @@ function mapDatabaseError(e) {
   }
 
   if (e instanceof Prisma.PrismaClientKnownRequestError) {
-    if (e.code === "P2021") return { message: "roznegar_table_not_ready", status: 503 };
+    if (e.code === "P2021" || e.code === "P2022") return { message: "roznegar_table_not_ready", status: 503 };
     if (e.code === "P2003") return { message: "invalid_relation_reference", status: 400 };
     if (e.code === "P2025") return { message: "not_found", status: 404 };
   }
@@ -152,6 +152,33 @@ async function ensureRoznegarSchema() {
         "updated_at" TIMESTAMP(3) NOT NULL,
         CONSTRAINT "roznegar_entries_pkey" PRIMARY KEY ("id")
       );
+    `);
+
+    await prisma.$executeRawUnsafe(`
+      ALTER TABLE "roznegar_entries"
+      ADD COLUMN IF NOT EXISTS "project_id" INTEGER,
+      ADD COLUMN IF NOT EXISTS "user_id" INTEGER,
+      ADD COLUMN IF NOT EXISTS "date_ymd" VARCHAR(10),
+      ADD COLUMN IF NOT EXISTS "day_name" VARCHAR(30),
+      ADD COLUMN IF NOT EXISTS "activity" TEXT,
+      ADD COLUMN IF NOT EXISTS "tag_ids" JSONB,
+      ADD COLUMN IF NOT EXISTS "related_doc_ids" JSONB,
+      ADD COLUMN IF NOT EXISTS "files" JSONB,
+      ADD COLUMN IF NOT EXISTS "confirmed" BOOLEAN NOT NULL DEFAULT false,
+      ADD COLUMN IF NOT EXISTS "confirmed_at" TIMESTAMP(3),
+      ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      ADD COLUMN IF NOT EXISTS "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
+    `);
+
+    await prisma.$executeRawUnsafe(`
+      UPDATE "roznegar_entries"
+      SET
+        "tag_ids" = COALESCE("tag_ids", '[]'::jsonb),
+        "related_doc_ids" = COALESCE("related_doc_ids", '[]'::jsonb),
+        "files" = COALESCE("files", '[]'::jsonb),
+        "confirmed" = COALESCE("confirmed", false),
+        "created_at" = COALESCE("created_at", CURRENT_TIMESTAMP),
+        "updated_at" = COALESCE("updated_at", CURRENT_TIMESTAMP);
     `);
 
     await prisma.$executeRawUnsafe(`
@@ -218,7 +245,7 @@ async function withRoznegarSchema(action) {
   try {
     return await action();
   } catch (e) {
-    if (e instanceof Prisma.PrismaClientKnownRequestError && e.code === "P2021") {
+    if (e instanceof Prisma.PrismaClientKnownRequestError && (e.code === "P2021" || e.code === "P2022")) {
       await ensureRoznegarSchema();
       return action();
     }

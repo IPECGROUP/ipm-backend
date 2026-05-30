@@ -1,4 +1,10 @@
 services:
+  frontend:
+    build:
+      context: ../front/ipm-panel
+      dockerfile: Dockerfile
+    restart: unless-stopped
+
   app:
     build:
       context: .
@@ -20,6 +26,7 @@ services:
   nginx:
     image: nginx:alpine
     depends_on:
+      - frontend
       - app
     ports:
       - "80:80"

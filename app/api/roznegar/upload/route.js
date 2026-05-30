@@ -7,6 +7,8 @@ import crypto from "crypto";
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
+let ensureUploadedFileSchemaPromise = null;
+
 function json(data, status = 200) {
   return NextResponse.json(data, { status });
 }
@@ -70,6 +72,52 @@ function sha256(buf) {
   return crypto.createHash("sha256").update(buf).digest("hex");
 }
 
+async function ensureUploadedFileSchema() {
+  if (ensureUploadedFileSchemaPromise) return ensureUploadedFileSchemaPromise;
+
+  ensureUploadedFileSchemaPromise = (async () => {
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "UploadedFile" (
+        "id" SERIAL NOT NULL,
+        "sha256" TEXT NOT NULL,
+        "originalName" TEXT NOT NULL,
+        "storedName" TEXT NOT NULL,
+        "mimeType" TEXT,
+        "size" INTEGER NOT NULL,
+        "url" TEXT NOT NULL,
+        "createdBy" INTEGER,
+        "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        CONSTRAINT "UploadedFile_pkey" PRIMARY KEY ("id")
+      );
+    `);
+
+    await prisma.$executeRawUnsafe(`
+      ALTER TABLE "UploadedFile"
+      ADD COLUMN IF NOT EXISTS "sha256" TEXT,
+      ADD COLUMN IF NOT EXISTS "originalName" TEXT,
+      ADD COLUMN IF NOT EXISTS "storedName" TEXT,
+      ADD COLUMN IF NOT EXISTS "mimeType" TEXT,
+      ADD COLUMN IF NOT EXISTS "size" INTEGER,
+      ADD COLUMN IF NOT EXISTS "url" TEXT,
+      ADD COLUMN IF NOT EXISTS "createdBy" INTEGER,
+      ADD COLUMN IF NOT EXISTS "createdAt" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP;
+    `);
+
+    await prisma.$executeRawUnsafe(`
+      CREATE UNIQUE INDEX IF NOT EXISTS "UploadedFile_sha256_key" ON "UploadedFile"("sha256");
+    `);
+
+    await prisma.$executeRawUnsafe(`
+      CREATE INDEX IF NOT EXISTS "UploadedFile_createdAt_idx" ON "UploadedFile"("createdAt");
+    `);
+  })().catch((err) => {
+    ensureUploadedFileSchemaPromise = null;
+    throw err;
+  });
+
+  return ensureUploadedFileSchemaPromise;
+}
+
 export async function POST(req) {
   try {
     const userId = await getUserIdFromReq(req);
@@ -88,6 +136,7 @@ export async function POST(req) {
       : path.join(process.cwd(), "public", "uploads");
     const uploadDir = path.join(uploadRoot, "roznegar");
     await ensureDir(uploadDir);
+    await ensureUploadedFileSchema();
 
     const uploaded = [];
 

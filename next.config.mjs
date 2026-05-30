@@ -1,10 +1,12 @@
 /** @type {import('next').NextConfig} */
+const NO_UPLOAD_BODY_LIMIT = Number.MAX_SAFE_INTEGER;
+
 const nextConfig = {
   reactCompiler: true,
   experimental: {
-    proxyClientMaxBodySize: "512mb",
+    proxyClientMaxBodySize: NO_UPLOAD_BODY_LIMIT,
     serverActions: {
-      bodySizeLimit: "512mb",
+      bodySizeLimit: NO_UPLOAD_BODY_LIMIT,
     },
   },
 };

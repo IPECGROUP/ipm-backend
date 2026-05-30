@@ -14,18 +14,40 @@ function bad(message, status = 400) {
   return json({ error: message }, status);
 }
 
+const DOC_CLASS_CLASSIFICATION_PREFIX = "__classification__:";
+
+function encodeClassificationDocClassFallback(raw) {
+  const label = normalizeClassificationLabel(raw);
+  if (!label) return "";
+  return `${DOC_CLASS_CLASSIFICATION_PREFIX}${label}`;
+}
+
+function decodeClassificationDocClassFallback(raw) {
+  const src = String(raw ?? "").trim();
+  if (!src) return "";
+  if (src.startsWith(DOC_CLASS_CLASSIFICATION_PREFIX)) {
+    return src.slice(DOC_CLASS_CLASSIFICATION_PREFIX.length).trim();
+  }
+  const normalized = normalizeClassificationLabel(src);
+  return normalized || "";
+}
+
 function toSnakeLetter(l) {
+  const docClassRaw = String(l?.docClass ?? "").trim();
+  const classificationFromDocClass = decodeClassificationDocClassFallback(docClassRaw);
   if (!l) return null;
   const classificationLabel =
     l?.classificationLabel ??
     (typeof l?.classification === "object" ? l?.classification?.label : l?.classificationLabel) ??
+    classificationFromDocClass ??
     "";
   const cls = String(classificationLabel || "").trim();
   return {
     id: l.id,
     kind: l.kind,
+    is_confidential: isConfidentialLabel(cls),
 
-    doc_class: l.docClass ?? "",
+    doc_class: classificationFromDocClass ? "" : (l.docClass ?? ""),
     classification_id: l.classificationId ?? null,
     classification: cls,
     classification_label: cls,
@@ -145,6 +167,209 @@ function isMissingLettersClassificationInfraError(err) {
   );
 }
 
+function isLettersClassificationCompatError(err) {
+  if (isMissingLettersClassificationInfraError(err)) return true;
+  const msg = String(err?.message || "");
+  if (!msg) return false;
+  const mentionsClassification =
+    msg.includes("classificationLabel") ||
+    msg.includes("classificationId") ||
+    msg.includes("classification") ||
+    msg.includes("TagCategory") ||
+    msg.includes("LetterClassification");
+  const looksLikePrismaCompatIssue =
+    msg.includes("Unknown argument") ||
+    msg.includes("Unknown field") ||
+    msg.includes("does not exist") ||
+    msg.includes("column");
+  return mentionsClassification && looksLikePrismaCompatIssue;
+}
+
+function stripClassificationWriteFields(data) {
+  const next = { ...(data || {}) };
+  delete next.classificationLabel;
+  delete next.classificationId;
+  delete next.classification;
+  return next;
+}
+
+function stripClassificationRelationFields(data) {
+  const next = { ...(data || {}) };
+  delete next.classificationId;
+  delete next.classification;
+  return next;
+}
+
+function hasClassificationWriteData(data) {
+  return (
+    hasOwn(data, "classificationLabel") ||
+    hasOwn(data, "classificationId") ||
+    hasOwn(data, "classification")
+  );
+}
+
+function moveClassificationToDocClassFallback(data) {
+  const next = stripClassificationWriteFields(data);
+  const encoded = encodeClassificationDocClassFallback(data?.classificationLabel);
+  next.docClass = encoded || null;
+  return next;
+}
+
+let ensureLettersClassificationInfraPromise = null;
+
+async function ensureLettersClassificationInfra() {
+  if (!ensureLettersClassificationInfraPromise) {
+    ensureLettersClassificationInfraPromise = (async () => {
+      await prisma.$executeRawUnsafe(`
+        ALTER TABLE "Letter"
+        ADD COLUMN IF NOT EXISTS "classification_label" TEXT;
+      `);
+
+      await prisma.$executeRawUnsafe(`
+        DO $$
+        BEGIN
+          IF EXISTS (
+            SELECT 1
+            FROM information_schema.columns
+            WHERE table_schema = 'public'
+              AND table_name = 'Letter'
+              AND column_name = 'classification_id'
+          ) AND EXISTS (
+            SELECT 1
+            FROM information_schema.tables
+            WHERE table_schema = 'public'
+              AND table_name = 'TagCategory'
+          ) THEN
+            UPDATE "Letter" AS l
+            SET "classification_label" = tc."label"
+            FROM "TagCategory" AS tc
+            WHERE l."classification_id" = tc."id"
+              AND (l."classification_label" IS NULL OR btrim(l."classification_label") = '');
+          END IF;
+        END $$;
+      `);
+    })().catch((err) => {
+      ensureLettersClassificationInfraPromise = null;
+      throw err;
+    });
+  }
+
+  return ensureLettersClassificationInfraPromise;
+}
+
+const LETTER_CLASSIFICATION_INCLUDE = {
+  classification: { select: { id: true, label: true } },
+};
+
+async function safeLetterFindMany(args = {}) {
+  try {
+    return await prisma.letter.findMany({
+      ...args,
+      include: {
+        ...(args?.include || {}),
+        ...LETTER_CLASSIFICATION_INCLUDE,
+      },
+    });
+  } catch (err) {
+    if (!isLettersClassificationCompatError(err)) throw err;
+    const { include: _include, ...rest } = args || {};
+    return await prisma.letter.findMany(rest);
+  }
+}
+
+async function safeLetterFindUnique(args = {}) {
+  try {
+    return await prisma.letter.findUnique({
+      ...args,
+      include: {
+        ...(args?.include || {}),
+        ...LETTER_CLASSIFICATION_INCLUDE,
+      },
+    });
+  } catch (err) {
+    if (!isLettersClassificationCompatError(err)) throw err;
+    const { include: _include, ...rest } = args || {};
+    return await prisma.letter.findUnique(rest);
+  }
+}
+
+async function safeLetterCreate(data) {
+  try {
+    return await prisma.letter.create({
+      data,
+      include: LETTER_CLASSIFICATION_INCLUDE,
+    });
+  } catch (err) {
+    if (!isLettersClassificationCompatError(err)) throw err;
+    console.warn("[letters] create fallback without classification relation");
+    try {
+      return await prisma.letter.create({
+        data: stripClassificationRelationFields(data),
+      });
+    } catch (err2) {
+      if (!isLettersClassificationCompatError(err2)) throw err2;
+      if (hasClassificationWriteData(data)) {
+        try {
+          await ensureLettersClassificationInfra();
+          return await prisma.letter.create({
+            data: stripClassificationRelationFields(data),
+          });
+        } catch (infraErr) {
+          console.warn("[letters] create fallback using docClass classification store");
+          return await prisma.letter.create({
+            data: moveClassificationToDocClassFallback(data),
+          });
+        }
+      }
+      console.warn("[letters] create fallback without classification fields");
+      return await prisma.letter.create({
+        data: stripClassificationWriteFields(data),
+      });
+    }
+  }
+}
+
+async function safeLetterUpdate(id, data) {
+  try {
+    return await prisma.letter.update({
+      where: { id },
+      data,
+      include: LETTER_CLASSIFICATION_INCLUDE,
+    });
+  } catch (err) {
+    if (!isLettersClassificationCompatError(err)) throw err;
+    console.warn("[letters] update fallback without classification relation");
+    try {
+      return await prisma.letter.update({
+        where: { id },
+        data: stripClassificationRelationFields(data),
+      });
+    } catch (err2) {
+      if (!isLettersClassificationCompatError(err2)) throw err2;
+      if (hasClassificationWriteData(data)) {
+        try {
+          await ensureLettersClassificationInfra();
+          return await prisma.letter.update({
+            where: { id },
+            data: stripClassificationRelationFields(data),
+          });
+        } catch (infraErr) {
+          console.warn("[letters] update fallback using docClass classification store");
+          return await prisma.letter.update({
+            where: { id },
+            data: moveClassificationToDocClassFallback(data),
+          });
+        }
+      }
+      console.warn("[letters] update fallback without classification fields");
+      return await prisma.letter.update({
+        where: { id },
+        data: stripClassificationWriteFields(data),
+      });
+    }
+  }
+}
+
 function isConfidentialLabel(raw) {
   const v = normFa(raw);
   if (!v) return false;
@@ -237,7 +462,7 @@ async function resolveClassificationState({
       classificationLabel: normalizedLabel,
     };
   } catch (err) {
-    if (!isMissingLettersClassificationInfraError(err)) throw err;
+    if (!isLettersClassificationCompatError(err)) throw err;
 
     console.warn("[letters] classification relation unavailable, saving text label only");
 
@@ -313,16 +538,42 @@ function pad5(n) {
   return String(Number(n) || 0).padStart(5, "0");
 }
 
+function normalizeDigits(s) {
+  return String(s ?? "")
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06F0))
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660));
+}
+
 function getJalaliYY(date = new Date()) {
-  const y = new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric" }).format(date);
-  const en = toEnDigits(y);
+  const y = new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+    year: "numeric",
+    timeZone: "Asia/Tehran",
+  }).format(date);
+  const en = normalizeDigits(y);
   return en.slice(-2);
 }
 
 function parseAutoCode(s) {
-  const m = String(s || "").trim().match(/^(\d{2})\/([^/]+)\/(\d{5})$/);
+  const normalized = normalizeDigits(String(s || "").trim());
+  const m = normalized.match(/^(\d{2})\/(\d{3})\/(\d{5})$/);
   if (!m) return null;
   return { yy: m[1], pcode: m[2], seq: Number(m[3]) };
+}
+
+function parsePlainSequence(s) {
+  const v = normalizeDigits(String(s || "")).trim();
+  if (!/^\d{5}$/.test(v)) return null;
+  const n = Number(v);
+  return Number.isFinite(n) ? n : null;
+}
+
+function parseAutoLetterSequence(s, yy) {
+  const normalized = normalizeDigits(String(s || "").trim());
+  if (!normalized) return null;
+
+  const parsed = parseAutoCode(normalized);
+  if (!parsed || parsed.yy !== yy) return null;
+  return Number.isFinite(parsed.seq) ? parsed.seq : null;
 }
 
 async function getProjectBaseCode(projectId) {
@@ -334,20 +585,20 @@ async function getProjectBaseCode(projectId) {
     select: { code: true },
   });
 
-  const raw = String(project?.code || "").trim();
+  const raw = normalizeDigits(String(project?.code || "").trim());
   const base = raw.split(".")[0].trim();
-  return /^\d{3}$/.test(base) ? base : "";
+  if (/^\d{3}$/.test(base)) return base;
+  const m = raw.match(/^(\d{3})/);
+  return m ? m[1] : "";
 }
 
 async function computeNextAutoCodeFromDb(projectId) {
   const yy = getJalaliYY(new Date());
-  const pcode = await getProjectBaseCode(projectId);
+  const pid = Number(projectId);
+  const pcode = await getProjectBaseCode(pid);
   if (!pcode) return "";
 
-  const startByYearMap = {
-    "04": 10536,
-  };
-  const startByYear = Number(startByYearMap[yy]) || 10000;
+  const startByYear = 10000;
 
   const items = await prisma.letter.findMany({
     select: {
@@ -356,7 +607,8 @@ async function computeNextAutoCodeFromDb(projectId) {
     },
   });
 
-  let maxSeq = 0;
+  let maxAutoSeq = 0;
+  let maxLegacyPlainSeq = 0;
 
   for (const l of items) {
     const rawCandidates = [
@@ -365,27 +617,30 @@ async function computeNextAutoCodeFromDb(projectId) {
     ].filter((x) => String(x ?? "").trim());
 
     for (const rawNo of rawCandidates) {
-      const parsed = parseAutoCode(rawNo);
-      if (!parsed) continue;
-      if (parsed.yy !== yy) continue;
-      if (String(parsed.pcode || "").trim() !== pcode) continue;
-      if (Number.isFinite(parsed.seq) && parsed.seq > maxSeq) maxSeq = parsed.seq;
+      const autoSeq = parseAutoLetterSequence(rawNo, yy);
+      if (Number.isFinite(autoSeq) && autoSeq > maxAutoSeq) maxAutoSeq = autoSeq;
+
+      const plainSeq = parsePlainSequence(rawNo);
+      if (Number.isFinite(plainSeq) && plainSeq > maxLegacyPlainSeq) {
+        maxLegacyPlainSeq = plainSeq;
+      }
     }
   }
 
+  const maxSeq = maxAutoSeq || maxLegacyPlainSeq;
   const nextSeq = maxSeq >= startByYear ? (maxSeq + 1) : startByYear;
   return `${yy}/${pcode}/${pad5(nextSeq)}`;
 }
 
+async function computeNextLetterCodeFromDb(projectId) {
+  return await computeNextAutoCodeFromDb(projectId);
+}
+
 async function resolveSecretariatNoForCreate(payload) {
   const raw = String(payload?.secretariatNo || "").trim();
-  if (!raw) return raw;
-
-  const parsed = parseAutoCode(raw);
-  if (!parsed) return raw;
-
-  const nextCode = await computeNextAutoCodeFromDb(payload?.projectId);
-  return nextCode || raw;
+  const nextCode = await computeNextLetterCodeFromDb(payload?.projectId);
+  if (nextCode) return nextCode;
+  return raw;
 }
 
 // تلاش برای گرفتن userId از Session (اگر session cookie دارید)
@@ -720,12 +975,9 @@ async function listLetters({ createdBy = null, includePublic = false } = {}) {
     where = { createdBy };
   }
 
-  const items = await prisma.letter.findMany({
+  const items = await safeLetterFindMany({
     where,
     orderBy: { id: "desc" },
-    include: {
-      classification: { select: { id: true, label: true } },
-    },
   });
   return items.map(toSnakeLetter);
 }
@@ -855,7 +1107,7 @@ export async function GET(req, ctx) {
       );
       if (projectId === undefined) return bad("invalid_project_id");
 
-      const code = await computeNextAutoCodeFromDb(projectId);
+      const code = await computeNextLetterCodeFromDb(projectId);
       return json({ code: code || "" });
     }
 
@@ -899,11 +1151,8 @@ export async function GET(req, ctx) {
     if (p0 && /^\d+$/.test(String(p0))) {
       const id = Number(p0);
       const viewer = await getViewerAccessInfo(req);
-      const l = await prisma.letter.findUnique({
+      const l = await safeLetterFindUnique({
         where: { id },
-        include: {
-          classification: { select: { id: true, label: true } },
-        },
       });
       if (!l) return bad("not_found", 404);
       const item = toSnakeLetter(l);
@@ -984,40 +1233,36 @@ export async function POST(req, ctx) {
       keepUndefined: false,
     });
     const resolvedSecretariatNo = await resolveSecretariatNoForCreate(payload);
+    const resolvedLetterNo = String(resolvedSecretariatNo || payload.letterNo || "").trim();
 
-    const created = await prisma.letter.create({
-      data: {
-        kind: payload.kind,
+    const created = await safeLetterCreate({
+      kind: payload.kind,
 
-        docClass: payload.docClass ? String(payload.docClass) : null,
-        classificationLabel: resolvedClassification.classificationLabel ?? null,
-        classificationId: resolvedClassification.classificationId ?? null,
+      docClass: payload.docClass ? String(payload.docClass) : null,
+      classificationLabel: resolvedClassification.classificationLabel ?? null,
+      classificationId: resolvedClassification.classificationId ?? null,
 
-        category: payload.category || null,
-        projectId: payload.projectId ?? null,
-        internalUnitId: payload.internalUnitId ?? null,
-        letterNo: payload.letterNo || null,
-        letterDate: payload.letterDate || null,
-        fromName: payload.fromName || null,
-        toName: payload.toName || null,
-        orgName: payload.orgName || null,
-        subject: payload.subject || null,
-        hasAttachment: !!payload.hasAttachment,
-        attachmentTitle: payload.attachmentTitle || null,
-        returnToIds: payload.returnToIds ?? [],
-        piroIds: payload.piroIds ?? [],
-        tagIds: payload.tagIds ?? [],
-        secretariatDate: payload.secretariatDate || null,
-        secretariatNo: resolvedSecretariatNo || null,
-        secretariatNote: payload.secretariatNote || null,
-        receiverName: payload.receiverName || null,
-        attachments: payload.attachments ?? [],
+      category: payload.category || null,
+      projectId: payload.projectId ?? null,
+      internalUnitId: payload.internalUnitId ?? null,
+      letterNo: resolvedLetterNo || null,
+      letterDate: payload.letterDate || null,
+      fromName: payload.fromName || null,
+      toName: payload.toName || null,
+      orgName: payload.orgName || null,
+      subject: payload.subject || null,
+      hasAttachment: !!payload.hasAttachment,
+      attachmentTitle: payload.attachmentTitle || null,
+      returnToIds: payload.returnToIds ?? [],
+      piroIds: payload.piroIds ?? [],
+      tagIds: payload.tagIds ?? [],
+      secretariatDate: payload.secretariatDate || null,
+      secretariatNo: resolvedSecretariatNo || null,
+      secretariatNote: payload.secretariatNote || null,
+      receiverName: payload.receiverName || null,
+      attachments: payload.attachments ?? [],
 
-        createdBy: userId ? String(userId) : null,
-      },
-      include: {
-        classification: { select: { id: true, label: true } },
-      },
+      createdBy: userId ? String(userId) : null,
     });
 
     return json({ item: toSnakeLetter(created) }, 201);
@@ -1090,11 +1335,8 @@ export async function PATCH(req, ctx) {
     if (body.__invalid_tag_ids) return bad("invalid_tag_ids");
     if (body.__invalid_attachments) return bad("invalid_attachments");
 
-    const existing = await prisma.letter.findUnique({
+    const existing = await safeLetterFindUnique({
       where: { id },
-      include: {
-        classification: { select: { id: true, label: true } },
-      },
     });
     if (!existing) return bad("not_found", 404);
 
@@ -1168,6 +1410,10 @@ export async function PATCH(req, ctx) {
       data.secretariatNo =
         body.secretariatNo === "" ? null : (body.secretariatNo ?? existing.secretariatNo);
 
+    if (hasOwn(body, "secretariatNo") && !hasOwn(body, "letterNo")) {
+      data.letterNo = data.secretariatNo;
+    }
+
     if (hasOwn(body, "secretariatNote"))
       data.secretariatNote =
         body.secretariatNote === "" ? null : (body.secretariatNote ?? existing.secretariatNote);
@@ -1183,13 +1429,7 @@ export async function PATCH(req, ctx) {
       return json({ item: toSnakeLetter(existing) });
     }
 
-    const updated = await prisma.letter.update({
-      where: { id },
-      data,
-      include: {
-        classification: { select: { id: true, label: true } },
-      },
-    });
+    const updated = await safeLetterUpdate(id, data);
 
     return json({ item: toSnakeLetter(updated) });
   } catch (e) {
