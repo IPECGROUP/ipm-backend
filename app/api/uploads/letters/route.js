@@ -81,6 +81,7 @@ function parseMultipartUpload(req, uploadDir) {
         headers: requestHeaders(req),
         limits: {
           fieldSize: Number.MAX_SAFE_INTEGER,
+          fileSize: Number.MAX_SAFE_INTEGER,
           fields: Number.MAX_SAFE_INTEGER,
           files: Number.MAX_SAFE_INTEGER,
           parts: Number.MAX_SAFE_INTEGER,
