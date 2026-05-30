@@ -54,22 +54,178 @@ function normalizeId(value) {
 
 function mapRow(row) {
   if (!row) return null;
+  const projectId = row.projectId ?? row.project_id;
+  const documentType = row.documentType ?? row.document_type;
+  const contractNo = row.contractNo ?? row.contract_no;
+  const parentContractId = row.parentContractId ?? row.parent_contract_id;
+  const relatedLetterId = row.relatedLetterId ?? row.related_letter_id;
+  const lastSavedSection = row.lastSavedSection ?? row.last_saved_section;
+  const createdAt = row.createdAt ?? row.created_at;
+  const updatedAt = row.updatedAt ?? row.updated_at;
   return {
     id: row.id,
-    projectId: row.projectId == null ? "" : String(row.projectId),
-    documentType: row.documentType || "main",
-    contractNo: row.contractNo || "",
-    parentContractId: row.parentContractId || "",
-    relatedLetterId: row.relatedLetterId || "",
+    projectId: projectId == null ? "" : String(projectId),
+    documentType: documentType || "main",
+    contractNo: contractNo || "",
+    parentContractId: parentContractId || "",
+    relatedLetterId: relatedLetterId || "",
     general: plainObject(row.general),
     calendar: plainObject(row.calendar),
     technical: plainObject(row.technical),
     financial: plainObject(row.financial),
     insurance: plainObject(row.insurance),
-    lastSavedSection: row.lastSavedSection || "",
-    createdAt: row.createdAt,
-    updatedAt: row.updatedAt,
+    lastSavedSection: lastSavedSection || "",
+    createdAt,
+    updatedAt,
   };
+}
+
+const CONTRACT_SELECT = Prisma.sql`
+  SELECT
+    "id",
+    "project_id" AS "projectId",
+    "document_type" AS "documentType",
+    "contract_no" AS "contractNo",
+    "parent_contract_id" AS "parentContractId",
+    "related_letter_id" AS "relatedLetterId",
+    "general",
+    "calendar",
+    "technical",
+    "financial",
+    "insurance",
+    "last_saved_section" AS "lastSavedSection",
+    "created_at" AS "createdAt",
+    "updated_at" AS "updatedAt"
+  FROM "contract_information"
+`;
+
+async function getContractById(id) {
+  const rows = await prisma.$queryRaw`
+    ${CONTRACT_SELECT}
+    WHERE "id" = ${id}
+    LIMIT 1
+  `;
+  return Array.isArray(rows) ? rows[0] || null : null;
+}
+
+async function projectExists(projectId) {
+  const rows = await prisma.$queryRaw`
+    SELECT "id"
+    FROM "projects"
+    WHERE "id" = ${projectId}
+    LIMIT 1
+  `;
+  return Array.isArray(rows) && rows.length > 0;
+}
+
+async function findDuplicateMainContract(id, contractNo) {
+  const rows = await prisma.$queryRaw`
+    SELECT "id"
+    FROM "contract_information"
+    WHERE "document_type" = 'main'
+      AND "contract_no" = ${contractNo}
+      AND "id" <> ${id}
+    LIMIT 1
+  `;
+  return Array.isArray(rows) ? rows[0] || null : null;
+}
+
+async function listContracts({ projectId, documentType }) {
+  if (projectId && documentType) {
+    return prisma.$queryRaw`
+      ${CONTRACT_SELECT}
+      WHERE "project_id" = ${projectId}
+        AND "document_type" = ${documentType}
+      ORDER BY "updated_at" DESC, "created_at" DESC
+    `;
+  }
+
+  if (projectId) {
+    return prisma.$queryRaw`
+      ${CONTRACT_SELECT}
+      WHERE "project_id" = ${projectId}
+      ORDER BY "updated_at" DESC, "created_at" DESC
+    `;
+  }
+
+  if (documentType) {
+    return prisma.$queryRaw`
+      ${CONTRACT_SELECT}
+      WHERE "document_type" = ${documentType}
+      ORDER BY "updated_at" DESC, "created_at" DESC
+    `;
+  }
+
+  return prisma.$queryRaw`
+    ${CONTRACT_SELECT}
+    ORDER BY "updated_at" DESC, "created_at" DESC
+  `;
+}
+
+async function upsertContract(data) {
+  const rows = await prisma.$queryRaw`
+    INSERT INTO "contract_information" (
+      "id",
+      "project_id",
+      "document_type",
+      "contract_no",
+      "parent_contract_id",
+      "related_letter_id",
+      "general",
+      "calendar",
+      "technical",
+      "financial",
+      "insurance",
+      "last_saved_section",
+      "created_at",
+      "updated_at"
+    )
+    VALUES (
+      ${data.id},
+      ${data.projectId},
+      ${data.documentType},
+      ${data.contractNo},
+      ${data.parentContractId},
+      ${data.relatedLetterId},
+      ${JSON.stringify(data.general)}::jsonb,
+      ${JSON.stringify(data.calendar)}::jsonb,
+      ${JSON.stringify(data.technical)}::jsonb,
+      ${JSON.stringify(data.financial)}::jsonb,
+      ${JSON.stringify(data.insurance)}::jsonb,
+      ${data.lastSavedSection},
+      CURRENT_TIMESTAMP,
+      CURRENT_TIMESTAMP
+    )
+    ON CONFLICT ("id") DO UPDATE SET
+      "project_id" = EXCLUDED."project_id",
+      "document_type" = EXCLUDED."document_type",
+      "contract_no" = EXCLUDED."contract_no",
+      "parent_contract_id" = EXCLUDED."parent_contract_id",
+      "related_letter_id" = EXCLUDED."related_letter_id",
+      "general" = EXCLUDED."general",
+      "calendar" = EXCLUDED."calendar",
+      "technical" = EXCLUDED."technical",
+      "financial" = EXCLUDED."financial",
+      "insurance" = EXCLUDED."insurance",
+      "last_saved_section" = EXCLUDED."last_saved_section",
+      "updated_at" = CURRENT_TIMESTAMP
+    RETURNING
+      "id",
+      "project_id" AS "projectId",
+      "document_type" AS "documentType",
+      "contract_no" AS "contractNo",
+      "parent_contract_id" AS "parentContractId",
+      "related_letter_id" AS "relatedLetterId",
+      "general",
+      "calendar",
+      "technical",
+      "financial",
+      "insurance",
+      "last_saved_section" AS "lastSavedSection",
+      "created_at" AS "createdAt",
+      "updated_at" AS "updatedAt"
+  `;
+  return Array.isArray(rows) ? rows[0] || null : null;
 }
 
 function mapDatabaseError(error) {
@@ -203,29 +359,15 @@ async function buildContractData(body, existingId = "") {
   if (documentType === "main" && !contractNo) return { error: "contract_no_required" };
   if (documentType !== "main" && !parentContractId) return { error: "parent_contract_required" };
 
-  const project = await prisma.project.findUnique({
-    where: { id: projectId },
-    select: { id: true },
-  });
-  if (!project) return { error: "project_not_found" };
+  if (!(await projectExists(projectId))) return { error: "project_not_found" };
 
   if (documentType !== "main") {
-    const parent = await prisma.contractInformation.findUnique({
-      where: { id: parentContractId },
-      select: { id: true },
-    });
+    const parent = await getContractById(parentContractId);
     if (!parent) return { error: "parent_contract_not_found" };
   }
 
   if (documentType === "main" && contractNo) {
-    const duplicate = await prisma.contractInformation.findFirst({
-      where: {
-        documentType: "main",
-        contractNo,
-        NOT: { id },
-      },
-      select: { id: true },
-    });
+    const duplicate = await findDuplicateMainContract(id, contractNo);
     if (duplicate) return { error: "duplicate_contract_no" };
   }
 
@@ -262,19 +404,12 @@ export async function GET(request) {
     }
 
     if (id) {
-      const item = await prisma.contractInformation.findUnique({ where: { id } });
+      const item = await getContractById(id);
       if (!item) return bad("not_found", 404);
       return json({ item: mapRow(item) });
     }
 
-    const where = {};
-    if (projectId) where.projectId = projectId;
-    if (documentType) where.documentType = documentType;
-
-    const items = await prisma.contractInformation.findMany({
-      where,
-      orderBy: [{ updatedAt: "desc" }, { createdAt: "desc" }],
-    });
+    const items = await listContracts({ projectId, documentType });
 
     return json({ items: items.map(mapRow) });
   } catch (error) {
@@ -293,11 +428,7 @@ export async function POST(request) {
     const built = await buildContractData(body);
     if (built.error) return bad(built.error);
 
-    const item = await prisma.contractInformation.upsert({
-      where: { id: built.data.id },
-      create: built.data,
-      update: built.data,
-    });
+    const item = await upsertContract(built.data);
 
     return json({ ok: true, item: mapRow(item), id: item.id });
   } catch (error) {
@@ -317,19 +448,13 @@ export async function PATCH(request) {
     const id = trimString(body.id);
     if (!id) return bad("invalid_id");
 
-    const existing = await prisma.contractInformation.findUnique({
-      where: { id },
-      select: { id: true },
-    });
+    const existing = await getContractById(id);
     if (!existing) return bad("not_found", 404);
 
     const built = await buildContractData(body, id);
     if (built.error) return bad(built.error);
 
-    const item = await prisma.contractInformation.update({
-      where: { id },
-      data: built.data,
-    });
+    const item = await upsertContract(built.data);
 
     return json({ ok: true, item: mapRow(item), id: item.id });
   } catch (error) {
@@ -353,16 +478,19 @@ export async function DELETE(request) {
     }
     if (!id) return bad("invalid_id");
 
-    const existing = await prisma.contractInformation.findUnique({
-      where: { id },
-      select: { id: true },
-    });
+    const existing = await getContractById(id);
     if (!existing) return bad("not_found", 404);
 
-    await prisma.$transaction([
-      prisma.contractInformation.deleteMany({ where: { parentContractId: id } }),
-      prisma.contractInformation.delete({ where: { id } }),
-    ]);
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRaw`
+        DELETE FROM "contract_information"
+        WHERE "parent_contract_id" = ${id}
+      `;
+      await tx.$executeRaw`
+        DELETE FROM "contract_information"
+        WHERE "id" = ${id}
+      `;
+    });
 
     return json({ ok: true, id });
   } catch (error) {
