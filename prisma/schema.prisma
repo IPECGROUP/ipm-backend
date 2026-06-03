@@ -113,6 +113,7 @@ model ContractInformation {
   contractNo       String?  @map("contract_no") @db.Text
   parentContractId String?  @map("parent_contract_id") @db.Text
   relatedLetterId  String?  @map("related_letter_id") @db.Text
+  relatedLetterIds Json     @default("[]") @map("related_letter_ids")
   general          Json     @default("{}")
   calendar         Json     @default("{}")
   technical        Json     @default("{}")

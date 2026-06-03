@@ -35,6 +35,30 @@ function plainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
+function parseStringList(value) {
+  const raw = (() => {
+    if (Array.isArray(value)) return value;
+    if (typeof value === "string" && value.trim().startsWith("[")) {
+      try {
+        const parsed = JSON.parse(value);
+        return Array.isArray(parsed) ? parsed : [];
+      } catch {
+        return [];
+      }
+    }
+    return value ? [value] : [];
+  })();
+
+  const seen = new Set();
+  return raw
+    .map((item) => trimString(item))
+    .filter((item) => {
+      if (!item || seen.has(item)) return false;
+      seen.add(item);
+      return true;
+    });
+}
+
 function parseOptionalProjectId(value) {
   const text = trimString(value);
   if (!text) return null;
@@ -59,6 +83,7 @@ function mapRow(row) {
   const contractNo = row.contractNo ?? row.contract_no;
   const parentContractId = row.parentContractId ?? row.parent_contract_id;
   const relatedLetterId = row.relatedLetterId ?? row.related_letter_id;
+  const relatedLetterIds = parseStringList(row.relatedLetterIds ?? row.related_letter_ids ?? relatedLetterId);
   const lastSavedSection = row.lastSavedSection ?? row.last_saved_section;
   const createdAt = row.createdAt ?? row.created_at;
   const updatedAt = row.updatedAt ?? row.updated_at;
@@ -69,6 +94,7 @@ function mapRow(row) {
     contractNo: contractNo || "",
     parentContractId: parentContractId || "",
     relatedLetterId: relatedLetterId || "",
+    relatedLetterIds,
     general: plainObject(row.general),
     calendar: plainObject(row.calendar),
     technical: plainObject(row.technical),
@@ -88,6 +114,7 @@ const CONTRACT_SELECT = Prisma.sql`
     "contract_no" AS "contractNo",
     "parent_contract_id" AS "parentContractId",
     "related_letter_id" AS "relatedLetterId",
+    "related_letter_ids" AS "relatedLetterIds",
     "general",
     "calendar",
     "technical",
@@ -171,6 +198,7 @@ async function upsertContract(data) {
       "contract_no",
       "parent_contract_id",
       "related_letter_id",
+      "related_letter_ids",
       "general",
       "calendar",
       "technical",
@@ -187,6 +215,7 @@ async function upsertContract(data) {
       ${data.contractNo},
       ${data.parentContractId},
       ${data.relatedLetterId},
+      ${JSON.stringify(data.relatedLetterIds)}::jsonb,
       ${JSON.stringify(data.general)}::jsonb,
       ${JSON.stringify(data.calendar)}::jsonb,
       ${JSON.stringify(data.technical)}::jsonb,
@@ -202,6 +231,7 @@ async function upsertContract(data) {
       "contract_no" = EXCLUDED."contract_no",
       "parent_contract_id" = EXCLUDED."parent_contract_id",
       "related_letter_id" = EXCLUDED."related_letter_id",
+      "related_letter_ids" = EXCLUDED."related_letter_ids",
       "general" = EXCLUDED."general",
       "calendar" = EXCLUDED."calendar",
       "technical" = EXCLUDED."technical",
@@ -216,6 +246,7 @@ async function upsertContract(data) {
       "contract_no" AS "contractNo",
       "parent_contract_id" AS "parentContractId",
       "related_letter_id" AS "relatedLetterId",
+      "related_letter_ids" AS "relatedLetterIds",
       "general",
       "calendar",
       "technical",
@@ -264,6 +295,7 @@ async function ensureContractSchema() {
         "contract_no" TEXT,
         "parent_contract_id" TEXT,
         "related_letter_id" TEXT,
+        "related_letter_ids" JSONB NOT NULL DEFAULT '[]'::jsonb,
         "general" JSONB NOT NULL DEFAULT '{}'::jsonb,
         "calendar" JSONB NOT NULL DEFAULT '{}'::jsonb,
         "technical" JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -283,6 +315,7 @@ async function ensureContractSchema() {
       ADD COLUMN IF NOT EXISTS "contract_no" TEXT,
       ADD COLUMN IF NOT EXISTS "parent_contract_id" TEXT,
       ADD COLUMN IF NOT EXISTS "related_letter_id" TEXT,
+      ADD COLUMN IF NOT EXISTS "related_letter_ids" JSONB NOT NULL DEFAULT '[]'::jsonb,
       ADD COLUMN IF NOT EXISTS "general" JSONB NOT NULL DEFAULT '{}'::jsonb,
       ADD COLUMN IF NOT EXISTS "calendar" JSONB NOT NULL DEFAULT '{}'::jsonb,
       ADD COLUMN IF NOT EXISTS "technical" JSONB NOT NULL DEFAULT '{}'::jsonb,
@@ -297,6 +330,14 @@ async function ensureContractSchema() {
       UPDATE "contract_information"
       SET
         "document_type" = COALESCE(NULLIF("document_type", ''), 'main'),
+        "related_letter_ids" = CASE
+          WHEN jsonb_typeof(COALESCE("related_letter_ids", '[]'::jsonb)) = 'array'
+            AND jsonb_array_length(COALESCE("related_letter_ids", '[]'::jsonb)) > 0
+            THEN COALESCE("related_letter_ids", '[]'::jsonb)
+          WHEN NULLIF("related_letter_id", '') IS NOT NULL
+            THEN jsonb_build_array("related_letter_id")
+          ELSE '[]'::jsonb
+        END,
         "general" = COALESCE("general", '{}'::jsonb),
         "calendar" = COALESCE("calendar", '{}'::jsonb),
         "technical" = COALESCE("technical", '{}'::jsonb),
@@ -364,12 +405,18 @@ async function buildContractData(body, existingId = "") {
   if (documentType !== "main") {
     const parent = await getContractById(parentContractId);
     if (!parent) return { error: "parent_contract_not_found" };
+    const parentProjectId = parent.projectId ?? parent.project_id;
+    if (String(parentProjectId || "") !== String(projectId || "")) return { error: "parent_project_mismatch" };
   }
 
   if (documentType === "main" && contractNo) {
     const duplicate = await findDuplicateMainContract(id, contractNo);
     if (duplicate) return { error: "duplicate_contract_no" };
   }
+
+  const relatedLetterIds = parseStringList(
+    body.relatedLetterIds ?? body.related_letter_ids ?? body.relatedLetterId ?? body.related_letter_id
+  );
 
   return {
     data: {
@@ -378,7 +425,8 @@ async function buildContractData(body, existingId = "") {
       documentType,
       contractNo: documentType === "main" ? contractNo : null,
       parentContractId: documentType === "main" ? null : parentContractId,
-      relatedLetterId: trimString(body.relatedLetterId ?? body.related_letter_id) || null,
+      relatedLetterId: relatedLetterIds[0] || null,
+      relatedLetterIds,
       general: plainObject(body.general),
       calendar: plainObject(body.calendar),
       technical: plainObject(body.technical),
