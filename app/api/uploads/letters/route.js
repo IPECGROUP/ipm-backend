@@ -20,7 +20,7 @@ function bad(message, status = 400) {
 }
 
 function safeName(name) {
-  const base = String(name || "file").replace(/[/\\?%*:|"<>]/g, "_");
+  const base = String(name || "file").replace(/[/\\?%#*:|"<>]/g, "_");
   return base.length > 180 ? base.slice(-180) : base;
 }
 
@@ -58,6 +58,29 @@ async function removeFileIfExists(filePath) {
   } catch (e) {
     if (e?.code !== "ENOENT") throw e;
   }
+}
+
+async function fileExists(filePath) {
+  if (!filePath) return false;
+  try {
+    const stat = await fs.stat(filePath);
+    return stat.isFile();
+  } catch {
+    return false;
+  }
+}
+
+function storedPathFromUploadedFile(file) {
+  const root = uploadRootDir();
+  const rawUrl = String(file?.url || "").trim();
+  if (rawUrl.startsWith("/uploads/")) {
+    const rel = decodeURIComponent(rawUrl.replace(/^\/uploads\/+/, ""));
+    return path.join(root, rel);
+  }
+
+  const storedName = String(file?.storedName || "").trim();
+  if (!storedName) return "";
+  return path.join(root, "letters", storedName);
 }
 
 function parseMultipartUpload(req, uploadDir) {
@@ -180,7 +203,7 @@ export async function POST(req) {
     let storedName = "";
     let url = "";
 
-    if (existing) {
+    if (existing && (await fileExists(storedPathFromUploadedFile(existing)))) {
       await removeFileIfExists(file.tempPath);
       tempPathToClean = "";
       storedName = existing.storedName;
@@ -195,17 +218,30 @@ export async function POST(req) {
 
       url = `/uploads/letters/${storedName}`;
 
-      existing = await prisma.uploadedFile.create({
-        data: {
-          sha256: file.sha256,
-          originalName: file.originalName || storedName,
-          storedName,
-          mimeType: file.mimeType || null,
-          size: file.size,
-          url,
-          createdBy: null,
-        },
-      });
+      if (existing) {
+        existing = await prisma.uploadedFile.update({
+          where: { id: existing.id },
+          data: {
+            originalName: file.originalName || existing.originalName || storedName,
+            storedName,
+            mimeType: file.mimeType || existing.mimeType || null,
+            size: file.size,
+            url,
+          },
+        });
+      } else {
+        existing = await prisma.uploadedFile.create({
+          data: {
+            sha256: file.sha256,
+            originalName: file.originalName || storedName,
+            storedName,
+            mimeType: file.mimeType || null,
+            size: file.size,
+            url,
+            createdBy: null,
+          },
+        });
+      }
     }
 
     // 3) Attach to the letter by reference (file_id)
