@@ -131,6 +131,18 @@ model ContractInformation {
   @@map("contract_information")
 }
 
+model ContractInformationDraft {
+  draftKey         String   @id @map("draft_key") @db.Text
+  contractId       String?  @map("contract_id") @db.Text
+  payload          Json     @default("{}")
+  lastSavedSection String?  @map("last_saved_section") @db.VarChar(40)
+  createdAt        DateTime @default(now()) @map("created_at")
+  updatedAt        DateTime @updatedAt @map("updated_at")
+
+  @@index([contractId])
+  @@map("contract_information_drafts")
+}
+
 model User {
   id         Int      @id @default(autoincrement())
   name       String?
