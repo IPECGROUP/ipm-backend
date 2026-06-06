@@ -111,6 +111,7 @@ model ContractInformation {
   projectId        Int?     @map("project_id")
   documentType     String   @default("main") @map("document_type") @db.VarChar(20)
   contractNo       String?  @map("contract_no") @db.Text
+  subContractNo    String?  @map("sub_contract_no") @db.Text
   parentContractId String?  @map("parent_contract_id") @db.Text
   relatedLetterId  String?  @map("related_letter_id") @db.Text
   relatedLetterIds Json     @default("[]") @map("related_letter_ids")

@@ -81,6 +81,7 @@ function mapRow(row) {
   const projectId = row.projectId ?? row.project_id;
   const documentType = row.documentType ?? row.document_type;
   const contractNo = row.contractNo ?? row.contract_no;
+  const subContractNo = row.subContractNo ?? row.sub_contract_no;
   const parentContractId = row.parentContractId ?? row.parent_contract_id;
   const relatedLetterId = row.relatedLetterId ?? row.related_letter_id;
   const relatedLetterIds = parseStringList(row.relatedLetterIds ?? row.related_letter_ids ?? relatedLetterId);
@@ -92,6 +93,7 @@ function mapRow(row) {
     projectId: projectId == null ? "" : String(projectId),
     documentType: documentType || "main",
     contractNo: contractNo || "",
+    subContractNo: subContractNo || "",
     parentContractId: parentContractId || "",
     relatedLetterId: relatedLetterId || "",
     relatedLetterIds,
@@ -112,6 +114,7 @@ const CONTRACT_SELECT = Prisma.sql`
     "project_id" AS "projectId",
     "document_type" AS "documentType",
     "contract_no" AS "contractNo",
+    "sub_contract_no" AS "subContractNo",
     "parent_contract_id" AS "parentContractId",
     "related_letter_id" AS "relatedLetterId",
     "related_letter_ids" AS "relatedLetterIds",
@@ -208,6 +211,7 @@ async function upsertContract(data) {
       "project_id",
       "document_type",
       "contract_no",
+      "sub_contract_no",
       "parent_contract_id",
       "related_letter_id",
       "related_letter_ids",
@@ -225,6 +229,7 @@ async function upsertContract(data) {
       ${data.projectId},
       ${data.documentType},
       ${data.contractNo},
+      ${data.subContractNo},
       ${data.parentContractId},
       ${data.relatedLetterId},
       ${JSON.stringify(data.relatedLetterIds)}::jsonb,
@@ -241,6 +246,7 @@ async function upsertContract(data) {
       "project_id" = EXCLUDED."project_id",
       "document_type" = EXCLUDED."document_type",
       "contract_no" = EXCLUDED."contract_no",
+      "sub_contract_no" = EXCLUDED."sub_contract_no",
       "parent_contract_id" = EXCLUDED."parent_contract_id",
       "related_letter_id" = EXCLUDED."related_letter_id",
       "related_letter_ids" = EXCLUDED."related_letter_ids",
@@ -256,6 +262,7 @@ async function upsertContract(data) {
       "project_id" AS "projectId",
       "document_type" AS "documentType",
       "contract_no" AS "contractNo",
+      "sub_contract_no" AS "subContractNo",
       "parent_contract_id" AS "parentContractId",
       "related_letter_id" AS "relatedLetterId",
       "related_letter_ids" AS "relatedLetterIds",
@@ -305,6 +312,7 @@ async function ensureContractSchema() {
         "project_id" INTEGER,
         "document_type" VARCHAR(20) NOT NULL DEFAULT 'main',
         "contract_no" TEXT,
+        "sub_contract_no" TEXT,
         "parent_contract_id" TEXT,
         "related_letter_id" TEXT,
         "related_letter_ids" JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -325,6 +333,7 @@ async function ensureContractSchema() {
       ADD COLUMN IF NOT EXISTS "project_id" INTEGER,
       ADD COLUMN IF NOT EXISTS "document_type" VARCHAR(20) NOT NULL DEFAULT 'main',
       ADD COLUMN IF NOT EXISTS "contract_no" TEXT,
+      ADD COLUMN IF NOT EXISTS "sub_contract_no" TEXT,
       ADD COLUMN IF NOT EXISTS "parent_contract_id" TEXT,
       ADD COLUMN IF NOT EXISTS "related_letter_id" TEXT,
       ADD COLUMN IF NOT EXISTS "related_letter_ids" JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -405,12 +414,14 @@ async function buildContractData(body, existingId = "") {
   const documentType = normalizeDocumentType(body.documentType ?? body.document_type);
   const parentContractId = trimString(body.parentContractId ?? body.parent_contract_id);
   const contractNo = trimString(body.contractNo ?? body.contract_no);
+  const subContractNo = trimString(body.subContractNo ?? body.sub_contract_no);
 
   if (projectId === undefined) return { error: "invalid_project_id" };
   if (!documentType) return { error: "invalid_document_type" };
   if (!projectId) return { error: "project_required" };
   if (documentType === "main" && !contractNo) return { error: "contract_no_required" };
   if (documentType !== "main" && !parentContractId) return { error: "parent_contract_required" };
+  if (documentType === "sub" && !subContractNo) return { error: "sub_contract_no_required" };
 
   if (!(await projectExists(projectId))) return { error: "project_not_found" };
 
@@ -439,6 +450,7 @@ async function buildContractData(body, existingId = "") {
       projectId,
       documentType,
       contractNo: documentType === "main" ? contractNo : null,
+      subContractNo: documentType === "sub" ? subContractNo : null,
       parentContractId: documentType === "main" ? null : parentContractId,
       relatedLetterId: relatedLetterIds[0] || null,
       relatedLetterIds,
