@@ -157,6 +157,18 @@ async function findDuplicateMainContract(id, contractNo) {
   return Array.isArray(rows) ? rows[0] || null : null;
 }
 
+async function findExistingMainContractForProject(id, projectId) {
+  const rows = await prisma.$queryRaw`
+    SELECT "id"
+    FROM "contract_information"
+    WHERE "document_type" = 'main'
+      AND "project_id" = ${projectId}
+      AND "id" <> ${id}
+    LIMIT 1
+  `;
+  return Array.isArray(rows) ? rows[0] || null : null;
+}
+
 async function listContracts({ projectId, documentType }) {
   if (projectId && documentType) {
     return prisma.$queryRaw`
@@ -410,6 +422,9 @@ async function buildContractData(body, existingId = "") {
   }
 
   if (documentType === "main" && contractNo) {
+    const existingProjectMain = await findExistingMainContractForProject(id, projectId);
+    if (existingProjectMain) return { error: "main_contract_exists_for_project" };
+
     const duplicate = await findDuplicateMainContract(id, contractNo);
     if (duplicate) return { error: "duplicate_contract_no" };
   }
