@@ -71,6 +71,13 @@ function normalizeDocumentType(value) {
   return DOCUMENT_TYPES.has(type) ? type : "";
 }
 
+function resolveDocumentType(value, parentContractId, subContractNo) {
+  const type = normalizeDocumentType(value);
+  if (parentContractId && subContractNo) return "sub";
+  if (type === "main" && parentContractId) return subContractNo ? "sub" : "appendix";
+  return type;
+}
+
 function normalizeId(value) {
   const id = trimString(value);
   return id || `${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -350,7 +357,15 @@ async function ensureContractSchema() {
     await prisma.$executeRawUnsafe(`
       UPDATE "contract_information"
       SET
-        "document_type" = COALESCE(NULLIF("document_type", ''), 'main'),
+        "document_type" = CASE
+          WHEN NULLIF("parent_contract_id", '') IS NOT NULL
+            AND NULLIF("sub_contract_no", '') IS NOT NULL
+            THEN 'sub'
+          WHEN NULLIF("parent_contract_id", '') IS NOT NULL
+            AND COALESCE(NULLIF("document_type", ''), 'main') = 'main'
+            THEN 'appendix'
+          ELSE COALESCE(NULLIF("document_type", ''), 'main')
+        END,
         "related_letter_ids" = CASE
           WHEN jsonb_typeof(COALESCE("related_letter_ids", '[]'::jsonb)) = 'array'
             AND jsonb_array_length(COALESCE("related_letter_ids", '[]'::jsonb)) > 0
@@ -411,10 +426,10 @@ async function ensureContractSchema() {
 async function buildContractData(body, existingId = "") {
   const id = normalizeId(body.id || existingId);
   const projectId = parseOptionalProjectId(body.projectId ?? body.project_id);
-  const documentType = normalizeDocumentType(body.documentType ?? body.document_type);
   const parentContractId = trimString(body.parentContractId ?? body.parent_contract_id);
   const contractNo = trimString(body.contractNo ?? body.contract_no);
   const subContractNo = trimString(body.subContractNo ?? body.sub_contract_no);
+  const documentType = resolveDocumentType(body.documentType ?? body.document_type, parentContractId, subContractNo);
 
   if (projectId === undefined) return { error: "invalid_project_id" };
   if (!documentType) return { error: "invalid_document_type" };
