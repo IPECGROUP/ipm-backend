@@ -279,6 +279,57 @@ async function listContracts({ projectId, documentType }) {
   `;
 }
 
+function mergeRowsById(...groups) {
+  const map = new Map();
+  groups.flat().forEach((row) => {
+    const id = trimString(row?.id);
+    if (id) map.set(id, row);
+  });
+  return Array.from(map.values()).sort((a, b) => {
+    const au = new Date(a?.updatedAt ?? a?.updated_at ?? a?.createdAt ?? a?.created_at ?? 0).getTime() || 0;
+    const bu = new Date(b?.updatedAt ?? b?.updated_at ?? b?.createdAt ?? b?.created_at ?? 0).getTime() || 0;
+    return bu - au;
+  });
+}
+
+async function listChildContracts({ projectId, documentType }) {
+  if (documentType === "main") return [];
+
+  if (projectId && documentType) {
+    return prisma.$queryRaw`
+      ${CONTRACT_SELECT}
+      WHERE "project_id" = ${projectId}
+        AND "document_type" = ${documentType}
+        AND NULLIF("parent_contract_id", '') IS NOT NULL
+      ORDER BY "updated_at" DESC, "created_at" DESC
+    `;
+  }
+
+  if (projectId) {
+    return prisma.$queryRaw`
+      ${CONTRACT_SELECT}
+      WHERE "project_id" = ${projectId}
+        AND NULLIF("parent_contract_id", '') IS NOT NULL
+      ORDER BY "updated_at" DESC, "created_at" DESC
+    `;
+  }
+
+  if (documentType) {
+    return prisma.$queryRaw`
+      ${CONTRACT_SELECT}
+      WHERE "document_type" = ${documentType}
+        AND NULLIF("parent_contract_id", '') IS NOT NULL
+      ORDER BY "updated_at" DESC, "created_at" DESC
+    `;
+  }
+
+  return prisma.$queryRaw`
+    ${CONTRACT_SELECT}
+    WHERE NULLIF("parent_contract_id", '') IS NOT NULL
+    ORDER BY "updated_at" DESC, "created_at" DESC
+  `;
+}
+
 async function upsertContract(data) {
   const rows = await prisma.$queryRaw`
     INSERT INTO "contract_information" (
@@ -567,7 +618,11 @@ export async function GET(request) {
       return json({ item: mapRow(item) });
     }
 
-    const items = await listContracts({ projectId, documentType });
+    const [baseItems, childItems] = await Promise.all([
+      listContracts({ projectId, documentType }),
+      listChildContracts({ projectId, documentType }),
+    ]);
+    const items = mergeRowsById(baseItems, childItems);
 
     return json({ items: items.map(mapRow) });
   } catch (error) {
