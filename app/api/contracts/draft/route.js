@@ -177,7 +177,7 @@ export async function GET(request) {
     if (!draftKey) return bad("draft_key_required");
 
     const item = await getDraft(draftKey);
-    if (!item) return bad("not_found", 404);
+    if (!item) return json({ item: null });
 
     return json({ item: mapDraft(item) });
   } catch (error) {
