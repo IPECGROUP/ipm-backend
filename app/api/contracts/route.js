@@ -182,7 +182,24 @@ async function findExistingMainContractForProject(id, projectId) {
 async function listContracts({ projectId, documentType }) {
   if (projectId && documentType) {
     return prisma.$queryRaw`
-      ${CONTRACT_SELECT}
+      SELECT
+        "id",
+        "project_id" AS "projectId",
+        "document_type" AS "documentType",
+        "contract_no" AS "contractNo",
+        "sub_contract_no" AS "subContractNo",
+        "parent_contract_id" AS "parentContractId",
+        "related_letter_id" AS "relatedLetterId",
+        "related_letter_ids" AS "relatedLetterIds",
+        "general",
+        "calendar",
+        "technical",
+        "financial",
+        "insurance",
+        "last_saved_section" AS "lastSavedSection",
+        "created_at" AS "createdAt",
+        "updated_at" AS "updatedAt"
+      FROM "contract_information"
       WHERE "project_id" = ${projectId}
         AND "document_type" = ${documentType}
       ORDER BY "updated_at" DESC, "created_at" DESC
@@ -191,7 +208,24 @@ async function listContracts({ projectId, documentType }) {
 
   if (projectId) {
     return prisma.$queryRaw`
-      ${CONTRACT_SELECT}
+      SELECT
+        "id",
+        "project_id" AS "projectId",
+        "document_type" AS "documentType",
+        "contract_no" AS "contractNo",
+        "sub_contract_no" AS "subContractNo",
+        "parent_contract_id" AS "parentContractId",
+        "related_letter_id" AS "relatedLetterId",
+        "related_letter_ids" AS "relatedLetterIds",
+        "general",
+        "calendar",
+        "technical",
+        "financial",
+        "insurance",
+        "last_saved_section" AS "lastSavedSection",
+        "created_at" AS "createdAt",
+        "updated_at" AS "updatedAt"
+      FROM "contract_information"
       WHERE "project_id" = ${projectId}
       ORDER BY "updated_at" DESC, "created_at" DESC
     `;
@@ -199,14 +233,48 @@ async function listContracts({ projectId, documentType }) {
 
   if (documentType) {
     return prisma.$queryRaw`
-      ${CONTRACT_SELECT}
+      SELECT
+        "id",
+        "project_id" AS "projectId",
+        "document_type" AS "documentType",
+        "contract_no" AS "contractNo",
+        "sub_contract_no" AS "subContractNo",
+        "parent_contract_id" AS "parentContractId",
+        "related_letter_id" AS "relatedLetterId",
+        "related_letter_ids" AS "relatedLetterIds",
+        "general",
+        "calendar",
+        "technical",
+        "financial",
+        "insurance",
+        "last_saved_section" AS "lastSavedSection",
+        "created_at" AS "createdAt",
+        "updated_at" AS "updatedAt"
+      FROM "contract_information"
       WHERE "document_type" = ${documentType}
       ORDER BY "updated_at" DESC, "created_at" DESC
     `;
   }
 
   return prisma.$queryRaw`
-    ${CONTRACT_SELECT}
+    SELECT
+      "id",
+      "project_id" AS "projectId",
+      "document_type" AS "documentType",
+      "contract_no" AS "contractNo",
+      "sub_contract_no" AS "subContractNo",
+      "parent_contract_id" AS "parentContractId",
+      "related_letter_id" AS "relatedLetterId",
+      "related_letter_ids" AS "relatedLetterIds",
+      "general",
+      "calendar",
+      "technical",
+      "financial",
+      "insurance",
+      "last_saved_section" AS "lastSavedSection",
+      "created_at" AS "createdAt",
+      "updated_at" AS "updatedAt"
+    FROM "contract_information"
     ORDER BY "updated_at" DESC, "created_at" DESC
   `;
 }
