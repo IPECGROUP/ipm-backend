@@ -16,3 +16,6 @@ Creating turbopack project {
   testMode: true
 }
  ✓ Ready in 2.2s
+ GET /api/health 200 in 545ms (compile: 520ms, render: 25ms)
+ GET /api/health 200 in 14ms (compile: 6ms, render: 8ms)
+ GET /api/financial-worksheet?project_id=1&contract_id=test-contract&kind=statement 500 in 1253ms (compile: 395ms, render: 859ms)

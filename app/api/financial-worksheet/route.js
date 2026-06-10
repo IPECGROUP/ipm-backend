@@ -24,6 +24,11 @@ function normalizeProjectId(value) {
   return Number.isInteger(id) && id > 0 ? id : null;
 }
 
+function normalizeKind(value) {
+  const kind = trimString(value || "statement") || "statement";
+  return ["statement", "receipts"].includes(kind) ? kind : "";
+}
+
 function mapRow(row) {
   const payload = plainObject(row?.payload);
   return {
@@ -53,6 +58,15 @@ async function ensureSchema() {
         )
       `);
       await prisma.$executeRawUnsafe(`
+        ALTER TABLE "financial_worksheet"
+          ADD COLUMN IF NOT EXISTS "project_id" INTEGER,
+          ADD COLUMN IF NOT EXISTS "contract_id" TEXT,
+          ADD COLUMN IF NOT EXISTS "kind" TEXT NOT NULL DEFAULT 'statement',
+          ADD COLUMN IF NOT EXISTS "payload" JSONB NOT NULL DEFAULT '{}'::jsonb,
+          ADD COLUMN IF NOT EXISTS "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+          ADD COLUMN IF NOT EXISTS "updated_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
+      `);
+      await prisma.$executeRawUnsafe(`
         CREATE INDEX IF NOT EXISTS "financial_worksheet_project_id_idx"
         ON "financial_worksheet"("project_id")
       `);
@@ -60,9 +74,22 @@ async function ensureSchema() {
         CREATE INDEX IF NOT EXISTS "financial_worksheet_kind_idx"
         ON "financial_worksheet"("kind")
       `);
+      await prisma.$executeRawUnsafe(`
+        CREATE INDEX IF NOT EXISTS "financial_worksheet_contract_id_idx"
+        ON "financial_worksheet"("contract_id")
+      `);
+      await prisma.$executeRawUnsafe(`
+        CREATE INDEX IF NOT EXISTS "financial_worksheet_project_contract_kind_idx"
+        ON "financial_worksheet"("project_id", "contract_id", "kind")
+      `);
     })();
   }
-  return ensureSchemaPromise;
+  try {
+    return await ensureSchemaPromise;
+  } catch (error) {
+    ensureSchemaPromise = null;
+    throw error;
+  }
 }
 
 export async function GET(request) {
@@ -71,7 +98,8 @@ export async function GET(request) {
     const { searchParams } = new URL(request.url);
     const projectId = normalizeProjectId(searchParams.get("project_id"));
     const contractId = trimString(searchParams.get("contract_id"));
-    const kind = trimString(searchParams.get("kind") || "statement") || "statement";
+    const kind = normalizeKind(searchParams.get("kind"));
+    if (!kind) return json({ error: "invalid_kind" }, 400);
 
     const rows = projectId && contractId
       ? await prisma.$queryRaw`
@@ -114,8 +142,10 @@ export async function POST(request) {
     const projectId = normalizeProjectId(body.project_id ?? body.projectId);
     if (!projectId) return json({ error: "project_id_required" }, 400);
 
-    const kind = trimString(body.kind || "statement") || "statement";
+    const kind = normalizeKind(body.kind);
+    if (!kind) return json({ error: "invalid_kind" }, 400);
     const contractId = trimString(body.contract_id ?? body.contractId);
+    if (!contractId) return json({ error: "contract_id_required" }, 400);
     const payload = {
       ...body,
       id,
