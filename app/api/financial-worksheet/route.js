@@ -70,9 +70,19 @@ export async function GET(request) {
     await ensureSchema();
     const { searchParams } = new URL(request.url);
     const projectId = normalizeProjectId(searchParams.get("project_id"));
+    const contractId = trimString(searchParams.get("contract_id"));
     const kind = trimString(searchParams.get("kind") || "statement") || "statement";
 
-    const rows = projectId
+    const rows = projectId && contractId
+      ? await prisma.$queryRaw`
+          SELECT "id", "project_id", "contract_id", "kind", "payload", "created_at", "updated_at"
+          FROM "financial_worksheet"
+          WHERE "project_id" = ${projectId}
+            AND "contract_id" = ${contractId}
+            AND "kind" = ${kind}
+          ORDER BY "created_at" DESC
+        `
+      : projectId
       ? await prisma.$queryRaw`
           SELECT "id", "project_id", "contract_id", "kind", "payload", "created_at", "updated_at"
           FROM "financial_worksheet"
