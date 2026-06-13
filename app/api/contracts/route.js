@@ -35,6 +35,14 @@ function plainObject(value) {
   return value && typeof value === "object" && !Array.isArray(value) ? value : {};
 }
 
+function normalizeGeneralPayload(body) {
+  const general = plainObject(body.general);
+  return {
+    ...general,
+    contractTitle: trimString(general.contractTitle ?? general.contract_title ?? body.contractTitle ?? body.contract_title),
+  };
+}
+
 function parseStringList(value) {
   const raw = (() => {
     if (Array.isArray(value)) return value;
@@ -588,7 +596,7 @@ async function buildContractData(body, existingId = "") {
       parentContractId: documentType === "main" ? null : parentContractId,
       relatedLetterId: relatedLetterIds[0] || null,
       relatedLetterIds,
-      general: plainObject(body.general),
+      general: normalizeGeneralPayload(body),
       calendar: plainObject(body.calendar),
       technical: plainObject(body.technical),
       financial: plainObject(body.financial),

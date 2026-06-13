@@ -6,27 +6,3 @@
    * C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\package-lock.json
 
 [baseline-browser-mapping] The data in this module is over two months old.  To ensure accurate Baseline data, please update: `npm i baseline-browser-mapping@latest -D`
-C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
-C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__5694f1dd._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
-C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
-C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_c49f2ca1._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
-C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
-C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
-C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
-C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
-C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
-C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
-financial_worksheet_get_error Error [PrismaClientKnownRequestError]: 
-Invalid `prisma.$executeRawUnsafe()` invocation:
-
-
-Raw query failed. Code: `28P01`. Message: `password authentication failed for user "ipm_user"`
-    at async (C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__5694f1dd._.js:205:13)
-    at async GET (C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__5694f1dd._.js:235:9)
-    at async responseGenerator (C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_c49f2ca1._.js:15748:38)
-    at async handleResponse (C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_c49f2ca1._.js:15810:32)
-    at async handler (C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_c49f2ca1._.js:15863:13) {
-  code: 'P2010',
-  meta: [Object],
-  clientVersion: '6.19.0'
-}
