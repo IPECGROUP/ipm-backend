@@ -37,10 +37,10 @@ function plainObject(value) {
 
 function normalizeGeneralPayload(body) {
   const general = plainObject(body.general);
-  return {
-    ...general,
-    contractTitle: trimString(general.contractTitle ?? general.contract_title ?? body.contractTitle ?? body.contract_title),
-  };
+  const normalized = { ...general };
+  delete normalized.contractTitle;
+  delete normalized.contract_title;
+  return normalized;
 }
 
 function parseStringList(value) {
