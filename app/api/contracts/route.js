@@ -626,11 +626,13 @@ export async function GET(request) {
       return json({ item: mapRow(item) });
     }
 
-    const [baseItems, childItems] = await Promise.all([
-      listContracts({ projectId, documentType }),
-      listChildContracts({ projectId, documentType }),
-    ]);
-    const items = mergeRowsById(baseItems, childItems);
+    const items =
+      projectId || documentType
+        ? mergeRowsById(
+            await listContracts({ projectId, documentType }),
+            await listChildContracts({ projectId, documentType })
+          )
+        : await listContracts({ projectId, documentType });
 
     return json({ items: items.map(mapRow) });
   } catch (error) {

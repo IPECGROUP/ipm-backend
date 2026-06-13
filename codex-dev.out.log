@@ -16,3 +16,5 @@ Creating turbopack project {
   testMode: true
 }
  ✓ Ready in 3.6s
+ GET /api/contracts 503 in 3.7s (compile: 1575ms, render: 2.1s)
+ GET /api/contracts 503 in 39ms (compile: 4ms, render: 36ms)
