@@ -42,6 +42,7 @@ function toSnakeLetter(l) {
     classificationFromDocClass ??
     "";
   const cls = String(classificationLabel || "").trim();
+  const attachments = Array.isArray(l?.attachments) ? l.attachments : [];
   return {
     id: l.id,
     kind: l.kind,
@@ -64,7 +65,7 @@ function toSnakeLetter(l) {
     to_name: l.toName ?? "",
     org_name: l.orgName ?? "",
     subject: l.subject ?? "",
-    has_attachment: !!l.hasAttachment,
+    has_attachment: attachments.length > 0,
     attachment_title: l.attachmentTitle ?? "",
     return_to_ids: l.returnToIds ?? [],
     piro_ids: l.piroIds ?? [],
@@ -73,7 +74,7 @@ function toSnakeLetter(l) {
     secretariat_no: l.secretariatNo ?? "",
     secretariat_note: l.secretariatNote ?? "",
     receiver_name: l.receiverName ?? "",
-    attachments: l.attachments ?? [],
+    attachments,
     created_by: l.createdBy ?? null,
     created_at: l.createdAt,
     updated_at: l.updatedAt,
