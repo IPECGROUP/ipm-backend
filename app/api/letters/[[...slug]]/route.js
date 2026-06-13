@@ -434,9 +434,9 @@ async function ensureLettersClassificationId(rawLabel) {
 }
 
 async function resolveClassificationId({ classificationId, classificationText, keepUndefined = false }) {
+  if (classificationText !== undefined) return await ensureLettersClassificationId(classificationText);
   if (classificationId !== undefined) return classificationId;
-  if (classificationText === undefined) return keepUndefined ? undefined : null;
-  return await ensureLettersClassificationId(classificationText);
+  return keepUndefined ? undefined : null;
 }
 
 async function resolveClassificationState({
