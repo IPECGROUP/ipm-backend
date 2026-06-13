@@ -65,7 +65,7 @@ function toSnakeLetter(l) {
     to_name: l.toName ?? "",
     org_name: l.orgName ?? "",
     subject: l.subject ?? "",
-    has_attachment: attachments.length > 0,
+    has_attachment: !!l.hasAttachment,
     attachment_title: l.attachmentTitle ?? "",
     return_to_ids: l.returnToIds ?? [],
     piro_ids: l.piroIds ?? [],
