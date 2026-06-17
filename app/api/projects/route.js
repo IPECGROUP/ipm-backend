@@ -28,12 +28,17 @@ function parseBool(v, defaultValue) {
 }
 
 // GET /api/projects   -> لیست پروژه‌ها
-export async function GET() {
+export async function GET(request) {
   try {
+    const url = new URL(request.url);
+    const activeParam = url.searchParams.get("isActive") ?? url.searchParams.get("active");
+    const activeFilter = activeParam == null ? undefined : parseBool(activeParam, undefined);
+
     const items = await prisma.project.findMany({
+      where: activeFilter === undefined ? undefined : { isActive: activeFilter },
       orderBy: { code: "asc" },
     });
-    return Response.json({ items });
+    return Response.json({ items, projects: items });
   } catch (e) {
     console.error("projects_get_error", e);
     return new Response(JSON.stringify({ error: "internal_error" }), {
