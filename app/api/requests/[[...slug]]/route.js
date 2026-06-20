@@ -140,6 +140,11 @@ function normalizeOut(row) {
 
     created_by_user_id: row.createdById,
     createdById: row.createdById,
+    createdByName:
+      row.createdBy?.name ||
+      row.createdBy?.username ||
+      row.createdBy?.email ||
+      null,
     current_assignee_user_id: row.currentAssigneeUserId,
     currentAssigneeUserId: row.currentAssigneeUserId,
 
@@ -308,6 +313,12 @@ function getCurrentStep(historyJson) {
 }
 
 function canActOnStep({ row, userId, userUnitKinds, userRoleKeys }) {
+  // Phase one requests are assigned directly to a specific user (marandi).
+  // Keep the role-based workflow below for requests created before this phase.
+  if (row.currentAssigneeUserId != null) {
+    return Number(row.currentAssigneeUserId) === Number(userId);
+  }
+
   const step = getCurrentStep(row.historyJson);
   if (!step) return false;
 
@@ -426,7 +437,10 @@ export async function GET(req, ctx) {
     const id = Number(slug[0]);
     if (!Number.isFinite(id)) return json({ error: "invalid_id" }, 400);
 
-    const row = await prisma.paymentRequest.findUnique({ where: { id } });
+    const row = await prisma.paymentRequest.findUnique({
+      where: { id },
+      include: { createdBy: { select: { name: true, username: true, email: true } } },
+    });
     if (!row) return json({ error: "not_found" }, 404);
     const canAct = canActOnStep({
       row,
@@ -463,6 +477,7 @@ export async function GET(req, ctx) {
 
   let rows = await prisma.paymentRequest.findMany({
     where,
+    include: { createdBy: { select: { name: true, username: true, email: true } } },
     orderBy: { id: "desc" },
     take: 500,
   });
@@ -529,6 +544,41 @@ export async function POST(req, ctx) {
 
     if (!canActOnStep({ row, userId, userUnitKinds: uctx.unitKinds, userRoleKeys: uctx.roleKeys })) {
       return json({ error: "forbidden" }, 403);
+    }
+
+    // Directly assigned phase-one requests do not enter the legacy role chain.
+    if (row.currentAssigneeUserId != null) {
+      history.push({
+        byUserId: userId,
+        type: nextStatus,
+        status: nextStatus,
+        note,
+        at: new Date().toISOString(),
+        roleKey: ROLE_KEYS.PAYMENT_ORDER,
+        index: 1,
+      });
+
+      if (nextStatus === "returned") {
+        history.push({
+          type: "step_set",
+          at: new Date().toISOString(),
+          unitKind: row.scope,
+          roleKey: ROLE_KEYS.REQUESTER,
+          index: 0,
+        });
+      } else {
+        history.push({ type: "step_clear", at: new Date().toISOString() });
+      }
+
+      const updated = await prisma.paymentRequest.update({
+        where: { id },
+        data: {
+          status: nextStatus,
+          historyJson: history,
+          currentAssigneeUserId: null,
+        },
+      });
+      return json({ ok: true, item: normalizeOut(updated) });
     }
 
     if (nextStatus === "approved") {
@@ -619,25 +669,20 @@ export async function POST(req, ctx) {
 
   const uctx = await getUserContext(req, userId);
   const requestedScope = String(data.scope ?? body?.scope ?? "").trim().toLowerCase();
-  let unitKind = uctx.unitKind;
-  if (!unitKind && requestedScope && uctx.unitKinds.includes(requestedScope)) {
-    unitKind = requestedScope;
-  }
-  if (!unitKind && uctx.isMainAdmin) {
-    unitKind = UNIT_KINDS.includes(requestedScope) ? requestedScope : "office";
-  }
-  if (!unitKind) {
-    return json(
-      {
-        error: "user_unit_required",
-        hint: "کاربر باید به یک واحد معتبر متصل باشد (UserUnit / department / role name).",
-      },
-      400
-    );
-  }
+  const unitKind = UNIT_KINDS.includes(requestedScope)
+    ? requestedScope
+    : (uctx.unitKind || "office");
 
-  const chain = getWorkflowChainForUnit(unitKind);
-  if (!chain) return json({ error: "workflow_not_defined" }, 400);
+  const marandi = await prisma.user.findFirst({
+    where: {
+      OR: [
+        { username: "marandi" },
+        { email: "marandi@ipecgroup.net" },
+      ],
+    },
+    select: { id: true },
+  });
+  if (!marandi) return json({ error: "marandi_user_not_found" }, 503);
 
   const title = data.title;
   const amountBI = data.amount ?? toBigIntSafe(body?.amountStr) ?? BigInt(0);
@@ -646,9 +691,6 @@ export async function POST(req, ctx) {
   if (amountBI <= 0n) return json({ error: "amount_must_be_positive" }, 400);
 
   const enforcedScope = unitKind;
-
-  const pendingIndex = chain.length > 1 ? 1 : 0;
-  const pendingRoleKey = chain[pendingIndex];
 
   const nowIso = new Date().toISOString();
 
@@ -684,7 +726,7 @@ export async function POST(req, ctx) {
       attachments: data.attachments ?? null,
 
       createdById: userId,
-      currentAssigneeUserId: null,
+      currentAssigneeUserId: marandi.id,
 
       status: "pending",
       historyJson: [
@@ -702,8 +744,9 @@ export async function POST(req, ctx) {
           type: "step_set",
           at: nowIso,
           unitKind,
-          roleKey: pendingRoleKey,
-          index: pendingIndex,
+          roleKey: ROLE_KEYS.PAYMENT_ORDER,
+          index: 1,
+          assignedToUserId: marandi.id,
         },
       ],
     },
