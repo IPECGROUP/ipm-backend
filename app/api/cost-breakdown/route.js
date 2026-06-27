@@ -82,13 +82,13 @@ async function ensureCostBreakdownTable() {
 
 function serializeItem(item) {
   return {
-    id: item.id,
-    projectId: item.projectId,
-    budgetCode: item.budgetCode,
-    budgetName: item.budgetName,
-    baseBudget: item.baseBudget.toString(),
-    createdAt: item.createdAt?.toISOString?.() ?? null,
-    updatedAt: item.updatedAt?.toISOString?.() ?? null,
+    id: Number(item.id),
+    projectId: Number(item.projectId ?? item.project_id),
+    budgetCode: String(item.budgetCode ?? item.budget_code ?? ""),
+    budgetName: String(item.budgetName ?? item.budget_name ?? ""),
+    baseBudget: String(item.baseBudget ?? item.base_budget ?? 0),
+    createdAt: item.createdAt?.toISOString?.() ?? item.created_at?.toISOString?.() ?? null,
+    updatedAt: item.updatedAt?.toISOString?.() ?? item.updated_at?.toISOString?.() ?? null,
     project: item.project
       ? {
           id: item.project.id,
@@ -109,29 +109,38 @@ async function ensureActiveProject(projectId) {
   return !!project;
 }
 
-const itemSelect = {
-  id: true,
-  projectId: true,
-  budgetCode: true,
-  budgetName: true,
-  baseBudget: true,
-  createdAt: true,
-  updatedAt: true,
-  project: {
-    select: { id: true, code: true, name: true, isActive: true },
-  },
-};
-
 export async function GET(req) {
   try {
     const { searchParams } = new URL(req.url);
     const projectId = toPositiveInt(searchParams.get("project_id"));
 
-    const queryItems = () => prisma.costBreakdownItem.findMany({
-      where: projectId ? { projectId } : undefined,
-      select: itemSelect,
-      orderBy: [{ projectId: "asc" }, { budgetCode: "asc" }, { id: "asc" }],
-    });
+    const queryItems = () =>
+      projectId
+        ? prisma.$queryRaw`
+            SELECT
+              id,
+              project_id,
+              budget_code,
+              budget_name,
+              base_budget,
+              created_at,
+              updated_at
+            FROM cost_breakdown_items
+            WHERE project_id = ${projectId}
+            ORDER BY budget_code ASC, id ASC
+          `
+        : prisma.$queryRaw`
+            SELECT
+              id,
+              project_id,
+              budget_code,
+              budget_name,
+              base_budget,
+              created_at,
+              updated_at
+            FROM cost_breakdown_items
+            ORDER BY project_id ASC, budget_code ASC, id ASC
+          `;
 
     let items = [];
     try {
@@ -174,15 +183,19 @@ export async function POST(req) {
     if (!budgetCode || !budgetName) return json({ error: "budget_code_and_name_required" }, 400);
     if (!(await ensureActiveProject(projectId))) return json({ error: "active_project_not_found" }, 404);
 
-    const item = await prisma.costBreakdownItem.create({
-      data: { projectId, budgetCode, budgetName, baseBudget },
-      select: itemSelect,
-    });
+    const rows = await prisma.$queryRaw`
+      INSERT INTO cost_breakdown_items (project_id, budget_code, budget_name, base_budget)
+      VALUES (${projectId}, ${budgetCode}, ${budgetName}, ${baseBudget})
+      RETURNING id, project_id, budget_code, budget_name, base_budget, created_at, updated_at
+    `;
+    const item = Array.isArray(rows) ? rows[0] : null;
 
     return json({ ok: true, item: serializeItem(item) }, 201);
   } catch (e) {
     console.error("cost_breakdown_post_error", e);
-    if (e?.code === "P2002") return json({ error: "duplicate_budget_code" }, 409);
+    if (e?.code === "P2002" || e?.code === "P2010" || /unique|duplicate/i.test(String(e?.message || ""))) {
+      return json({ error: "duplicate_budget_code" }, 409);
+    }
     return json({ error: "internal_error" }, 500);
   }
 }
@@ -224,17 +237,40 @@ export async function PATCH(req) {
 
     if (!Object.keys(data).length) return json({ error: "empty_payload" }, 400);
 
-    const item = await prisma.costBreakdownItem.update({
-      where: { id },
-      data,
-      select: itemSelect,
-    });
+    const currentRows = await prisma.$queryRaw`
+      SELECT id, project_id, budget_code, budget_name, base_budget
+      FROM cost_breakdown_items
+      WHERE id = ${id}
+      LIMIT 1
+    `;
+    const current = Array.isArray(currentRows) ? currentRows[0] : null;
+    if (!current) return json({ error: "not_found" }, 404);
+
+    const nextProjectId = data.projectId ?? Number(current.project_id);
+    const nextBudgetCode = data.budgetCode ?? String(current.budget_code);
+    const nextBudgetName = data.budgetName ?? String(current.budget_name);
+    const nextBaseBudget = data.baseBudget ?? BigInt(String(current.base_budget ?? 0));
+
+    const rows = await prisma.$queryRaw`
+      UPDATE cost_breakdown_items
+      SET
+        project_id = ${nextProjectId},
+        budget_code = ${nextBudgetCode},
+        budget_name = ${nextBudgetName},
+        base_budget = ${nextBaseBudget},
+        updated_at = CURRENT_TIMESTAMP
+      WHERE id = ${id}
+      RETURNING id, project_id, budget_code, budget_name, base_budget, created_at, updated_at
+    `;
+    const item = Array.isArray(rows) ? rows[0] : null;
 
     return json({ ok: true, item: serializeItem(item) });
   } catch (e) {
     console.error("cost_breakdown_patch_error", e);
     if (e?.code === "P2025") return json({ error: "not_found" }, 404);
-    if (e?.code === "P2002") return json({ error: "duplicate_budget_code" }, 409);
+    if (e?.code === "P2002" || e?.code === "P2010" || /unique|duplicate/i.test(String(e?.message || ""))) {
+      return json({ error: "duplicate_budget_code" }, 409);
+    }
     return json({ error: "internal_error" }, 500);
   }
 }
@@ -253,7 +289,12 @@ export async function DELETE(req) {
 
     if (!id) return json({ error: "invalid_id" }, 400);
 
-    await prisma.costBreakdownItem.delete({ where: { id } });
+    const result = await prisma.$executeRaw`
+      DELETE FROM cost_breakdown_items
+      WHERE id = ${id}
+    `;
+    if (!result) return json({ error: "not_found" }, 404);
+
     return json({ ok: true });
   } catch (e) {
     console.error("cost_breakdown_delete_error", e);
