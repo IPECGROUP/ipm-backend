@@ -17,3 +17,4 @@ Creating turbopack project {
 }
  ✓ Ready in 2.8s
  GET /api/projects?isActive=true 500 in 958ms (compile: 791ms, render: 166ms)
+ GET /api/projects?isActive=true 500 in 199ms (compile: 5ms, render: 194ms)

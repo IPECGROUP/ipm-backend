@@ -42,6 +42,44 @@ function toBigIntAmount(value) {
   }
 }
 
+async function ensureCostBreakdownTable() {
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "cost_breakdown_items" (
+      "id" SERIAL NOT NULL,
+      "project_id" INTEGER NOT NULL,
+      "budget_code" VARCHAR(80) NOT NULL,
+      "budget_name" VARCHAR(255) NOT NULL,
+      "base_budget" BIGINT NOT NULL DEFAULT 0,
+      "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "cost_breakdown_items_pkey" PRIMARY KEY ("id")
+    )
+  `);
+
+  await prisma.$executeRawUnsafe(`
+    CREATE INDEX IF NOT EXISTS "cost_breakdown_items_project_id_idx"
+    ON "cost_breakdown_items"("project_id")
+  `);
+
+  await prisma.$executeRawUnsafe(`
+    CREATE UNIQUE INDEX IF NOT EXISTS "cost_breakdown_items_project_id_budget_code_key"
+    ON "cost_breakdown_items"("project_id", "budget_code")
+  `);
+
+  await prisma.$executeRawUnsafe(`
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'cost_breakdown_items_project_id_fkey'
+      ) THEN
+        ALTER TABLE "cost_breakdown_items"
+        ADD CONSTRAINT "cost_breakdown_items_project_id_fkey"
+        FOREIGN KEY ("project_id") REFERENCES "projects"("id")
+        ON DELETE CASCADE ON UPDATE CASCADE;
+      END IF;
+    END $$
+  `);
+}
+
 function serializeItem(item) {
   return {
     id: item.id,
@@ -89,11 +127,31 @@ export async function GET(req) {
     const { searchParams } = new URL(req.url);
     const projectId = toPositiveInt(searchParams.get("project_id"));
 
-    const items = await prisma.costBreakdownItem.findMany({
+    const queryItems = () => prisma.costBreakdownItem.findMany({
       where: projectId ? { projectId } : undefined,
       select: itemSelect,
       orderBy: [{ projectId: "asc" }, { budgetCode: "asc" }, { id: "asc" }],
     });
+
+    let items = [];
+    try {
+      items = await queryItems();
+    } catch (e) {
+      const tableMissing =
+        e?.code === "P2021" ||
+        e?.code === "P2022" ||
+        /cost_breakdown_items|does not exist|table.*not.*exist/i.test(String(e?.message || ""));
+
+      if (!tableMissing) throw e;
+
+      try {
+        await ensureCostBreakdownTable();
+        items = await queryItems();
+      } catch (setupError) {
+        console.error("cost_breakdown_table_setup_error", setupError);
+        return json({ items: [], setupRequired: true });
+      }
+    }
 
     return json({ items: items.map(serializeItem) });
   } catch (e) {
@@ -104,6 +162,8 @@ export async function GET(req) {
 
 export async function POST(req) {
   try {
+    await ensureCostBreakdownTable();
+
     const body = await readJson(req);
     const projectId = toPositiveInt(body.project_id ?? body.projectId);
     const budgetCode = cleanText(body.budget_code ?? body.budgetCode, 80);
@@ -129,6 +189,8 @@ export async function POST(req) {
 
 export async function PATCH(req) {
   try {
+    await ensureCostBreakdownTable();
+
     const body = await readJson(req);
     const id = toPositiveInt(body.id);
     if (!id) return json({ error: "invalid_id" }, 400);
@@ -179,6 +241,8 @@ export async function PATCH(req) {
 
 export async function DELETE(req) {
   try {
+    await ensureCostBreakdownTable();
+
     const url = new URL(req.url);
     let id = toPositiveInt(url.searchParams.get("id"));
 
