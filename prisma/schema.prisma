@@ -170,6 +170,7 @@ model User {
   password   String
   department String?
   role       String   @default("user")
+  expiresAt  DateTime? @map("expires_at")
 
   // همون access / access_labels
   access   String[]      @default([])

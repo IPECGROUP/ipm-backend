@@ -31,6 +31,28 @@ async function replaceUserUnits(userId, unitIds) {
   }
 }
 
+function readExpiresAtInput(body) {
+  if (Object.prototype.hasOwnProperty.call(body, "expiresAt")) return body.expiresAt;
+  if (Object.prototype.hasOwnProperty.call(body, "expires_at")) return body.expires_at;
+  if (Object.prototype.hasOwnProperty.call(body, "validUntil")) return body.validUntil;
+  if (Object.prototype.hasOwnProperty.call(body, "valid_until")) return body.valid_until;
+  return undefined;
+}
+
+function parseExpiresAtInput(v) {
+  if (v === undefined) return undefined;
+  if (v === null) return null;
+  const raw = String(v || "").trim();
+  if (!raw) return null;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) {
+    const err = new Error("invalid_expires_at");
+    err.status = 400;
+    throw err;
+  }
+  return d;
+}
+
 async function mapUser(u) {
   if (!u) return null;
   const roles = Array.isArray(u.roles) ? u.roles : [];
@@ -43,6 +65,7 @@ async function mapUser(u) {
     username: u.username,
     department: u.department,
     role: u.role,
+    expiresAt: u.expiresAt ? new Date(u.expiresAt).toISOString() : null,
     access: u.access || [],
     access_labels: u.access || [],
     unitIds,
@@ -115,6 +138,7 @@ export async function POST(request) {
     const email = body.email ? String(body.email).trim() : null;
     const department = body.department ? String(body.department).trim() : null;
     const role = body.role ? String(body.role).trim() : "user";
+    const expiresAt = parseExpiresAtInput(readExpiresAtInput(body));
 
     const access = Array.isArray(body.access) ? body.access.map((v) => String(v || "")) : [];
 
@@ -135,6 +159,7 @@ export async function POST(request) {
         password: passwordHash,
         department,
         role,
+        expiresAt: expiresAt === undefined ? null : expiresAt,
         access,
         roles: { create: roleIds.map((roleId) => ({ role: { connect: { id: roleId } } })) },
       },
@@ -146,8 +171,8 @@ export async function POST(request) {
     return Response.json({ user: await mapUser(user) });
   } catch (e) {
     console.error("admin_users_post_error", e);
-    return new Response(JSON.stringify({ error: "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
-      status: 500, headers: { "Content-Type": "application/json" },
+    return new Response(JSON.stringify({ error: e?.message || "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
+      status: e?.status || 500, headers: { "Content-Type": "application/json" },
     });
   }
 }
@@ -170,6 +195,8 @@ export async function PATCH(request) {
     if (body.username !== undefined) data.username = String(body.username || "").trim();
     if (body.department !== undefined) data.department = body.department === null ? null : (String(body.department || "").trim() || null);
     if (body.role !== undefined) data.role = String(body.role || "user").trim();
+    const expiresAt = parseExpiresAtInput(readExpiresAtInput(body));
+    if (expiresAt !== undefined) data.expiresAt = expiresAt;
 
     if (body.password) data.password = await hashPasswordIfProvided(body.password);
 
@@ -199,8 +226,8 @@ export async function PATCH(request) {
     return Response.json({ user: await mapUser(user) });
   } catch (e) {
     console.error("admin_users_patch_error", e);
-    return new Response(JSON.stringify({ error: "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
-      status: 500, headers: { "Content-Type": "application/json" },
+    return new Response(JSON.stringify({ error: e?.message || "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
+      status: e?.status || 500, headers: { "Content-Type": "application/json" },
     });
   }
 }

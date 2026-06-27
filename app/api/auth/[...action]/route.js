@@ -57,6 +57,12 @@ function looksLikeBcryptHash(s) {
   return v.startsWith("$2a$") || v.startsWith("$2b$") || v.startsWith("$2y$");
 }
 
+function userIsExpired(user) {
+  if (!user?.expiresAt) return false;
+  const ts = new Date(user.expiresAt).getTime();
+  return Number.isFinite(ts) && ts < Date.now();
+}
+
 function isHttpsRequest(request) {
   const xfProto = (request.headers.get("x-forwarded-proto") || "").toLowerCase();
   if (xfProto.includes("https")) return true;
@@ -79,6 +85,7 @@ async function handleLogin(request) {
   });
 
   if (!user) return json({ error: "invalid_credentials" }, 401);
+  if (userIsExpired(user)) return json({ error: "user_expired" }, 403);
 
   const stored = user.passwordHash || user.password || "";
   if (!stored) return json({ error: "user_has_no_password" }, 400);
@@ -125,6 +132,11 @@ async function handleMe(request) {
   });
 
   if (!sess?.user) return json({ user: null });
+  if (userIsExpired(sess.user)) {
+    try { await prisma.session.delete({ where: { id: sess.id } }); } catch {}
+    jar.set(COOKIE_NAME, "", { path: "/", maxAge: 0 });
+    return json({ user: null });
+  }
 
   if (sess.expiresAt && new Date(sess.expiresAt).getTime() < Date.now()) {
     try { await prisma.session.delete({ where: { id: sess.id } }); } catch {}
