@@ -81,6 +81,7 @@ async function ensureCostBreakdownTable() {
 }
 
 function serializeItem(item) {
+  if (!item) return null;
   return {
     id: Number(item.id),
     projectId: Number(item.projectId ?? item.project_id),
@@ -184,8 +185,13 @@ export async function POST(req) {
     if (!(await ensureActiveProject(projectId))) return json({ error: "active_project_not_found" }, 404);
 
     const rows = await prisma.$queryRaw`
-      INSERT INTO cost_breakdown_items (project_id, budget_code, budget_name, base_budget)
-      VALUES (${projectId}, ${budgetCode}, ${budgetName}, ${baseBudget})
+      INSERT INTO cost_breakdown_items (project_id, budget_code, budget_name, base_budget, updated_at)
+      VALUES (${projectId}, ${budgetCode}, ${budgetName}, ${baseBudget}, CURRENT_TIMESTAMP)
+      ON CONFLICT (project_id, budget_code)
+      DO UPDATE SET
+        budget_name = EXCLUDED.budget_name,
+        base_budget = EXCLUDED.base_budget,
+        updated_at = CURRENT_TIMESTAMP
       RETURNING id, project_id, budget_code, budget_name, base_budget, created_at, updated_at
     `;
     const item = Array.isArray(rows) ? rows[0] : null;
