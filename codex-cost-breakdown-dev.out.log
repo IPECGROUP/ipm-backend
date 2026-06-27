@@ -1,0 +1,19 @@
+
+> ipm-v2@0.1.0 dev
+> next dev
+
+   ▲ Next.js 16.0.6 (Turbopack)
+   - Local:         http://localhost:3000
+   - Network:       http://192.168.1.26:3000
+   - Environments: .env
+   - Experiments (use with caution):
+     · proxyClientMaxBodySize: 9007199254740991
+     · serverActions
+
+ ✓ Starting...
+Creating turbopack project {
+  dir: 'C:\\Users\\gholizadeh\\Desktop\\budget\\server\\ipm-v2',
+  testMode: true
+}
+ ✓ Ready in 2.8s
+ GET /api/projects?isActive=true 500 in 958ms (compile: 791ms, render: 166ms)

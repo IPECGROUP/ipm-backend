@@ -1,0 +1,38 @@
+ ⚠ Warning: Next.js inferred your workspace root, but it may not be correct.
+ We detected multiple lockfiles and selected the directory of C:\Users\gholizadeh\Desktop\budget\server\package-lock.json as the root directory.
+ To silence this warning, set `turbopack.root` in your Next.js config, or consider removing one of the lockfiles if it's not needed.
+   See https://nextjs.org/docs/app/api-reference/config/next-config-js/turbopack#root-directory for more information.
+ Detected additional lockfiles: 
+   * C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\package-lock.json
+
+[baseline-browser-mapping] The data in this module is over two months old.  To ensure accurate Baseline data, please update: `npm i baseline-browser-mapping@latest -D`
+C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__da2f336d._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_fe7f3850._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+projects_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `__TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].project.findMany()` invocation in
+C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__da2f336d._.js:175:172
+
+  172 const url = new URL(request.url);
+  173 const activeParam = url.searchParams.get("isActive") ?? url.searchParams.get("active");
+  174 const activeFilter = activeParam == null ? undefined : parseBool(activeParam, undefined);
+→ 175 const items = await __TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].project.findMany(
+Authentication failed against database server, the provided database credentials for `ipm_user` are not valid.
+
+Please make sure to provide valid database credentials for the database server at the configured address.
+    at <unknown> (C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__da2f336d._.js:175:172)
+    at async GET (C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__da2f336d._.js:175:23)
+    at async responseGenerator (C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_fe7f3850._.js:10415:38)
+    at async handleResponse (C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_fe7f3850._.js:10477:32)
+    at async handler (C:\Users\gholizadeh\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_fe7f3850._.js:10530:13) {
+  code: 'P1000',
+  meta: [Object],
+  clientVersion: '6.19.0'
+}
