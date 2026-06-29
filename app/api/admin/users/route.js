@@ -55,7 +55,7 @@ function parseExpiresAtInput(v) {
 
 async function mapUser(u) {
   if (!u) return null;
-  const roles = Array.isArray(u.roles) ? u.roles : [];
+  const roles = hasUserField("roles") && Array.isArray(u.roles) ? u.roles : [];
   const unitIds = await getUnitIdsForUser(u.id);
 
   return {
@@ -82,6 +82,27 @@ async function hashPasswordIfProvided(pw) {
 function userScalarFieldNames() {
   const fields = prisma?._runtimeDataModel?.models?.User?.fields || [];
   return new Set(fields.filter((f) => f?.kind === "scalar").map((f) => f.name));
+}
+
+function userFieldNames() {
+  const fields = prisma?._runtimeDataModel?.models?.User?.fields || [];
+  return new Set(fields.map((f) => f.name));
+}
+
+function hasUserScalarField(name) {
+  return userScalarFieldNames().has(name);
+}
+
+function hasUserField(name) {
+  return userFieldNames().has(name);
+}
+
+function setUserScalarData(data, name, value) {
+  if (hasUserScalarField(name)) data[name] = value;
+}
+
+function userQueryArgs() {
+  return hasUserField("roles") ? { include: { roles: { include: { role: true } } } } : {};
 }
 
 function userPasswordFieldName() {
@@ -147,6 +168,40 @@ async function updatePasswordRaw(userId, passwordHash) {
   await prisma.$executeRawUnsafe(`UPDATE ${table} SET ${column} = $1 WHERE "id" = $2`, passwordHash, userId);
 }
 
+function unknownArgumentName(e) {
+  const msg = String(e?.message || "");
+  const m = msg.match(/Unknown argument `([^`]+)`/);
+  return m?.[1] || "";
+}
+
+async function updateUserRetryingUnknownFields(id, data, rolesUpdate) {
+  const safeData = { ...(data || {}) };
+  let safeRolesUpdate = rolesUpdate;
+
+  for (let attempt = 0; attempt < 12; attempt += 1) {
+    try {
+      return await prisma.user.update({
+        where: { id },
+        data: { ...safeData, ...(safeRolesUpdate ? { roles: safeRolesUpdate } : {}) },
+        ...userQueryArgs(),
+      });
+    } catch (e) {
+      const unknown = unknownArgumentName(e);
+      if (!unknown) throw e;
+      if (unknown === "roles") {
+        safeRolesUpdate = undefined;
+        continue;
+      }
+      if (!Object.prototype.hasOwnProperty.call(safeData, unknown)) throw e;
+      delete safeData[unknown];
+    }
+  }
+
+  const err = new Error("user_update_schema_mismatch");
+  err.status = 500;
+  throw err;
+}
+
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -162,7 +217,7 @@ export async function GET(request) {
 
       const user = await prisma.user.findUnique({
         where: { id },
-        include: { roles: { include: { role: true } } },
+        ...userQueryArgs(),
       });
 
       if (!user) {
@@ -176,7 +231,7 @@ export async function GET(request) {
 
     const users = await prisma.user.findMany({
       orderBy: { id: "asc" },
-      include: { roles: { include: { role: true } } },
+      ...userQueryArgs(),
     });
 
     const out = [];
@@ -218,21 +273,22 @@ export async function POST(request) {
     const unitIds = ensureIntArray(body.unitIds ?? body.unit_ids ?? body.units ?? []);
 
     const passwordHash = await hashPasswordIfProvided(password);
-    const userData = {
-      name,
-      email,
-      username,
-      department,
-      role,
-      expiresAt: expiresAt === undefined ? null : expiresAt,
-      access,
-      roles: { create: roleIds.map((roleId) => ({ role: { connect: { id: roleId } } })) },
-    };
+    const userData = {};
+    setUserScalarData(userData, "name", name);
+    setUserScalarData(userData, "email", email);
+    setUserScalarData(userData, "username", username);
+    setUserScalarData(userData, "department", department);
+    setUserScalarData(userData, "role", role);
+    setUserScalarData(userData, "access", access);
+    if (expiresAt !== undefined) setUserScalarData(userData, "expiresAt", expiresAt);
+    if (hasUserField("roles")) {
+      userData.roles = { create: roleIds.map((roleId) => ({ role: { connect: { id: roleId } } })) };
+    }
     setPasswordData(userData, passwordHash);
 
     const user = await prisma.user.create({
       data: userData,
-      include: { roles: { include: { role: true } } },
+      ...userQueryArgs(),
     });
 
     await replaceUserUnits(user.id, unitIds);
@@ -259,33 +315,29 @@ export async function PATCH(request) {
 
     const data = {};
 
-    if (body.name !== undefined) data.name = body.name === null ? null : (String(body.name || "").trim() || null);
-    if (body.email !== undefined) data.email = body.email === null ? null : (String(body.email || "").trim() || null);
-    if (body.username !== undefined) data.username = String(body.username || "").trim();
-    if (body.department !== undefined) data.department = body.department === null ? null : (String(body.department || "").trim() || null);
-    if (body.role !== undefined) data.role = String(body.role || "user").trim();
+    if (body.name !== undefined) setUserScalarData(data, "name", body.name === null ? null : (String(body.name || "").trim() || null));
+    if (body.email !== undefined) setUserScalarData(data, "email", body.email === null ? null : (String(body.email || "").trim() || null));
+    if (body.username !== undefined) setUserScalarData(data, "username", String(body.username || "").trim());
+    if (body.department !== undefined) setUserScalarData(data, "department", body.department === null ? null : (String(body.department || "").trim() || null));
+    if (body.role !== undefined) setUserScalarData(data, "role", String(body.role || "user").trim());
     const expiresAt = parseExpiresAtInput(readExpiresAtInput(body));
-    if (expiresAt !== undefined) data.expiresAt = expiresAt;
+    if (expiresAt !== undefined) setUserScalarData(data, "expiresAt", expiresAt);
 
     const passwordHash = body.password ? await hashPasswordIfProvided(body.password) : null;
 
-    if (Array.isArray(body.access)) data.access = body.access.map((v) => String(v || ""));
+    if (Array.isArray(body.access)) setUserScalarData(data, "access", body.access.map((v) => String(v || "")));
 
     const rawRoleIds =
       Array.isArray(body.positions) && body.positions.length ? body.positions :
       Array.isArray(body.roles) && body.roles.length ? body.roles : null;
 
     let rolesUpdate = undefined;
-    if (rawRoleIds !== null) {
+    if (rawRoleIds !== null && hasUserField("roles")) {
       const roleIds = rawRoleIds.map((v) => Number(v)).filter((v) => !Number.isNaN(v) && v > 0);
       rolesUpdate = { deleteMany: {}, create: roleIds.map((roleId) => ({ role: { connect: { id: roleId } } })) };
     }
 
-    const user = await prisma.user.update({
-      where: { id },
-      data: { ...data, ...(rolesUpdate ? { roles: rolesUpdate } : {}) },
-      include: { roles: { include: { role: true } } },
-    });
+    const user = await updateUserRetryingUnknownFields(id, data, rolesUpdate);
 
     if (passwordHash) await updatePasswordRaw(id, passwordHash);
 
@@ -318,7 +370,7 @@ export async function DELETE(request) {
 
     const deleted = await prisma.user.delete({
       where: { id },
-      include: { roles: { include: { role: true } } },
+      ...userQueryArgs(),
     });
 
     return Response.json({ ok: true, user: await mapUser({ ...deleted, roles: [] }) });
