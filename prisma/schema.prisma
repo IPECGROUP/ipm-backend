@@ -103,6 +103,8 @@ model Project {
   roznegarEntries RoznegarEntry[]
   contracts        ContractInformation[]
   costBreakdownItems CostBreakdownItem[]
+  costForecastProjects CostForecastProject[]
+  costForecastValues   CostForecastValue[]
 
   @@map("projects")
 }
@@ -256,6 +258,35 @@ model BudgetEstimate {
 
   @@index([kind, projectId, code, createdAt(sort: Desc)])
   @@map("budget_estimates")
+}
+
+model CostForecastProject {
+  id        Int      @id @default(autoincrement())
+  projectId Int      @unique @map("project_id")
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@map("cost_forecast_projects")
+}
+
+model CostForecastValue {
+  id         Int      @id @default(autoincrement())
+  projectId  Int      @map("project_id")
+  budgetCode String   @map("budget_code") @db.VarChar(80)
+  monthKey   String   @map("month_key") @db.VarChar(12)
+  amount     BigInt   @default(0)
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, budgetCode, monthKey])
+  @@index([projectId])
+  @@index([projectId, budgetCode])
+  @@map("cost_forecast_values")
 }
 
 model UserUnit {
