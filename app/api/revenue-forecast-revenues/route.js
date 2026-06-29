@@ -66,6 +66,20 @@ async function ensureRevenueForecastTables() {
   `);
 
   await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "revenue_forecast_items" (
+      "id" SERIAL NOT NULL,
+      "project_id" INTEGER NOT NULL,
+      "parent_code" VARCHAR(80),
+      "code" VARCHAR(80) NOT NULL,
+      "title" VARCHAR(255) NOT NULL,
+      "row_index" INTEGER NOT NULL DEFAULT 0,
+      "created_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      "updated_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      CONSTRAINT "revenue_forecast_items_pkey" PRIMARY KEY ("id")
+    )
+  `);
+
+  await prisma.$executeRawUnsafe(`
     CREATE UNIQUE INDEX IF NOT EXISTS "revenue_forecast_projects_project_id_key"
     ON "revenue_forecast_projects"("project_id")
   `);
@@ -84,6 +98,14 @@ async function ensureRevenueForecastTables() {
   await prisma.$executeRawUnsafe(`
     CREATE INDEX IF NOT EXISTS "revenue_forecast_values_project_id_budget_code_idx"
     ON "revenue_forecast_values"("project_id", "budget_code")
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE UNIQUE INDEX IF NOT EXISTS "revenue_forecast_items_project_id_code_key"
+    ON "revenue_forecast_items"("project_id", "code")
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE INDEX IF NOT EXISTS "revenue_forecast_items_project_id_idx"
+    ON "revenue_forecast_items"("project_id")
   `);
 
   await prisma.$executeRawUnsafe(`
@@ -106,6 +128,19 @@ async function ensureRevenueForecastTables() {
       ) THEN
         ALTER TABLE "revenue_forecast_values"
         ADD CONSTRAINT "revenue_forecast_values_project_id_fkey"
+        FOREIGN KEY ("project_id") REFERENCES "projects"("id")
+        ON DELETE CASCADE ON UPDATE CASCADE;
+      END IF;
+    END $$
+  `);
+
+  await prisma.$executeRawUnsafe(`
+    DO $$ BEGIN
+      IF NOT EXISTS (
+        SELECT 1 FROM pg_constraint WHERE conname = 'revenue_forecast_items_project_id_fkey'
+      ) THEN
+        ALTER TABLE "revenue_forecast_items"
+        ADD CONSTRAINT "revenue_forecast_items_project_id_fkey"
         FOREIGN KEY ("project_id") REFERENCES "projects"("id")
         ON DELETE CASCADE ON UPDATE CASCADE;
       END IF;
@@ -137,6 +172,12 @@ export async function GET() {
       ORDER BY project_id ASC, budget_code ASC, month_key ASC
     `;
 
+    const items = await prisma.$queryRaw`
+      SELECT id, project_id, parent_code, code, title, row_index, updated_at
+      FROM revenue_forecast_items
+      ORDER BY project_id ASC, row_index ASC, id ASC
+    `;
+
     return json({
       projects: (projects || []).map((row) => ({
         project_id: Number(row.project_id),
@@ -148,6 +189,15 @@ export async function GET() {
         budget_code: String(row.budget_code ?? ""),
         month_key: String(row.month_key ?? ""),
         amount: String(row.amount ?? 0),
+        updated_at: row.updated_at?.toISOString?.() ?? null,
+      })),
+      items: (items || []).map((row) => ({
+        id: Number(row.id),
+        project_id: Number(row.project_id),
+        parent_code: String(row.parent_code ?? ""),
+        code: String(row.code ?? ""),
+        title: String(row.title ?? ""),
+        row_index: Number(row.row_index ?? 0),
         updated_at: row.updated_at?.toISOString?.() ?? null,
       })),
     });
@@ -165,6 +215,45 @@ export async function POST(req) {
     const projectId = toPositiveInt(body.project_id ?? body.projectId);
     if (!projectId) return json({ error: "project_id_required" }, 400);
     if (!(await ensureActiveProject(projectId))) return json({ error: "active_project_not_found" }, 404);
+
+    if (body?.action === "add_item") {
+      const title = cleanText(body.title, 255);
+      const parentCode = cleanText(body.parent_code ?? body.parentCode ?? "", 80);
+      if (!title) return json({ error: "title_required" }, 400);
+
+      const projectRows = await prisma.$queryRaw`
+        SELECT code FROM projects WHERE id = ${projectId} LIMIT 1
+      `;
+      const projectCode = String(projectRows?.[0]?.code ?? projectId).trim();
+      const suffix = String(Date.now()).slice(-8);
+      const code = cleanText(`${parentCode || projectCode}-${suffix}`, 80);
+      const orderRows = await prisma.$queryRaw`
+        SELECT COALESCE(MAX(row_index), 0) AS max_index
+        FROM revenue_forecast_items
+        WHERE project_id = ${projectId}
+      `;
+      const rowIndex = Number(orderRows?.[0]?.max_index ?? 0) + 1;
+
+      const rows = await prisma.$queryRaw`
+        INSERT INTO revenue_forecast_items (project_id, parent_code, code, title, row_index, updated_at)
+        VALUES (${projectId}, ${parentCode || null}, ${code}, ${title}, ${rowIndex}, CURRENT_TIMESTAMP)
+        RETURNING id, project_id, parent_code, code, title, row_index, updated_at
+      `;
+      const item = Array.isArray(rows) ? rows[0] : null;
+      return json({
+        ok: true,
+        item: item
+          ? {
+              id: Number(item.id),
+              project_id: Number(item.project_id),
+              parent_code: String(item.parent_code ?? ""),
+              code: String(item.code ?? ""),
+              title: String(item.title ?? ""),
+              row_index: Number(item.row_index ?? 0),
+            }
+          : null,
+      }, 201);
+    }
 
     await prisma.$executeRaw`
       INSERT INTO revenue_forecast_projects (project_id, updated_at)
@@ -187,6 +276,7 @@ export async function PATCH(req) {
     const body = await readJson(req);
     const projectId = toPositiveInt(body.project_id ?? body.projectId);
     const budgetCode = cleanText(body.budget_code ?? body.budgetCode, 80);
+    const itemId = toPositiveInt(body.item_id ?? body.itemId);
     const monthKey = cleanText(body.month_key ?? body.monthKey, 12);
     const amount = toBigIntAmount(body.amount);
 
@@ -231,9 +321,19 @@ export async function DELETE(req) {
         DELETE FROM revenue_forecast_values
         WHERE project_id = ${projectId} AND budget_code = ${budgetCode}
       `;
+      if (itemId) {
+        await prisma.$executeRaw`
+          DELETE FROM revenue_forecast_items
+          WHERE project_id = ${projectId} AND id = ${itemId}
+        `;
+      }
     } else {
       await prisma.$executeRaw`
         DELETE FROM revenue_forecast_values
+        WHERE project_id = ${projectId}
+      `;
+      await prisma.$executeRaw`
+        DELETE FROM revenue_forecast_items
         WHERE project_id = ${projectId}
       `;
       await prisma.$executeRaw`

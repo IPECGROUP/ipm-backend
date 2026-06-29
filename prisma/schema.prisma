@@ -105,8 +105,10 @@ model Project {
   costBreakdownItems CostBreakdownItem[]
   costForecastProjects CostForecastProject[]
   costForecastValues   CostForecastValue[]
+  costForecastItems    CostForecastItem[]
   revenueForecastProjects RevenueForecastProject[]
   revenueForecastValues   RevenueForecastValue[]
+  revenueForecastItems    RevenueForecastItem[]
 
   @@map("projects")
 }
@@ -291,6 +293,23 @@ model CostForecastValue {
   @@map("cost_forecast_values")
 }
 
+model CostForecastItem {
+  id         Int      @id @default(autoincrement())
+  projectId  Int      @map("project_id")
+  parentCode String?  @map("parent_code") @db.VarChar(80)
+  code       String   @db.VarChar(80)
+  title      String   @db.VarChar(255)
+  rowIndex   Int      @default(0) @map("row_index")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, code])
+  @@index([projectId])
+  @@map("cost_forecast_items")
+}
+
 model RevenueForecastProject {
   id        Int      @id @default(autoincrement())
   projectId Int      @unique @map("project_id")
@@ -318,6 +337,23 @@ model RevenueForecastValue {
   @@index([projectId])
   @@index([projectId, budgetCode])
   @@map("revenue_forecast_values")
+}
+
+model RevenueForecastItem {
+  id         Int      @id @default(autoincrement())
+  projectId  Int      @map("project_id")
+  parentCode String?  @map("parent_code") @db.VarChar(80)
+  code       String   @db.VarChar(80)
+  title      String   @db.VarChar(255)
+  rowIndex   Int      @default(0) @map("row_index")
+  createdAt  DateTime @default(now()) @map("created_at")
+  updatedAt  DateTime @updatedAt @map("updated_at")
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, code])
+  @@index([projectId])
+  @@map("revenue_forecast_items")
 }
 
 model UserUnit {
