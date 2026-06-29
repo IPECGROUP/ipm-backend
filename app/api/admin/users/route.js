@@ -123,7 +123,10 @@ function quoteIdent(v) {
 
 async function rawPasswordColumnRef() {
   const rows = await prisma.$queryRaw`
-    SELECT c.table_schema, c.table_name, c.column_name
+    SELECT
+      c.table_schema::text AS table_schema,
+      c.table_name::text AS table_name,
+      c.column_name::text AS column_name
     FROM information_schema.columns c
     WHERE c.table_schema NOT IN ('pg_catalog', 'information_schema')
       AND c.column_name IN ('password', 'passwordHash', 'password_hash')
