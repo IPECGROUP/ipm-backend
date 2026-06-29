@@ -96,34 +96,55 @@ function setPasswordData(data, passwordHash) {
   data[userPasswordFieldName()] = passwordHash;
 }
 
-function isUnknownPasswordFieldError(e) {
-  const msg = String(e?.message || "");
-  return msg.includes("Unknown argument") && (msg.includes("`password`") || msg.includes("`passwordHash`"));
+function quoteIdent(v) {
+  return `"${String(v || "").replace(/"/g, '""')}"`;
 }
 
-async function rawPasswordColumnName() {
+async function rawPasswordColumnRef() {
   const rows = await prisma.$queryRaw`
-    SELECT column_name
-    FROM information_schema.columns
-    WHERE table_schema = current_schema()
-      AND table_name = 'User'
-      AND column_name IN ('password', 'passwordHash', 'password_hash')
+    SELECT c.table_schema, c.table_name, c.column_name
+    FROM information_schema.columns c
+    WHERE c.table_schema NOT IN ('pg_catalog', 'information_schema')
+      AND c.column_name IN ('password', 'passwordHash', 'password_hash')
+      AND EXISTS (
+        SELECT 1
+        FROM information_schema.columns idc
+        WHERE idc.table_schema = c.table_schema
+          AND idc.table_name = c.table_name
+          AND idc.column_name = 'id'
+      )
+      AND EXISTS (
+        SELECT 1
+        FROM information_schema.columns uc
+        WHERE uc.table_schema = c.table_schema
+          AND uc.table_name = c.table_name
+          AND uc.column_name IN ('username', 'email')
+      )
+    ORDER BY
+      CASE WHEN c.table_schema = current_schema() THEN 0 ELSE 1 END,
+      CASE c.table_name WHEN 'User' THEN 0 WHEN 'users' THEN 1 WHEN 'user' THEN 2 ELSE 3 END,
+      CASE c.column_name WHEN 'password' THEN 0 WHEN 'passwordHash' THEN 1 WHEN 'password_hash' THEN 2 ELSE 3 END
+    LIMIT 1
   `;
-  const names = new Set((rows || []).map((r) => String(r.column_name || "")));
-  if (names.has("password")) return "password";
-  if (names.has("passwordHash")) return "passwordHash";
-  if (names.has("password_hash")) return "password_hash";
-  return "";
+  const row = Array.isArray(rows) ? rows[0] : null;
+  if (!row?.table_schema || !row?.table_name || !row?.column_name) return null;
+  return {
+    schema: String(row.table_schema),
+    table: String(row.table_name),
+    column: String(row.column_name),
+  };
 }
 
 async function updatePasswordRaw(userId, passwordHash) {
-  const column = await rawPasswordColumnName();
-  if (!column) {
+  const ref = await rawPasswordColumnRef();
+  if (!ref) {
     const err = new Error("password_column_not_found");
     err.status = 500;
     throw err;
   }
-  await prisma.$executeRawUnsafe(`UPDATE "User" SET "${column}" = $1 WHERE "id" = $2`, passwordHash, userId);
+  const table = `${quoteIdent(ref.schema)}.${quoteIdent(ref.table)}`;
+  const column = quoteIdent(ref.column);
+  await prisma.$executeRawUnsafe(`UPDATE ${table} SET ${column} = $1 WHERE "id" = $2`, passwordHash, userId);
 }
 
 export async function GET(request) {
@@ -247,7 +268,6 @@ export async function PATCH(request) {
     if (expiresAt !== undefined) data.expiresAt = expiresAt;
 
     const passwordHash = body.password ? await hashPasswordIfProvided(body.password) : null;
-    setPasswordData(data, passwordHash);
 
     if (Array.isArray(body.access)) data.access = body.access.map((v) => String(v || ""));
 
@@ -261,25 +281,13 @@ export async function PATCH(request) {
       rolesUpdate = { deleteMany: {}, create: roleIds.map((roleId) => ({ role: { connect: { id: roleId } } })) };
     }
 
-    let user;
-    try {
-      user = await prisma.user.update({
-        where: { id },
-        data: { ...data, ...(rolesUpdate ? { roles: rolesUpdate } : {}) },
-        include: { roles: { include: { role: true } } },
-      });
-    } catch (e) {
-      if (!passwordHash || !isUnknownPasswordFieldError(e)) throw e;
+    const user = await prisma.user.update({
+      where: { id },
+      data: { ...data, ...(rolesUpdate ? { roles: rolesUpdate } : {}) },
+      include: { roles: { include: { role: true } } },
+    });
 
-      delete data.password;
-      delete data.passwordHash;
-      user = await prisma.user.update({
-        where: { id },
-        data: { ...data, ...(rolesUpdate ? { roles: rolesUpdate } : {}) },
-        include: { roles: { include: { role: true } } },
-      });
-      await updatePasswordRaw(id, passwordHash);
-    }
+    if (passwordHash) await updatePasswordRaw(id, passwordHash);
 
     if (body.unitIds !== undefined || body.unit_ids !== undefined || body.units !== undefined) {
       const unitIds = ensureIntArray(body.unitIds ?? body.unit_ids ?? body.units ?? []);
