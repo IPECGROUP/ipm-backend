@@ -79,6 +79,53 @@ async function hashPasswordIfProvided(pw) {
   return await bcrypt.hash(p, 10);
 }
 
+function userScalarFieldNames() {
+  const fields = prisma?._runtimeDataModel?.models?.User?.fields || [];
+  return new Set(fields.filter((f) => f?.kind === "scalar").map((f) => f.name));
+}
+
+function userPasswordFieldName() {
+  const fields = userScalarFieldNames();
+  if (fields.has("password")) return "password";
+  if (fields.has("passwordHash")) return "passwordHash";
+  return "password";
+}
+
+function setPasswordData(data, passwordHash) {
+  if (!passwordHash) return;
+  data[userPasswordFieldName()] = passwordHash;
+}
+
+function isUnknownPasswordFieldError(e) {
+  const msg = String(e?.message || "");
+  return msg.includes("Unknown argument") && (msg.includes("`password`") || msg.includes("`passwordHash`"));
+}
+
+async function rawPasswordColumnName() {
+  const rows = await prisma.$queryRaw`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = current_schema()
+      AND table_name = 'User'
+      AND column_name IN ('password', 'passwordHash', 'password_hash')
+  `;
+  const names = new Set((rows || []).map((r) => String(r.column_name || "")));
+  if (names.has("password")) return "password";
+  if (names.has("passwordHash")) return "passwordHash";
+  if (names.has("password_hash")) return "password_hash";
+  return "";
+}
+
+async function updatePasswordRaw(userId, passwordHash) {
+  const column = await rawPasswordColumnName();
+  if (!column) {
+    const err = new Error("password_column_not_found");
+    err.status = 500;
+    throw err;
+  }
+  await prisma.$executeRawUnsafe(`UPDATE "User" SET "${column}" = $1 WHERE "id" = $2`, passwordHash, userId);
+}
+
 export async function GET(request) {
   try {
     const { searchParams } = new URL(request.url);
@@ -150,19 +197,20 @@ export async function POST(request) {
     const unitIds = ensureIntArray(body.unitIds ?? body.unit_ids ?? body.units ?? []);
 
     const passwordHash = await hashPasswordIfProvided(password);
+    const userData = {
+      name,
+      email,
+      username,
+      department,
+      role,
+      expiresAt: expiresAt === undefined ? null : expiresAt,
+      access,
+      roles: { create: roleIds.map((roleId) => ({ role: { connect: { id: roleId } } })) },
+    };
+    setPasswordData(userData, passwordHash);
 
     const user = await prisma.user.create({
-      data: {
-        name,
-        email,
-        username,
-        password: passwordHash,
-        department,
-        role,
-        expiresAt: expiresAt === undefined ? null : expiresAt,
-        access,
-        roles: { create: roleIds.map((roleId) => ({ role: { connect: { id: roleId } } })) },
-      },
+      data: userData,
       include: { roles: { include: { role: true } } },
     });
 
@@ -198,7 +246,8 @@ export async function PATCH(request) {
     const expiresAt = parseExpiresAtInput(readExpiresAtInput(body));
     if (expiresAt !== undefined) data.expiresAt = expiresAt;
 
-    if (body.password) data.password = await hashPasswordIfProvided(body.password);
+    const passwordHash = body.password ? await hashPasswordIfProvided(body.password) : null;
+    setPasswordData(data, passwordHash);
 
     if (Array.isArray(body.access)) data.access = body.access.map((v) => String(v || ""));
 
@@ -212,11 +261,25 @@ export async function PATCH(request) {
       rolesUpdate = { deleteMany: {}, create: roleIds.map((roleId) => ({ role: { connect: { id: roleId } } })) };
     }
 
-    const user = await prisma.user.update({
-      where: { id },
-      data: { ...data, ...(rolesUpdate ? { roles: rolesUpdate } : {}) },
-      include: { roles: { include: { role: true } } },
-    });
+    let user;
+    try {
+      user = await prisma.user.update({
+        where: { id },
+        data: { ...data, ...(rolesUpdate ? { roles: rolesUpdate } : {}) },
+        include: { roles: { include: { role: true } } },
+      });
+    } catch (e) {
+      if (!passwordHash || !isUnknownPasswordFieldError(e)) throw e;
+
+      delete data.password;
+      delete data.passwordHash;
+      user = await prisma.user.update({
+        where: { id },
+        data: { ...data, ...(rolesUpdate ? { roles: rolesUpdate } : {}) },
+        include: { roles: { include: { role: true } } },
+      });
+      await updatePasswordRaw(id, passwordHash);
+    }
 
     if (body.unitIds !== undefined || body.unit_ids !== undefined || body.units !== undefined) {
       const unitIds = ensureIntArray(body.unitIds ?? body.unit_ids ?? body.units ?? []);
