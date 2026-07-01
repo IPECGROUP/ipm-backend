@@ -25,6 +25,7 @@ model Unit {
 
   accessRules UnitAccessRule[]
   users       UserUnit[]
+  roles       UnitRoleMap[]
 }
 
 model UnitAccessRule {
@@ -198,6 +199,7 @@ model UserRole {
   id    Int           @id @default(autoincrement())
   name  String        @unique
   users UserRoleMap[]
+  units UnitRoleMap[]
 }
 
 model UserRoleMap {
@@ -208,6 +210,17 @@ model UserRoleMap {
   role UserRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
 
   @@id([userId, roleId])
+}
+
+model UnitRoleMap {
+  unitId Int
+  roleId Int
+
+  unit Unit     @relation(fields: [unitId], references: [id], onDelete: Cascade)
+  role UserRole @relation(fields: [roleId], references: [id], onDelete: Cascade)
+
+  @@id([unitId, roleId])
+  @@index([roleId])
 }
 
 model Center {
