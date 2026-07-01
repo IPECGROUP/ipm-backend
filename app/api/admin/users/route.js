@@ -171,6 +171,33 @@ async function updatePasswordRaw(userId, passwordHash) {
   await prisma.$executeRawUnsafe(`UPDATE ${table} SET ${column} = $1 WHERE "id" = $2`, passwordHash, userId);
 }
 
+function isMissingDbObjectError(e) {
+  const code = e?.code || e?.meta?.code;
+  return code === "42P01" || code === "42703" || (e?.code === "P2010" && ["42P01", "42703"].includes(e?.meta?.code));
+}
+
+async function optionalRaw(sql, ...params) {
+  try {
+    return await prisma.$executeRawUnsafe(sql, ...params);
+  } catch (e) {
+    if (isMissingDbObjectError(e)) return null;
+    throw e;
+  }
+}
+
+async function forceDetachUserReferences(userId) {
+  await optionalRaw(`DELETE FROM "UserRoleMap" WHERE "userId" = $1`, userId);
+  await optionalRaw(`DELETE FROM "UserUnit" WHERE "userId" = $1`, userId);
+  await optionalRaw(`DELETE FROM "Session" WHERE "userId" = $1`, userId);
+  await optionalRaw(`DELETE FROM "user_letter_prefs" WHERE "userId" = $1`, userId);
+  await optionalRaw(`DELETE FROM "roznegar_entries" WHERE "user_id" = $1`, userId);
+
+  await optionalRaw(`UPDATE "UploadedFile" SET "createdBy" = NULL WHERE "createdBy" = $1`, userId);
+  await optionalRaw(`UPDATE "PaymentDoc" SET "uploadedById" = NULL WHERE "uploadedById" = $1`, userId);
+  await optionalRaw(`UPDATE "PaymentRequest" SET "currentAssigneeUserId" = NULL WHERE "currentAssigneeUserId" = $1`, userId);
+  await optionalRaw(`DELETE FROM "PaymentRequest" WHERE "createdById" = $1`, userId);
+}
+
 function unknownArgumentName(e) {
   const msg = String(e?.message || "");
   const m = msg.match(/Unknown argument `([^`]+)`/);
@@ -368,14 +395,7 @@ export async function DELETE(request) {
       });
     }
 
-    await prisma.$executeRaw`
-      DELETE FROM "UserRoleMap"
-      WHERE "userId" = ${id}
-    `;
-    await prisma.$executeRaw`
-      DELETE FROM "UserUnit"
-      WHERE "userId" = ${id}
-    `;
+    await forceDetachUserReferences(id);
 
     const deleted = await prisma.user.delete({
       where: { id },
@@ -386,8 +406,8 @@ export async function DELETE(request) {
   } catch (e) {
     console.error("admin_users_delete_error", e);
     if (e?.code === "P2003") {
-      return new Response(JSON.stringify({ error: "user_in_use", message: "این کاربر در سوابق سیستم استفاده شده و قابل حذف کامل نیست", code: e?.code || null }), {
-        status: 409, headers: { "Content-Type": "application/json" },
+      return new Response(JSON.stringify({ error: "user_delete_blocked", message: e?.message || "delete_blocked_by_reference", code: e?.code || null }), {
+        status: 500, headers: { "Content-Type": "application/json" },
       });
     }
     return new Response(JSON.stringify({ error: e?.message || "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
