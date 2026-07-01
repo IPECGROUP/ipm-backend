@@ -26,6 +26,19 @@ async function ensureUserRoleMapTable() {
   `);
 }
 
+async function ensureUnitRoleMapTable() {
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS "UnitRoleMap" (
+      "unitId" INTEGER NOT NULL REFERENCES "Unit"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+      "roleId" INTEGER NOT NULL REFERENCES "UserRole"("id") ON DELETE CASCADE ON UPDATE CASCADE,
+      CONSTRAINT "UnitRoleMap_pkey" PRIMARY KEY ("unitId", "roleId")
+    )
+  `);
+  await prisma.$executeRawUnsafe(`
+    CREATE INDEX IF NOT EXISTS "UnitRoleMap_roleId_idx" ON "UnitRoleMap"("roleId")
+  `);
+}
+
 function userLabel(user) {
   return String(user?.name || user?.username || user?.email || `کاربر ${user?.id || ""}`).trim();
 }
@@ -99,9 +112,15 @@ async function getAssignmentItems(userId = null) {
 
 export async function GET() {
   try {
+    await Promise.all([ensureUserRoleMapTable(), ensureUnitRoleMapTable()]);
     const [items, roles] = await Promise.all([
       getAssignmentItems(),
-      prisma.userRole.findMany({ orderBy: { name: "asc" } }),
+      prisma.$queryRaw`
+        SELECT DISTINCT r."id", r."name"
+        FROM "UnitRoleMap" urm
+        INNER JOIN "UserRole" r ON r."id" = urm."roleId"
+        ORDER BY r."name" ASC
+      `,
     ]);
 
     return Response.json({

@@ -368,8 +368,14 @@ export async function DELETE(request) {
       });
     }
 
-    await prisma.userRoleMap.deleteMany({ where: { userId: id } });
-    await prisma.userUnit.deleteMany({ where: { userId: id } });
+    await prisma.$executeRaw`
+      DELETE FROM "UserRoleMap"
+      WHERE "userId" = ${id}
+    `;
+    await prisma.$executeRaw`
+      DELETE FROM "UserUnit"
+      WHERE "userId" = ${id}
+    `;
 
     const deleted = await prisma.user.delete({
       where: { id },
@@ -379,8 +385,13 @@ export async function DELETE(request) {
     return Response.json({ ok: true, user: await mapUser({ ...deleted, roles: [] }) });
   } catch (e) {
     console.error("admin_users_delete_error", e);
-    return new Response(JSON.stringify({ error: "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
-      status: 500, headers: { "Content-Type": "application/json" },
+    if (e?.code === "P2003") {
+      return new Response(JSON.stringify({ error: "user_in_use", message: "این کاربر در سوابق سیستم استفاده شده و قابل حذف کامل نیست", code: e?.code || null }), {
+        status: 409, headers: { "Content-Type": "application/json" },
+      });
+    }
+    return new Response(JSON.stringify({ error: e?.message || "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
+      status: e?.status || 500, headers: { "Content-Type": "application/json" },
     });
   }
 }
