@@ -26,8 +26,14 @@ function cleanText(value, max = 255) {
   return String(value ?? "").trim().slice(0, max);
 }
 
+function toEnDigits(value = "") {
+  return String(value)
+    .replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d))
+    .replace(/[٠-٩]/g, (d) => "٠١٢٣٤٥٦٧٨٩".indexOf(d));
+}
+
 function normalizeCode(value = "") {
-  return String(value ?? "")
+  return toEnDigits(value)
     .trim()
     .replace(/[^\d.-]/g, "-")
     .replace(/[.-]+/g, "-")
