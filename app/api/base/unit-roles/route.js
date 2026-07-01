@@ -212,12 +212,14 @@ export async function POST(request) {
 
 // DELETE /api/base/unit-roles
 // body: { unit_id, role_id? } ; omit role_id to clear all roles for a unit.
+// body: { unit_id, delete_unit: true } deletes the unit itself.
 export async function DELETE(request) {
   try {
     await ensureUnitRoleMapTable();
     const body = await readJson(request);
     const unitId = Number(body.unit_id ?? body.unitId);
     const roleId = Number(body.role_id ?? body.roleId);
+    const deleteUnit = body.delete_unit === true || body.deleteUnit === true;
 
     if (!unitId || !Number.isFinite(unitId)) {
       return new Response(JSON.stringify({ error: "unit_required" }), {
@@ -226,7 +228,9 @@ export async function DELETE(request) {
       });
     }
 
-    if (roleId && Number.isFinite(roleId)) {
+    if (deleteUnit) {
+      await prisma.unit.delete({ where: { id: unitId } });
+    } else if (roleId && Number.isFinite(roleId)) {
       await prisma.$executeRaw`
         DELETE FROM "UnitRoleMap"
         WHERE "unitId" = ${unitId} AND "roleId" = ${roleId}
@@ -244,6 +248,12 @@ export async function DELETE(request) {
     if (e.code === "P2025") {
       return new Response(JSON.stringify({ error: "not_found" }), {
         status: 404,
+        headers: { "Content-Type": "application/json" },
+      });
+    }
+    if (e.code === "P2003") {
+      return new Response(JSON.stringify({ error: "unit_in_use" }), {
+        status: 409,
         headers: { "Content-Type": "application/json" },
       });
     }
