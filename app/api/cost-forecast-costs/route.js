@@ -276,7 +276,6 @@ export async function PATCH(req) {
     const body = await readJson(req);
     const projectId = toPositiveInt(body.project_id ?? body.projectId);
     const budgetCode = cleanText(body.budget_code ?? body.budgetCode, 80);
-    const itemId = toPositiveInt(body.item_id ?? body.itemId);
     const monthKey = cleanText(body.month_key ?? body.monthKey, 12);
     const amount = toBigIntAmount(body.amount);
 
@@ -313,6 +312,7 @@ export async function DELETE(req) {
     const body = await readJson(req);
     const projectId = toPositiveInt(body.project_id ?? body.projectId);
     const budgetCode = cleanText(body.budget_code ?? body.budgetCode, 80);
+    const itemId = toPositiveInt(body.item_id ?? body.itemId);
 
     if (!projectId) return json({ error: "project_id_required" }, 400);
 

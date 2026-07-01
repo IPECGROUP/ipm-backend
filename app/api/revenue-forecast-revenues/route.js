@@ -26,6 +26,33 @@ function cleanText(value, max = 255) {
   return String(value ?? "").trim().slice(0, max);
 }
 
+function normalizeCode(value = "") {
+  return String(value ?? "")
+    .trim()
+    .replace(/[^\d.-]/g, "-")
+    .replace(/[.-]+/g, "-")
+    .replace(/^-/, "")
+    .replace(/-$/, "");
+}
+
+function nextChildCode(parentCode, codes = []) {
+  const base = normalizeCode(parentCode);
+  const prefix = base ? `${base}-` : "";
+  let max = 0;
+
+  codes.forEach((item) => {
+    const code = normalizeCode(item?.code ?? item?.budget_code ?? item);
+    if (!prefix || !code.startsWith(prefix)) return;
+    const rest = code.slice(prefix.length);
+    if (!/^\d+$/.test(rest)) return;
+    const value = Number(rest);
+    if (value > 9999) return;
+    max = Math.max(max, value);
+  });
+
+  return `${base}-${max + 1}`;
+}
+
 function toBigIntAmount(value) {
   const raw = String(value ?? "0")
     .replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d))
@@ -231,9 +258,17 @@ export async function POST(req) {
       const projectRows = await prisma.$queryRaw`
         SELECT code FROM projects WHERE id = ${projectId} LIMIT 1
       `;
-      const projectCode = String(projectRows?.[0]?.code ?? projectId).trim();
-      const suffix = String(Date.now()).slice(-8);
-      const code = cleanText(`${parentCode || projectCode}-${suffix}`, 80);
+      const projectCode = normalizeCode(projectRows?.[0]?.code ?? projectId);
+      const baseCode = normalizeCode(parentCode || projectCode);
+      const childLike = `${baseCode}-%`;
+      const existingRows = await prisma.$queryRaw`
+        SELECT code FROM revenue_forecast_items
+        WHERE project_id = ${projectId} AND code LIKE ${childLike}
+        UNION ALL
+        SELECT budget_code AS code FROM cost_breakdown_items
+        WHERE project_id = ${projectId} AND budget_code LIKE ${childLike}
+      `;
+      const code = cleanText(nextChildCode(baseCode, existingRows || []), 80);
       const orderRows = await prisma.$queryRaw`
         SELECT COALESCE(MAX(row_index), 0) AS max_index
         FROM revenue_forecast_items
@@ -283,7 +318,6 @@ export async function PATCH(req) {
     const body = await readJson(req);
     const projectId = toPositiveInt(body.project_id ?? body.projectId);
     const budgetCode = cleanText(body.budget_code ?? body.budgetCode, 80);
-    const itemId = toPositiveInt(body.item_id ?? body.itemId);
     const monthKey = cleanText(body.month_key ?? body.monthKey, 12);
     const amount = toBigIntAmount(body.amount);
 
@@ -320,6 +354,7 @@ export async function DELETE(req) {
     const body = await readJson(req);
     const projectId = toPositiveInt(body.project_id ?? body.projectId);
     const budgetCode = cleanText(body.budget_code ?? body.budgetCode, 80);
+    const itemId = toPositiveInt(body.item_id ?? body.itemId);
 
     if (!projectId) return json({ error: "project_id_required" }, 400);
 
