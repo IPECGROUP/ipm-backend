@@ -221,6 +221,13 @@ export async function POST(req) {
       const parentCode = cleanText(body.parent_code ?? body.parentCode ?? "", 80);
       if (!title) return json({ error: "title_required" }, 400);
 
+      await prisma.$executeRaw`
+        INSERT INTO revenue_forecast_projects (project_id, updated_at)
+        VALUES (${projectId}, CURRENT_TIMESTAMP)
+        ON CONFLICT (project_id)
+        DO UPDATE SET updated_at = CURRENT_TIMESTAMP
+      `;
+
       const projectRows = await prisma.$queryRaw`
         SELECT code FROM projects WHERE id = ${projectId} LIMIT 1
       `;
