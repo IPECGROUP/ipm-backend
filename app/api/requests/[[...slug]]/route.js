@@ -545,7 +545,7 @@ async function getUserContext(req, userId) {
   return {
     isMainAdmin: isMainAdminObserver(user),
     userName: user?.username || user?.name || user?.email || `کاربر #${userId}`,
-    unitName: unitNames.join("، ") || user?.department || unitKind || "نامشخص",
+    unitName: unitNames.join("، ") || "نامشخص",
     roleName: Array.from(new Set(roleNames)).join("، ") || "نامشخص",
     unitKind,
     unitKinds,

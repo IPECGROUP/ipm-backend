@@ -211,7 +211,7 @@ async function creatorContext(userId) {
   );
   const roleNames = Array.from(new Set(userRoles.map((row) => row.role?.name).filter(Boolean)));
   const userName = user?.username || user?.name || user?.email || `کاربر #${userId}`;
-  const unitName = unitNames.join("، ") || user?.department || "نامشخص";
+  const unitName = unitNames.join("، ") || "نامشخص";
   const roleName = roleNames.join("، ") || "نامشخص";
   return { user, userName, unitName, roleName, unitNames, roleNames };
 }
