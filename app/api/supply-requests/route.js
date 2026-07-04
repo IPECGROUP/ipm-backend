@@ -188,7 +188,12 @@ async function creatorContext(userId) {
   } catch (err) {
     console.warn("supply_requests_creator_context_assignment_warn", err?.message || err);
   }
+  if (user?.role && user.role !== "user") {
+    const exists = userRoles.some((row) => String(row?.role?.name || "") === String(user.role));
+    if (!exists) userRoles.push({ roleId: null, role: { name: user.role } });
+  }
   const roleIds = userRoles.map((row) => Number(row.roleId)).filter(Boolean);
+  const roleNamesRaw = Array.from(new Set(userRoles.map((row) => row.role?.name).filter(Boolean)));
   let unitRoleRows = [];
   if (roleIds.length) {
     try {
@@ -201,15 +206,29 @@ async function creatorContext(userId) {
       console.warn("supply_requests_creator_context_unit_role_warn", err?.message || err);
     }
   }
-  const membershipUnitIds = new Set(userUnits.map((row) => Number(row.unitId)).filter(Boolean));
-  const matchedUnitRoleRows = unitRoleRows.filter((row) => !membershipUnitIds.size || membershipUnitIds.has(Number(row.unitId)));
+  if (roleNamesRaw.length) {
+    try {
+      const byNameRows = await prisma.unitRoleMap.findMany({
+        where: { role: { name: { in: roleNamesRaw } } },
+        include: { unit: true, role: true },
+        orderBy: [{ unitId: "asc" }, { roleId: "asc" }],
+      });
+      const seen = new Set(unitRoleRows.map((row) => `${row.unitId}:${row.roleId}`));
+      byNameRows.forEach((row) => {
+        const key = `${row.unitId}:${row.roleId}`;
+        if (!seen.has(key)) unitRoleRows.push(row);
+      });
+    } catch (err) {
+      console.warn("supply_requests_creator_context_unit_role_name_warn", err?.message || err);
+    }
+  }
   const unitNames = Array.from(
     new Set([
       ...userUnits.map((row) => row.unit?.name).filter(Boolean),
-      ...matchedUnitRoleRows.map((row) => row.unit?.name).filter(Boolean),
+      ...unitRoleRows.map((row) => row.unit?.name).filter(Boolean),
     ])
   );
-  const roleNames = Array.from(new Set(userRoles.map((row) => row.role?.name).filter(Boolean)));
+  const roleNames = roleNamesRaw;
   const userName = user?.username || user?.name || user?.email || `کاربر #${userId}`;
   const unitName = unitNames.join("، ") || "نامشخص";
   const roleName = roleNames.join("، ") || "نامشخص";

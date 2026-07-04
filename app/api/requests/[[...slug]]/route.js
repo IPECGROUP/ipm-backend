@@ -467,6 +467,7 @@ async function getUserContext(req, userId) {
     console.warn("requests_user_roles_warn", err?.message || err);
   }
   const roleNames = (roleMaps || []).map((rm) => rm?.role?.name).filter(Boolean);
+  if (user?.role && user.role !== "user" && !roleNames.includes(user.role)) roleNames.push(user.role);
   const roleIds = (roleMaps || []).map((rm) => Number(rm?.roleId)).filter(Boolean);
   let unitRoleRows = [];
   if (roleIds.length) {
@@ -478,6 +479,22 @@ async function getUserContext(req, userId) {
         });
     } catch (err) {
       console.warn("requests_unit_roles_warn", err?.message || err);
+    }
+  }
+  if (roleNames.length) {
+    try {
+      const byNameRows = await prisma.unitRoleMap.findMany({
+        where: { role: { name: { in: roleNames } } },
+        include: { unit: true, role: true },
+        orderBy: [{ unitId: "asc" }, { roleId: "asc" }],
+      });
+      const seen = new Set(unitRoleRows.map((row) => `${row.unitId}:${row.roleId}`));
+      byNameRows.forEach((row) => {
+        const key = `${row.unitId}:${row.roleId}`;
+        if (!seen.has(key)) unitRoleRows.push(row);
+      });
+    } catch (err) {
+      console.warn("requests_unit_roles_by_name_warn", err?.message || err);
     }
   }
   const roleDerivedUnitKinds = Array.from(
@@ -502,12 +519,10 @@ async function getUserContext(req, userId) {
     .filter((x) => !!x.kind);
 
   const roleKeys = detectUserRoleKeys(roleNames);
-  const membershipUnitIds = new Set((userUnits || []).map((row) => Number(row.unitId)).filter(Boolean));
-  const matchedUnitRoleRows = unitRoleRows.filter((row) => !membershipUnitIds.size || membershipUnitIds.has(Number(row.unitId)));
   const unitNames = Array.from(
     new Set([
       ...(userUnits || []).map((row) => row?.unit?.name).filter(Boolean),
-      ...matchedUnitRoleRows.map((row) => row?.unit?.name).filter(Boolean),
+      ...unitRoleRows.map((row) => row?.unit?.name).filter(Boolean),
     ])
   );
   const unitKinds = Array.from(
