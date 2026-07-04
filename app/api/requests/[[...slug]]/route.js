@@ -155,6 +155,25 @@ function bigintToJson(v) {
   return v;
 }
 
+function formatRegistrationDateTime(date = new Date()) {
+  const dateJalali = new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+  const time = new Intl.DateTimeFormat("fa-IR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+  return { dateJalali: normalizeDigits(dateJalali), time: normalizeDigits(time) };
+}
+
+function normalizeIdList(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item ?? "").trim()).filter(Boolean);
+}
+
 function normalizeOut(row) {
   if (!row) return row;
   const history = Array.isArray(row.historyJson) ? row.historyJson : [];
@@ -194,6 +213,8 @@ function normalizeOut(row) {
     attachments: row.attachments,
     hasSupplyRequest: createdMeta.hasSupplyRequest || "no",
     supplyRequestId: createdMeta.supplyRequestId || null,
+    relatedLetterIds: normalizeIdList(createdMeta.relatedLetterIds),
+    registrationInfo: createdMeta.registrationInfo || null,
 
     created_by_user_id: row.createdById,
     createdById: row.createdById,
@@ -474,6 +495,8 @@ async function getUserContext(req, userId) {
 
   return {
     isMainAdmin: isMainAdminObserver(user),
+    userName: user?.username || user?.name || user?.email || `کاربر #${userId}`,
+    unitName: mappedUnits[0]?.unit?.name || user?.department || unitKind || "نامشخص",
     unitKind,
     unitKinds,
     roleNames,
@@ -753,7 +776,14 @@ export async function POST(req, ctx) {
   const generatedSerial = await makePaymentSerial({ dateJalali: data.dateJalali, projectId: data.projectId });
   if (!generatedSerial) return json({ error: "serial_generation_failed" }, 400);
 
-  const nowIso = new Date().toISOString();
+  const now = new Date();
+  const nowIso = now.toISOString();
+  const registrationInfo = {
+    ...formatRegistrationDateTime(now),
+    userId,
+    userName: uctx.userName,
+    unitName: uctx.unitName,
+  };
 
   const created = await prisma.paymentRequest.create({
     data: {
@@ -802,6 +832,8 @@ export async function POST(req, ctx) {
           userRoleNames: uctx.roleNames,
           hasSupplyRequest: body?.hasSupplyRequest === "yes" ? "yes" : "no",
           supplyRequestId: body?.hasSupplyRequest === "yes" ? String(body?.supplyRequestId || "") : null,
+          relatedLetterIds: normalizeIdList(body?.relatedLetterIds ?? body?.related_letter_ids),
+          registrationInfo,
         },
         {
           type: "step_set",

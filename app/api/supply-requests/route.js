@@ -104,8 +104,48 @@ function isMainAdmin(user) {
   return username === "marandi" || email === "marandi@ipecgroup.net";
 }
 
+function formatRegistrationDateTime(date = new Date()) {
+  const dateJalali = new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(date);
+  const time = new Intl.DateTimeFormat("fa-IR", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  }).format(date);
+  return { dateJalali: normalizeDigits(dateJalali).replace(/\//g, "/"), time: normalizeDigits(time) };
+}
+
+function createdHistory(row) {
+  const history = Array.isArray(row?.historyJson) ? row.historyJson : [];
+  return history.find((entry) => entry?.type === "created") || {};
+}
+
+function normalizeIdList(value) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item ?? "").trim()).filter(Boolean);
+}
+
+async function creatorContext(userId) {
+  const user = await prisma.user.findUnique({
+    where: { id: Number(userId) },
+    select: { id: true, name: true, username: true, email: true, department: true },
+  });
+  const userUnit = await prisma.userUnit.findFirst({
+    where: { userId: Number(userId) },
+    include: { unit: true },
+    orderBy: { unitId: "asc" },
+  });
+  const userName = user?.username || user?.name || user?.email || `کاربر #${userId}`;
+  const unitName = userUnit?.unit?.name || user?.department || "نامشخص";
+  return { user, userName, unitName };
+}
+
 function serializeItem(row) {
   if (!row) return null;
+  const created = createdHistory(row);
   return {
     id: row.id,
     serial: row.serial,
@@ -120,9 +160,11 @@ function serializeItem(row) {
     needDateJalali: row.docDateJalali,
     amount: bigintToJson(row.amount),
     attachments: row.attachments,
+    relatedLetterIds: normalizeIdList(created.relatedLetterIds),
     status: row.status,
     createdById: row.createdById,
     createdByName: row.createdBy?.name || row.createdBy?.username || row.createdBy?.email || null,
+    registrationInfo: created.registrationInfo || null,
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
   };
@@ -237,7 +279,16 @@ export async function POST(req) {
     const serial = await makeSerial({ dateJalali, project });
     if (!serial) return json({ error: "serial_generation_failed" }, 400);
 
-    const nowIso = new Date().toISOString();
+    const now = new Date();
+    const nowIso = now.toISOString();
+    const { userName, unitName } = await creatorContext(userId);
+    const registrationInfo = {
+      ...formatRegistrationDateTime(now),
+      userId: Number(userId),
+      userName,
+      unitName,
+    };
+    const relatedLetterIds = normalizeIdList(body.relatedLetterIds ?? body.related_letter_ids);
     const created = await prisma.paymentRequest.create({
       data: {
         serial,
@@ -272,6 +323,8 @@ export async function POST(req) {
             note: "",
             at: nowIso,
             requestKind: REQUEST_DOC_ID,
+            registrationInfo,
+            relatedLetterIds,
           },
         ],
       },
