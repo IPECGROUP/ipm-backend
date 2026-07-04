@@ -93,6 +93,59 @@ function toBigIntSafe(v) {
   }
 }
 
+function normalizeDigits(value = "") {
+  return String(value ?? "")
+    .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06F0))
+    .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660));
+}
+
+function jalaliYY(value) {
+  const fromValue = normalizeDigits(String(value || "")).match(/^(\d{4})/)?.[1];
+  if (fromValue) return fromValue.slice(-2);
+  try {
+    const year = new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric" }).format(new Date());
+    return normalizeDigits(year).slice(-2);
+  } catch {
+    return "00";
+  }
+}
+
+function normalizeProjectCode(value = "") {
+  const raw = normalizeDigits(value).trim();
+  if (/^\d{3}$/.test(raw)) return raw;
+  return raw.match(/^(\d{3})/)?.[1] || "";
+}
+
+async function makePaymentSerial({ dateJalali, projectId }) {
+  if (!projectId) return null;
+  const project = await prisma.project.findUnique({
+    where: { id: Number(projectId) },
+    select: { code: true },
+  });
+  const yy = jalaliYY(dateJalali);
+  const projectCode = normalizeProjectCode(project?.code);
+  if (!projectCode) return null;
+
+  const prefix = `${yy}/${projectCode}/`;
+  const rows = await prisma.paymentRequest.findMany({
+    where: {
+      serial: { startsWith: prefix },
+      OR: [{ docId: null }, { NOT: { docId: "supply_request" } }],
+    },
+    select: { serial: true },
+    take: 1000,
+  });
+
+  let maxSeq = 0;
+  const re = new RegExp(`^${yy}/${projectCode}/(\\d{4})$`);
+  for (const row of rows) {
+    const m = normalizeDigits(row?.serial || "").match(re);
+    if (m) maxSeq = Math.max(maxSeq, Number(m[1]) || 0);
+  }
+
+  return `${prefix}${String(maxSeq + 1).padStart(4, "0")}`;
+}
+
 function bigintToJson(v) {
   if (typeof v === "bigint") {
     const n = Number(v);
@@ -104,6 +157,8 @@ function bigintToJson(v) {
 
 function normalizeOut(row) {
   if (!row) return row;
+  const history = Array.isArray(row.historyJson) ? row.historyJson : [];
+  const createdMeta = history.find((entry) => entry?.type === "created") || {};
   return {
     id: row.id,
     serial: row.serial,
@@ -137,6 +192,8 @@ function normalizeOut(row) {
     history_json: row.historyJson,
     historyJson: row.historyJson,
     attachments: row.attachments,
+    hasSupplyRequest: createdMeta.hasSupplyRequest || "no",
+    supplyRequestId: createdMeta.supplyRequestId || null,
 
     created_by_user_id: row.createdById,
     createdById: row.createdById,
@@ -688,15 +745,19 @@ export async function POST(req, ctx) {
   const amountBI = data.amount ?? toBigIntSafe(body?.amountStr) ?? BigInt(0);
 
   if (!title) return json({ error: "title_required" }, 400);
+  if (!data.projectId) return json({ error: "project_required" }, 400);
+  if (!data.budgetCode) return json({ error: "budget_code_required" }, 400);
   if (amountBI <= 0n) return json({ error: "amount_must_be_positive" }, 400);
 
-  const enforcedScope = unitKind;
+  const enforcedScope = "projects";
+  const generatedSerial = await makePaymentSerial({ dateJalali: data.dateJalali, projectId: data.projectId });
+  if (!generatedSerial) return json({ error: "serial_generation_failed" }, 400);
 
   const nowIso = new Date().toISOString();
 
   const created = await prisma.paymentRequest.create({
     data: {
-      serial: data.serial ?? null,
+      serial: generatedSerial,
       dateJalali: data.dateJalali ?? null,
       scope: enforcedScope,
       title,
@@ -739,6 +800,8 @@ export async function POST(req, ctx) {
           enforcedScope,
           userUnitKind: unitKind,
           userRoleNames: uctx.roleNames,
+          hasSupplyRequest: body?.hasSupplyRequest === "yes" ? "yes" : "no",
+          supplyRequestId: body?.hasSupplyRequest === "yes" ? String(body?.supplyRequestId || "") : null,
         },
         {
           type: "step_set",
