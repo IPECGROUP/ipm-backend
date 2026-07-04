@@ -270,12 +270,9 @@ async function resolveProject(projectId) {
   });
 }
 
-async function makeSerial({ dateJalali, project }) {
+async function makeSerial({ dateJalali }) {
   const yy = getJalaliYY(dateJalali);
-  const projectCode = normalizeProjectCode(project?.code);
-  if (!projectCode) return null;
-
-  const prefix = `${yy}/${projectCode}/`;
+  const prefix = `${yy}/`;
   const rows = await prisma.paymentRequest.findMany({
     where: {
       docId: REQUEST_DOC_ID,
@@ -286,7 +283,7 @@ async function makeSerial({ dateJalali, project }) {
   });
 
   let maxSeq = 0;
-  const re = new RegExp(`^${yy}/${projectCode}/(\\d{3})$`);
+  const re = new RegExp(`^${yy}/(?:\\d{3}/)?(\\d{3})$`);
   for (const row of rows) {
     const m = String(row?.serial || "").match(re);
     if (m) maxSeq = Math.max(maxSeq, Number(m[1]) || 0);
@@ -368,7 +365,7 @@ export async function POST(req) {
       select: { id: true },
     });
 
-    const serial = await makeSerial({ dateJalali, project });
+    const serial = await makeSerial({ dateJalali });
     if (!serial) return json({ error: "serial_generation_failed" }, 400);
 
     const now = new Date();

@@ -122,17 +122,9 @@ function normalizeProjectCode(value = "") {
   return raw.match(/^(\d{3})/)?.[1] || "";
 }
 
-async function makePaymentSerial({ dateJalali, projectId }) {
-  if (!projectId) return null;
-  const project = await prisma.project.findUnique({
-    where: { id: Number(projectId) },
-    select: { code: true },
-  });
+async function makePaymentSerial({ dateJalali }) {
   const yy = jalaliYY(dateJalali);
-  const projectCode = normalizeProjectCode(project?.code);
-  if (!projectCode) return null;
-
-  const prefix = `${yy}/${projectCode}/`;
+  const prefix = `${yy}/`;
   const rows = await prisma.paymentRequest.findMany({
     where: {
       serial: { startsWith: prefix },
@@ -143,7 +135,7 @@ async function makePaymentSerial({ dateJalali, projectId }) {
   });
 
   let maxSeq = 0;
-  const re = new RegExp(`^${yy}/${projectCode}/(\\d{4})$`);
+  const re = new RegExp(`^${yy}/(?:\\d{3}/)?(\\d{4})$`);
   for (const row of rows) {
     const m = normalizeDigits(row?.serial || "").match(re);
     if (m) maxSeq = Math.max(maxSeq, Number(m[1]) || 0);
@@ -838,7 +830,7 @@ export async function POST(req, ctx) {
   if (amountBI <= 0n) return json({ error: "amount_must_be_positive" }, 400);
 
   const enforcedScope = "projects";
-  const generatedSerial = await makePaymentSerial({ dateJalali: data.dateJalali, projectId: data.projectId });
+  const generatedSerial = await makePaymentSerial({ dateJalali: data.dateJalali });
   if (!generatedSerial) return json({ error: "serial_generation_failed" }, 400);
 
   const now = new Date();
