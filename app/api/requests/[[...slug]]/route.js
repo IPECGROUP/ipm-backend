@@ -169,6 +169,18 @@ function formatRegistrationDateTime(date = new Date()) {
   return { dateJalali: normalizeDigits(dateJalali), time: normalizeDigits(time) };
 }
 
+function clientDateTimeInfo(value) {
+  const dateJalali = norm(value?.dateJalali ?? value?.date ?? "").replaceAll("-", "/");
+  const time = norm(value?.time ?? "");
+  const timezone = norm(value?.timezone ?? "");
+  if (!dateJalali && !time) return null;
+  return {
+    ...(dateJalali ? { dateJalali: normalizeDigits(dateJalali) } : {}),
+    ...(time ? { time: normalizeDigits(time) } : {}),
+    ...(timezone ? { timezone } : {}),
+  };
+}
+
 function normalizeIdList(value) {
   if (!Array.isArray(value)) return [];
   return value.map((item) => String(item ?? "").trim()).filter(Boolean);
@@ -439,6 +451,14 @@ async function getUserContext(req, userId) {
     include: { role: true },
   });
   const roleNames = (roleMaps || []).map((rm) => rm?.role?.name).filter(Boolean);
+  const roleIds = (roleMaps || []).map((rm) => Number(rm?.roleId)).filter(Boolean);
+  const unitRoleRows = roleIds.length
+    ? await prisma.unitRoleMap.findMany({
+        where: { roleId: { in: roleIds } },
+        include: { unit: true, role: true },
+        orderBy: [{ unitId: "asc" }, { roleId: "asc" }],
+      })
+    : [];
   const roleDerivedUnitKinds = Array.from(
     new Set(
       roleNames
@@ -461,6 +481,14 @@ async function getUserContext(req, userId) {
     .filter((x) => !!x.kind);
 
   const roleKeys = detectUserRoleKeys(roleNames);
+  const membershipUnitIds = new Set((userUnits || []).map((row) => Number(row.unitId)).filter(Boolean));
+  const matchedUnitRoleRows = unitRoleRows.filter((row) => !membershipUnitIds.size || membershipUnitIds.has(Number(row.unitId)));
+  const unitNames = Array.from(
+    new Set([
+      ...(userUnits || []).map((row) => row?.unit?.name).filter(Boolean),
+      ...matchedUnitRoleRows.map((row) => row?.unit?.name).filter(Boolean),
+    ])
+  );
   const unitKinds = Array.from(
     new Set([
       ...mappedUnits.map((x) => x.kind).filter(Boolean),
@@ -496,7 +524,8 @@ async function getUserContext(req, userId) {
   return {
     isMainAdmin: isMainAdminObserver(user),
     userName: user?.username || user?.name || user?.email || `کاربر #${userId}`,
-    unitName: mappedUnits[0]?.unit?.name || user?.department || unitKind || "نامشخص",
+    unitName: unitNames.join("، ") || user?.department || unitKind || "نامشخص",
+    roleName: Array.from(new Set(roleNames)).join("، ") || "نامشخص",
     unitKind,
     unitKinds,
     roleNames,
@@ -780,9 +809,11 @@ export async function POST(req, ctx) {
   const nowIso = now.toISOString();
   const registrationInfo = {
     ...formatRegistrationDateTime(now),
+    ...(clientDateTimeInfo(body?.clientRegistrationInfo) || {}),
     userId,
     userName: uctx.userName,
     unitName: uctx.unitName,
+    roleName: uctx.roleName,
   };
 
   const created = await prisma.paymentRequest.create({

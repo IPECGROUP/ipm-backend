@@ -36,6 +36,25 @@ async function getUserId(req) {
   const sessionId = readCookieValue(cookie, "ipm_session");
   if (sessionId) {
     try {
+      const session = await prisma.session.findUnique({
+        where: { id: sessionId },
+        include: { user: true },
+      });
+      if (session?.user?.id && (!session.expiresAt || new Date(session.expiresAt).getTime() >= Date.now())) {
+        return Number(session.user.id);
+      }
+    } catch {}
+
+    try {
+      const session = await prisma.session.findUnique({
+        where: { token: sessionId },
+      });
+      if (session?.userId && (!session.expiresAt || new Date(session.expiresAt).getTime() >= Date.now())) {
+        return Number(session.userId);
+      }
+    } catch {}
+
+    try {
       const session = await prisma.session.findFirst({
         where: { OR: [{ id: sessionId }, { token: sessionId }] },
       });
@@ -118,6 +137,18 @@ function formatRegistrationDateTime(date = new Date()) {
   return { dateJalali: normalizeDigits(dateJalali).replace(/\//g, "/"), time: normalizeDigits(time) };
 }
 
+function clientDateTimeInfo(value) {
+  const dateJalali = cleanText(value?.dateJalali ?? value?.date ?? "", 20).replaceAll("-", "/");
+  const time = cleanText(value?.time ?? "", 10);
+  const timezone = cleanText(value?.timezone ?? "", 80);
+  if (!dateJalali && !time) return null;
+  return {
+    ...(dateJalali ? { dateJalali: normalizeDigits(dateJalali) } : {}),
+    ...(time ? { time: normalizeDigits(time) } : {}),
+    ...(timezone ? { timezone } : {}),
+  };
+}
+
 function createdHistory(row) {
   const history = Array.isArray(row?.historyJson) ? row.historyJson : [];
   return history.find((entry) => entry?.type === "created") || {};
@@ -133,14 +164,39 @@ async function creatorContext(userId) {
     where: { id: Number(userId) },
     select: { id: true, name: true, username: true, email: true, department: true },
   });
-  const userUnit = await prisma.userUnit.findFirst({
-    where: { userId: Number(userId) },
-    include: { unit: true },
-    orderBy: { unitId: "asc" },
-  });
+  const [userUnits, userRoles] = await Promise.all([
+    prisma.userUnit.findMany({
+      where: { userId: Number(userId) },
+      include: { unit: true },
+      orderBy: { unitId: "asc" },
+    }),
+    prisma.userRoleMap.findMany({
+      where: { userId: Number(userId) },
+      include: { role: true },
+      orderBy: { roleId: "asc" },
+    }),
+  ]);
+  const roleIds = userRoles.map((row) => Number(row.roleId)).filter(Boolean);
+  const unitRoleRows = roleIds.length
+    ? await prisma.unitRoleMap.findMany({
+        where: { roleId: { in: roleIds } },
+        include: { unit: true, role: true },
+        orderBy: [{ unitId: "asc" }, { roleId: "asc" }],
+      })
+    : [];
+  const membershipUnitIds = new Set(userUnits.map((row) => Number(row.unitId)).filter(Boolean));
+  const matchedUnitRoleRows = unitRoleRows.filter((row) => !membershipUnitIds.size || membershipUnitIds.has(Number(row.unitId)));
+  const unitNames = Array.from(
+    new Set([
+      ...userUnits.map((row) => row.unit?.name).filter(Boolean),
+      ...matchedUnitRoleRows.map((row) => row.unit?.name).filter(Boolean),
+    ])
+  );
+  const roleNames = Array.from(new Set(userRoles.map((row) => row.role?.name).filter(Boolean)));
   const userName = user?.username || user?.name || user?.email || `کاربر #${userId}`;
-  const unitName = userUnit?.unit?.name || user?.department || "نامشخص";
-  return { user, userName, unitName };
+  const unitName = unitNames.join("، ") || user?.department || "نامشخص";
+  const roleName = roleNames.join("، ") || "نامشخص";
+  return { user, userName, unitName, roleName, unitNames, roleNames };
 }
 
 function serializeItem(row) {
@@ -281,12 +337,15 @@ export async function POST(req) {
 
     const now = new Date();
     const nowIso = now.toISOString();
-    const { userName, unitName } = await creatorContext(userId);
+    const { userName, unitName, roleName } = await creatorContext(userId);
+    const clientInfo = clientDateTimeInfo(body.clientRegistrationInfo);
     const registrationInfo = {
       ...formatRegistrationDateTime(now),
+      ...(clientInfo || {}),
       userId: Number(userId),
       userName,
       unitName,
+      roleName,
     };
     const relatedLetterIds = normalizeIdList(body.relatedLetterIds ?? body.related_letter_ids);
     const created = await prisma.paymentRequest.create({
