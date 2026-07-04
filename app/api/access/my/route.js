@@ -7,7 +7,6 @@ import { prisma } from "../../../../lib/prisma";
 
 const KNOWN_PAGES = [
   "DefineBudgetCentersPage",
-  "EstimatesPage",
   "BudgetAllocationPage",
   "ReportsPage",
   "UsersPage",

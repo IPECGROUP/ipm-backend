@@ -16,3 +16,9 @@ Creating turbopack project {
   testMode: true
 }
  ✓ Ready in 687ms
+ GET /api/base/user-role-assignments 200 in 435ms (compile: 313ms, render: 122ms)
+ GET /api/base/units 200 in 835ms (compile: 771ms, render: 64ms)
+ GET /api/base/unit-roles 200 in 142ms (compile: 88ms, render: 54ms)
+ GET /api/admin/users 200 in 97ms (compile: 73ms, render: 23ms)
+ GET /api/base/user-role-assignments 200 in 21ms (compile: 3ms, render: 18ms)
+ GET /api/base/units 200 in 27ms (compile: 8ms, render: 19ms)
