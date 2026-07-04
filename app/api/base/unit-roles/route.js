@@ -2,6 +2,7 @@
 export const runtime = "nodejs";
 
 import { prisma } from "../../../../lib/prisma";
+import { isDbConnectionError, mapFallbackUnitRoleItems, readOrgStore, writeOrgStore } from "../../../../lib/orgStructureFallback";
 
 async function readJson(request) {
   try {
@@ -153,6 +154,17 @@ export async function GET() {
     });
   } catch (e) {
     console.error("unit_roles_get_error", e);
+    if (isDbConnectionError(e)) {
+      const data = readOrgStore();
+      const items = mapFallbackUnitRoleItems(data);
+      return Response.json({
+        ok: true,
+        fallback: true,
+        items,
+        units: items.map((u) => ({ id: u.id, name: u.name, label: u.name, code: u.code })),
+        roles: data.roles,
+      });
+    }
     return new Response(JSON.stringify({ error: "internal_error" }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
@@ -164,9 +176,9 @@ export async function GET() {
 // body: { unit_id?, unit_name?, role_id?, role_name? }
 // If only unit_name is provided, this creates/returns the unit without assigning a role.
 export async function POST(request) {
+  const body = await readJson(request);
   try {
     await ensureUnitRoleMapTable();
-    const body = await readJson(request);
     const unit = await resolveUnit({
       unitId: body.unit_id ?? body.unitId,
       unitName: body.unit_name ?? body.unitName,
@@ -203,6 +215,39 @@ export async function POST(request) {
     return Response.json({ ok: true, item, unit, role });
   } catch (e) {
     console.error("unit_roles_post_error", e);
+    if (isDbConnectionError(e)) {
+      const data = readOrgStore();
+      let unit = null;
+      const unitId = Number(body.unit_id ?? body.unitId);
+      const unitName = normalize(body.unit_name ?? body.unitName);
+      if (unitId) unit = data.units.find((u) => Number(u.id) === unitId) || null;
+      if (!unit && unitName) {
+        unit = data.units.find((u) => u.name === unitName) || null;
+        if (!unit) {
+          unit = { id: data.nextUnitId++, name: unitName, label: unitName, code: null };
+          data.units.push(unit);
+        }
+      }
+      if (!unit) return new Response(JSON.stringify({ error: "unit_required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+
+      let role = null;
+      const roleId = Number(body.role_id ?? body.roleId);
+      const roleName = normalize(body.role_name ?? body.roleName);
+      if (roleId) role = data.roles.find((r) => Number(r.id) === roleId) || null;
+      if (!role && roleName) {
+        role = data.roles.find((r) => r.name === roleName) || null;
+        if (!role) {
+          role = { id: data.nextRoleId++, name: roleName };
+          data.roles.push(role);
+        }
+      }
+      if (role && !data.unitRoles.some((x) => Number(x.unitId) === Number(unit.id) && Number(x.roleId) === Number(role.id))) {
+        data.unitRoles.push({ unitId: Number(unit.id), roleId: Number(role.id) });
+      }
+      writeOrgStore(data);
+      const item = mapFallbackUnitRoleItems(data).find((u) => Number(u.id) === Number(unit.id)) || null;
+      return Response.json({ ok: true, fallback: true, item, unit, role });
+    }
     return new Response(JSON.stringify({ error: e.message || "internal_error" }), {
       status: e.status || 500,
       headers: { "Content-Type": "application/json" },
@@ -214,9 +259,9 @@ export async function POST(request) {
 // body: { unit_id, role_id? } ; omit role_id to clear all roles for a unit.
 // body: { unit_id, delete_unit: true } deletes the unit itself.
 export async function DELETE(request) {
+  const body = await readJson(request);
   try {
     await ensureUnitRoleMapTable();
-    const body = await readJson(request);
     const unitId = Number(body.unit_id ?? body.unitId);
     const roleId = Number(body.role_id ?? body.roleId);
     const deleteUnit = body.delete_unit === true || body.deleteUnit === true;
@@ -245,6 +290,23 @@ export async function DELETE(request) {
     return Response.json({ ok: true });
   } catch (e) {
     console.error("unit_roles_delete_error", e);
+    if (isDbConnectionError(e)) {
+      const unitId = Number(body.unit_id ?? body.unitId);
+      const roleId = Number(body.role_id ?? body.roleId);
+      const deleteUnit = body.delete_unit === true || body.deleteUnit === true;
+      const data = readOrgStore();
+      if (deleteUnit) {
+        data.units = data.units.filter((u) => Number(u.id) !== unitId);
+        data.unitRoles = data.unitRoles.filter((x) => Number(x.unitId) !== unitId);
+        data.userUnits = data.userUnits.filter((x) => Number(x.unitId) !== unitId);
+      } else if (roleId) {
+        data.unitRoles = data.unitRoles.filter((x) => !(Number(x.unitId) === unitId && Number(x.roleId) === roleId));
+      } else {
+        data.unitRoles = data.unitRoles.filter((x) => Number(x.unitId) !== unitId);
+      }
+      writeOrgStore(data);
+      return Response.json({ ok: true, fallback: true });
+    }
     if (e.code === "P2025") {
       return new Response(JSON.stringify({ error: "not_found" }), {
         status: 404,

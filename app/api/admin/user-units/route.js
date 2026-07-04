@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { prisma } from "../../../../lib/prisma";
+import { isDbConnectionError, readOrgStore, writeOrgStore } from "../../../../lib/orgStructureFallback";
 
 function toInt(v) {
   const n = Number(v);
@@ -26,11 +27,10 @@ async function readJsonSafe(request) {
 // GET /api/admin/user-units?user_id=9
 // GET /api/admin/user-units?unit_id=1
 export async function GET(request) {
+  const url = new URL(request.url);
+  const userId = toInt(url.searchParams.get("user_id") ?? url.searchParams.get("userId"));
+  const unitId = toInt(url.searchParams.get("unit_id") ?? url.searchParams.get("unitId"));
   try {
-    const url = new URL(request.url);
-    const userId = toInt(url.searchParams.get("user_id") ?? url.searchParams.get("userId"));
-    const unitId = toInt(url.searchParams.get("unit_id") ?? url.searchParams.get("unitId"));
-
     if (!userId && !unitId) {
       return new Response(JSON.stringify({ error: "user_id_or_unit_id_required" }), {
         status: 400,
@@ -73,6 +73,25 @@ export async function GET(request) {
     });
   } catch (e) {
     console.error("user_units_get_error", e);
+    if (isDbConnectionError(e)) {
+      const data = readOrgStore();
+      if (userId) {
+        return Response.json({
+          ok: true,
+          fallback: true,
+          items: data.userUnits
+            .filter((row) => Number(row.userId) === userId)
+            .map((row) => ({ userId: row.userId, unitId: row.unitId, unit: data.units.find((u) => Number(u.id) === Number(row.unitId)) || null })),
+        });
+      }
+      return Response.json({
+        ok: true,
+        fallback: true,
+        items: data.userUnits
+          .filter((row) => Number(row.unitId) === unitId)
+          .map((row) => ({ userId: row.userId, unitId: row.unitId, user: data.users.find((u) => Number(u.id) === Number(row.userId)) || null })),
+      });
+    }
     return new Response(JSON.stringify({ error: "internal_error", message: e?.message || "" }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
@@ -85,9 +104,8 @@ export async function GET(request) {
 // 1) { user_id: 9, unit_id: 1 } => افزودن یک عضویت
 // 2) { user_id: 9, unit_ids: [1,2] } => جایگزینی کامل عضویت‌های کاربر
 export async function POST(request) {
+  const body = await readJsonSafe(request);
   try {
-    const body = await readJsonSafe(request);
-
     const userId = toInt(body.user_id ?? body.userId);
     const singleUnitId = toInt(body.unit_id ?? body.unitId);
 
@@ -135,6 +153,22 @@ export async function POST(request) {
       return Response.json({ ok: true, note: "already_exists" });
     }
     console.error("user_units_post_error", e);
+    if (isDbConnectionError(e)) {
+      const data = readOrgStore();
+      const userId = toInt(body.user_id ?? body.userId);
+      const singleUnitId = toInt(body.unit_id ?? body.unitId);
+      const unitIdsRaw = Array.isArray(body.unit_ids ?? body.unitIds) ? (body.unit_ids ?? body.unitIds) : null;
+      const unitIds = unitIdsRaw ? unitIdsRaw.map(toInt).filter(Boolean) : null;
+      if (!userId) return new Response(JSON.stringify({ error: "user_id_required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+      if (unitIds) {
+        data.userUnits = data.userUnits.filter((x) => Number(x.userId) !== userId);
+        unitIds.forEach((unitId) => data.userUnits.push({ userId, unitId }));
+      } else if (singleUnitId && !data.userUnits.some((x) => Number(x.userId) === userId && Number(x.unitId) === singleUnitId)) {
+        data.userUnits.push({ userId, unitId: singleUnitId });
+      }
+      writeOrgStore(data);
+      return Response.json({ ok: true, fallback: true, userId, unitIds: unitIds || [singleUnitId].filter(Boolean) });
+    }
     return new Response(JSON.stringify({ error: "internal_error", message: e?.message || "" }), {
       status: 500,
       headers: { "Content-Type": "application/json" },
@@ -144,11 +178,10 @@ export async function POST(request) {
 
 // DELETE /api/admin/user-units?user_id=9&unit_id=1
 export async function DELETE(request) {
+  const url = new URL(request.url);
+  const userId = toInt(url.searchParams.get("user_id") ?? url.searchParams.get("userId"));
+  const unitId = toInt(url.searchParams.get("unit_id") ?? url.searchParams.get("unitId"));
   try {
-    const url = new URL(request.url);
-    const userId = toInt(url.searchParams.get("user_id") ?? url.searchParams.get("userId"));
-    const unitId = toInt(url.searchParams.get("unit_id") ?? url.searchParams.get("unitId"));
-
     if (!userId || !unitId) {
       return new Response(JSON.stringify({ error: "user_id_and_unit_id_required" }), {
         status: 400,
@@ -165,6 +198,12 @@ export async function DELETE(request) {
     // اگر نبود هم مهم نیست
     if (String(e?.code || "") === "P2025") return Response.json({ ok: true });
     console.error("user_units_delete_error", e);
+    if (isDbConnectionError(e)) {
+      const data = readOrgStore();
+      data.userUnits = data.userUnits.filter((x) => !(Number(x.userId) === userId && Number(x.unitId) === unitId));
+      writeOrgStore(data);
+      return Response.json({ ok: true, fallback: true });
+    }
     return new Response(JSON.stringify({ error: "internal_error", message: e?.message || "" }), {
       status: 500,
       headers: { "Content-Type": "application/json" },

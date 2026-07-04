@@ -1,0 +1,115 @@
+{
+  "nextUnitId": 38,
+  "nextRoleId": 40,
+  "units": [
+    {
+      "id": 1,
+      "name": "مدیریت",
+      "code": null
+    },
+    {
+      "id": 2,
+      "name": "منابع انسانی و اداری",
+      "code": null
+    },
+    {
+      "id": 3,
+      "name": "برنامه ریزی و کنترل پروژه",
+      "code": null
+    },
+    {
+      "id": 4,
+      "name": "مالی",
+      "code": null
+    },
+    {
+      "id": 5,
+      "name": "تامین و پشتیبانی",
+      "code": null
+    }
+  ],
+  "roles": [
+    {
+      "id": 1,
+      "name": "admin"
+    },
+    {
+      "id": 2,
+      "name": "مدیریت ارشد"
+    },
+    {
+      "id": 3,
+      "name": "رئیس هیات مدیره"
+    },
+    {
+      "id": 4,
+      "name": "مسئول اداری"
+    },
+    {
+      "id": 5,
+      "name": "مسوول اداری"
+    },
+    {
+      "id": 6,
+      "name": "مدیر برنامه ریزی"
+    },
+    {
+      "id": 7,
+      "name": "مدیر برنامه‌ریزی"
+    }
+  ],
+  "unitRoles": [
+    {
+      "unitId": 1,
+      "roleId": 1
+    },
+    {
+      "unitId": 1,
+      "roleId": 2
+    },
+    {
+      "unitId": 1,
+      "roleId": 3
+    },
+    {
+      "unitId": 2,
+      "roleId": 4
+    },
+    {
+      "unitId": 2,
+      "roleId": 5
+    },
+    {
+      "unitId": 3,
+      "roleId": 6
+    },
+    {
+      "unitId": 3,
+      "roleId": 7
+    }
+  ],
+  "userRoles": [
+    {
+      "userId": 1,
+      "roleId": 1
+    },
+    {
+      "userId": 1,
+      "roleId": 2
+    },
+    {
+      "userId": 1,
+      "roleId": 3
+    }
+  ],
+  "userUnits": [],
+  "users": [
+    {
+      "id": 1,
+      "username": "marandi",
+      "name": "marandi",
+      "email": "marandi@ipecgroup.net",
+      "label": "marandi"
+    }
+  ]
+}

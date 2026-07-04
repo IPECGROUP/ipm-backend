@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 
 import { prisma } from "../../../../lib/prisma";
 import bcrypt from "bcryptjs";
+import { isDbConnectionError, readOrgStore, writeOrgStore } from "../../../../lib/orgStructureFallback";
 
 async function readJson(request) {
   try { return await request.json(); } catch { return {}; }
@@ -77,6 +78,32 @@ async function hashPasswordIfProvided(pw) {
   const p = String(pw || "");
   if (!p) return null;
   return await bcrypt.hash(p, 10);
+}
+
+function mapFallbackUser(u, data) {
+  const unitIds = (data.userUnits || [])
+    .filter((row) => Number(row.userId) === Number(u.id))
+    .map((row) => Number(row.unitId))
+    .filter(Boolean);
+  const positions = (data.userRoles || [])
+    .filter((row) => Number(row.userId) === Number(u.id))
+    .map((row) => data.roles.find((role) => Number(role.id) === Number(row.roleId)))
+    .filter(Boolean)
+    .map((role) => ({ id: role.id, name: role.name }));
+
+  return {
+    id: u.id,
+    name: u.name || null,
+    email: u.email || null,
+    username: u.username || null,
+    department: u.department || null,
+    role: u.role || "user",
+    expiresAt: u.expiresAt || null,
+    access: Array.isArray(u.access) ? u.access : [],
+    access_labels: Array.isArray(u.access) ? u.access : [],
+    unitIds: Array.from(new Set(unitIds)),
+    positions,
+  };
 }
 
 function userScalarFieldNames() {
@@ -269,6 +296,22 @@ export async function GET(request) {
     return Response.json({ users: out });
   } catch (e) {
     console.error("admin_users_get_error", e);
+    if (isDbConnectionError(e)) {
+      const { searchParams } = new URL(request.url);
+      const idParam = searchParams.get("id");
+      const data = readOrgStore();
+      if (idParam) {
+        const id = Number(idParam);
+        const user = data.users.find((u) => Number(u.id) === id) || null;
+        if (!user) {
+          return new Response(JSON.stringify({ error: "not_found", message: "user_not_found" }), {
+            status: 404, headers: { "Content-Type": "application/json" },
+          });
+        }
+        return Response.json({ fallback: true, user: mapFallbackUser(user, data) });
+      }
+      return Response.json({ fallback: true, users: data.users.map((u) => mapFallbackUser(u, data)) });
+    }
     return new Response(JSON.stringify({ error: "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
       status: 500, headers: { "Content-Type": "application/json" },
     });
@@ -276,9 +319,8 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
+  const body = await readJson(request);
   try {
-    const body = await readJson(request);
-
     const username = String(body.username || "").trim();
     const password = String(body.password || "");
     if (!username || !password) {
@@ -326,6 +368,34 @@ export async function POST(request) {
     return Response.json({ user: await mapUser(user) });
   } catch (e) {
     console.error("admin_users_post_error", e);
+    if (isDbConnectionError(e)) {
+      const username = String(body.username || "").trim();
+      const password = String(body.password || "");
+      if (!username || !password) {
+        return new Response(JSON.stringify({ error: "username_password_required", message: "username_password_required" }), {
+          status: 400, headers: { "Content-Type": "application/json" },
+        });
+      }
+      const data = readOrgStore();
+      const nextId = Math.max(0, ...data.users.map((u) => Number(u.id) || 0)) + 1;
+      const user = {
+        id: nextId,
+        name: body.name ? String(body.name).trim() : null,
+        email: body.email ? String(body.email).trim() : null,
+        username,
+        department: body.department ? String(body.department).trim() : null,
+        role: body.role ? String(body.role).trim() : "user",
+        expiresAt: parseExpiresAtInput(readExpiresAtInput(body))?.toISOString?.() || null,
+        access: Array.isArray(body.access) ? body.access.map((v) => String(v || "")) : [],
+        label: body.name || username,
+      };
+      data.users.push(user);
+      const unitIds = ensureIntArray(body.unitIds ?? body.unit_ids ?? body.units ?? []);
+      data.userUnits = data.userUnits.filter((row) => Number(row.userId) !== nextId);
+      unitIds.forEach((unitId) => data.userUnits.push({ userId: nextId, unitId }));
+      writeOrgStore(data);
+      return Response.json({ fallback: true, user: mapFallbackUser(user, data) });
+    }
     return new Response(JSON.stringify({ error: e?.message || "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
       status: e?.status || 500, headers: { "Content-Type": "application/json" },
     });
@@ -333,9 +403,8 @@ export async function POST(request) {
 }
 
 export async function PATCH(request) {
+  const body = await readJson(request);
   try {
-    const body = await readJson(request);
-
     const id = Number(body.id);
     if (!id || Number.isNaN(id)) {
       return new Response(JSON.stringify({ error: "invalid_id", message: "شناسه نامعتبر است" }), {
@@ -379,6 +448,45 @@ export async function PATCH(request) {
     return Response.json({ user: await mapUser(user) });
   } catch (e) {
     console.error("admin_users_patch_error", e);
+    if (isDbConnectionError(e)) {
+      const id = Number(body.id);
+      if (!id || Number.isNaN(id)) {
+        return new Response(JSON.stringify({ error: "invalid_id", message: "invalid_id" }), {
+          status: 400, headers: { "Content-Type": "application/json" },
+        });
+      }
+      const data = readOrgStore();
+      const user = data.users.find((u) => Number(u.id) === id) || null;
+      if (!user) {
+        return new Response(JSON.stringify({ error: "not_found", message: "user_not_found" }), {
+          status: 404, headers: { "Content-Type": "application/json" },
+        });
+      }
+      if (body.name !== undefined) user.name = body.name === null ? null : (String(body.name || "").trim() || null);
+      if (body.email !== undefined) user.email = body.email === null ? null : (String(body.email || "").trim() || null);
+      if (body.username !== undefined) user.username = String(body.username || "").trim();
+      if (body.department !== undefined) user.department = body.department === null ? null : (String(body.department || "").trim() || null);
+      if (body.role !== undefined) user.role = String(body.role || "user").trim();
+      const expiresAt = parseExpiresAtInput(readExpiresAtInput(body));
+      if (expiresAt !== undefined) user.expiresAt = expiresAt ? expiresAt.toISOString() : null;
+      if (Array.isArray(body.access)) user.access = body.access.map((v) => String(v || ""));
+
+      const rawRoleIds =
+        Array.isArray(body.positions) && body.positions.length ? body.positions :
+        Array.isArray(body.roles) && body.roles.length ? body.roles : null;
+      if (rawRoleIds !== null) {
+        const roleIds = rawRoleIds.map((v) => Number(v)).filter((v) => !Number.isNaN(v) && v > 0);
+        data.userRoles = data.userRoles.filter((row) => Number(row.userId) !== id);
+        roleIds.forEach((roleId) => data.userRoles.push({ userId: id, roleId }));
+      }
+      if (body.unitIds !== undefined || body.unit_ids !== undefined || body.units !== undefined) {
+        const unitIds = ensureIntArray(body.unitIds ?? body.unit_ids ?? body.units ?? []);
+        data.userUnits = data.userUnits.filter((row) => Number(row.userId) !== id);
+        unitIds.forEach((unitId) => data.userUnits.push({ userId: id, unitId }));
+      }
+      writeOrgStore(data);
+      return Response.json({ fallback: true, user: mapFallbackUser(user, data) });
+    }
     return new Response(JSON.stringify({ error: e?.message || "internal_error", message: e?.message || "unknown_error", code: e?.code || null }), {
       status: e?.status || 500, headers: { "Content-Type": "application/json" },
     });
@@ -386,8 +494,8 @@ export async function PATCH(request) {
 }
 
 export async function DELETE(request) {
+  const body = await readJson(request);
   try {
-    const body = await readJson(request);
     const id = Number(body.id);
     if (!id || Number.isNaN(id)) {
       return new Response(JSON.stringify({ error: "invalid_id", message: "شناسه نامعتبر است" }), {
@@ -405,6 +513,21 @@ export async function DELETE(request) {
     return Response.json({ ok: true, user: await mapUser({ ...deleted, roles: [] }) });
   } catch (e) {
     console.error("admin_users_delete_error", e);
+    if (isDbConnectionError(e)) {
+      const id = Number(body.id);
+      if (!id || Number.isNaN(id)) {
+        return new Response(JSON.stringify({ error: "invalid_id", message: "invalid_id" }), {
+          status: 400, headers: { "Content-Type": "application/json" },
+        });
+      }
+      const data = readOrgStore();
+      const user = data.users.find((u) => Number(u.id) === id) || null;
+      data.users = data.users.filter((u) => Number(u.id) !== id);
+      data.userRoles = data.userRoles.filter((row) => Number(row.userId) !== id);
+      data.userUnits = data.userUnits.filter((row) => Number(row.userId) !== id);
+      writeOrgStore(data);
+      return Response.json({ ok: true, fallback: true, user: user ? mapFallbackUser(user, data) : null });
+    }
     if (e?.code === "P2003") {
       return new Response(JSON.stringify({ error: "user_delete_blocked", message: e?.message || "delete_blocked_by_reference", code: e?.code || null }), {
         status: 500, headers: { "Content-Type": "application/json" },

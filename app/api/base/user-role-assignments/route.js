@@ -2,6 +2,7 @@
 export const runtime = "nodejs";
 
 import { prisma } from "../../../../lib/prisma";
+import { isDbConnectionError, mapFallbackAssignmentItems, readOrgStore, writeOrgStore } from "../../../../lib/orgStructureFallback";
 
 async function readJson(request) {
   try {
@@ -137,6 +138,17 @@ export async function GET() {
     });
   } catch (e) {
     console.error("user_role_assignments_get_error", e);
+    if (isDbConnectionError(e)) {
+      const data = readOrgStore();
+      const items = mapFallbackAssignmentItems(data);
+      return Response.json({
+        ok: true,
+        fallback: true,
+        items,
+        users: items.map((u) => ({ id: u.id, name: u.name, username: u.username, email: u.email, label: u.label })),
+        roles: data.roles,
+      });
+    }
     return new Response(JSON.stringify({ error: e?.message || "internal_error" }), {
       status: e?.status || 500,
       headers: { "Content-Type": "application/json" },
@@ -145,9 +157,9 @@ export async function GET() {
 }
 
 export async function POST(request) {
+  const body = await readJson(request);
   try {
     await ensureUserRoleMapTable();
-    const body = await readJson(request);
     const userId = Number(body.user_id ?? body.userId);
     const roleId = Number(body.role_id ?? body.roleId);
 
@@ -191,6 +203,19 @@ export async function POST(request) {
     return Response.json({ ok: true, item, user, role });
   } catch (e) {
     console.error("user_role_assignments_post_error", e);
+    if (isDbConnectionError(e)) {
+      const data = readOrgStore();
+      const userId = Number(body.user_id ?? body.userId);
+      const roleId = Number(body.role_id ?? body.roleId);
+      if (!userId || !roleId) return new Response(JSON.stringify({ error: "user_role_required" }), { status: 400, headers: { "Content-Type": "application/json" } });
+      if (!data.users.some((u) => Number(u.id) === userId)) data.users.push({ id: userId, username: `user${userId}`, name: `کاربر ${userId}`, email: null, label: `کاربر ${userId}` });
+      const role = data.roles.find((r) => Number(r.id) === roleId);
+      if (!role) return new Response(JSON.stringify({ error: "role_not_found" }), { status: 404, headers: { "Content-Type": "application/json" } });
+      if (!data.userRoles.some((x) => Number(x.userId) === userId && Number(x.roleId) === roleId)) data.userRoles.push({ userId, roleId });
+      writeOrgStore(data);
+      const item = mapFallbackAssignmentItems(data).find((u) => Number(u.id) === userId) || null;
+      return Response.json({ ok: true, fallback: true, item, role });
+    }
     return new Response(JSON.stringify({ error: e?.message || "internal_error" }), {
       status: e?.status || 500,
       headers: { "Content-Type": "application/json" },
@@ -199,9 +224,9 @@ export async function POST(request) {
 }
 
 export async function DELETE(request) {
+  const body = await readJson(request);
   try {
     await ensureUserRoleMapTable();
-    const body = await readJson(request);
     const userId = Number(body.user_id ?? body.userId);
     const roleId = Number(body.role_id ?? body.roleId);
 
@@ -227,6 +252,16 @@ export async function DELETE(request) {
     return Response.json({ ok: true });
   } catch (e) {
     console.error("user_role_assignments_delete_error", e);
+    if (isDbConnectionError(e)) {
+      const data = readOrgStore();
+      const userId = Number(body.user_id ?? body.userId);
+      const roleId = Number(body.role_id ?? body.roleId);
+      data.userRoles = roleId
+        ? data.userRoles.filter((x) => !(Number(x.userId) === userId && Number(x.roleId) === roleId))
+        : data.userRoles.filter((x) => Number(x.userId) !== userId);
+      writeOrgStore(data);
+      return Response.json({ ok: true, fallback: true });
+    }
     return new Response(JSON.stringify({ error: e?.message || "internal_error" }), {
       status: e?.status || 500,
       headers: { "Content-Type": "application/json" },

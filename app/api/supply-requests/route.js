@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "../../../lib/prisma";
+import { fallbackUnitsForRoleNames } from "../../../lib/orgStructureFallback";
 
 export const runtime = "nodejs";
 
@@ -165,6 +166,63 @@ function normalizeIdList(value) {
   return value.map((item) => String(item ?? "").trim()).filter(Boolean);
 }
 
+function normalizeFaText(value = "") {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/ي/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/\s+/g, " ");
+}
+
+function inferredUnitNamesFromRoles(roleNames = []) {
+  const units = new Set();
+  for (const raw of Array.isArray(roleNames) ? roleNames : []) {
+    const role = normalizeFaText(raw);
+    if (!role) continue;
+
+    if (
+      role === "admin" ||
+      role.includes("مدیریت ارشد") ||
+      role.includes("رئیس هیات مدیره") ||
+      role.includes("رییس هیات مدیره") ||
+      role.includes("هیات مدیره") ||
+      role.includes("مدیرعامل") ||
+      role.includes("مدیر عامل")
+    ) {
+      units.add("مدیریت");
+    }
+
+    if (
+      role.includes("مسئول اداری") ||
+      role.includes("مسوول اداری") ||
+      role.includes("اداری") ||
+      role.includes("منابع انسانی") ||
+      role.includes("hr")
+    ) {
+      units.add("منابع انسانی و اداری");
+    }
+
+    if (
+      role.includes("برنامه ریزی") ||
+      role.includes("برنامه‌ریزی") ||
+      role.includes("کنترل پروژه") ||
+      role.includes("مدیر برنامه")
+    ) {
+      units.add("برنامه ریزی و کنترل پروژه");
+    }
+
+    if (role.includes("مالی") || role.includes("حسابدار") || role.includes("حسابداری")) {
+      units.add("مالی");
+    }
+
+    if (role.includes("تامین") || role.includes("تأمین") || role.includes("بازرگانی")) {
+      units.add("تامین و پشتیبانی");
+    }
+  }
+  return Array.from(units);
+}
+
 async function creatorContext(userId) {
   const user = await prisma.user.findUnique({
     where: { id: Number(userId) },
@@ -226,6 +284,8 @@ async function creatorContext(userId) {
     new Set([
       ...userUnits.map((row) => row.unit?.name).filter(Boolean),
       ...unitRoleRows.map((row) => row.unit?.name).filter(Boolean),
+      ...fallbackUnitsForRoleNames(roleNamesRaw),
+      ...inferredUnitNamesFromRoles(roleNamesRaw),
     ])
   );
   const roleNames = roleNamesRaw;

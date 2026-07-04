@@ -6,3 +6,525 @@
    * C:\Users\user\Desktop\budget\server\ipm-v2\package-lock.json
 
 [baseline-browser-mapping] The data in this module is over two months old.  To ensure accurate Baseline data, please update: `npm i baseline-browser-mapping@latest -D`
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__343bb762._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+unit_roles_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `prisma.$executeRawUnsafe()` invocation:
+
+
+
+    at async ensureUnitRoleMapTable (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__343bb762._.js:157:5)
+    at async getUnitRoleItems (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__343bb762._.js:259:5)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__343bb762._.js:288:32)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: undefined,
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__9d6df581._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6ae73190._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+user_role_assignments_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `prisma.$executeRawUnsafe()` invocation:
+
+
+
+    at async ensureUserRoleMapTable (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__9d6df581._.js:156:5)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__9d6df581._.js:241:9)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6ae73190._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6ae73190._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6ae73190._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: undefined,
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__745b0938._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+user_units_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `__TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].userUnit.findMany()` invocation in
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__745b0938._.js:182:176
+
+  179     });
+  180 }
+  181 if (userId) {
+→ 182     const rows = await __TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].userUnit.findMany(
+
+    at <unknown> (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__745b0938._.js:182:176)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__745b0938._.js:182:26)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: [Object],
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__343bb762._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+unit_roles_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `prisma.$executeRawUnsafe()` invocation:
+
+
+
+    at async ensureUnitRoleMapTable (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__343bb762._.js:157:5)
+    at async getUnitRoleItems (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__343bb762._.js:259:5)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__343bb762._.js:288:32)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: undefined,
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__a5871cf5._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6ae73190._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+user_role_assignments_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `prisma.$executeRawUnsafe()` invocation:
+
+
+
+    at async ensureUserRoleMapTable (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__a5871cf5._.js:342:5)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__a5871cf5._.js:427:9)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6ae73190._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6ae73190._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6ae73190._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: undefined,
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__03ef5b31._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+unit_roles_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `prisma.$executeRawUnsafe()` invocation:
+
+
+
+    at async ensureUnitRoleMapTable (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__03ef5b31._.js:343:5)
+    at async getUnitRoleItems (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__03ef5b31._.js:445:5)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__03ef5b31._.js:474:32)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: undefined,
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__47049fbf._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+user_units_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `__TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].userUnit.findMany()` invocation in
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__47049fbf._.js:368:176
+
+  365     });
+  366 }
+  367 if (userId1) {
+→ 368     const rows = await __TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].userUnit.findMany(
+
+    at <unknown> (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__47049fbf._.js:368:176)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__47049fbf._.js:368:26)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: [Object],
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__47049fbf._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+ReferenceError: userId is not defined
+    at GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__47049fbf._.js:421:13)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js:10530:13)
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__47049fbf._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+user_units_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `__TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].userUnit.findMany()` invocation in
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__47049fbf._.js:417:176
+
+  414     });
+  415 }
+  416 if (userId) {
+→ 417     const rows = await __TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].userUnit.findMany(
+
+    at <unknown> (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__47049fbf._.js:417:176)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__47049fbf._.js:417:26)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: [Object],
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__25a4e28c._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6d78b10f._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+user_roles_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `__TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].userRole.findMany()` invocation in
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__25a4e28c._.js:395:173
+
+  392 }
+  393 async function GET() {
+  394     try {
+→ 395         const items = await __TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].userRole.findMany(
+
+    at <unknown> (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__25a4e28c._.js:395:173)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__25a4e28c._.js:395:23)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6d78b10f._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6d78b10f._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6d78b10f._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: [Object],
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__386bb347._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_33da51e5._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+admin_users_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `__TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].user.findMany()` invocation in
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__386bb347._.js:689:169
+
+  686         user: await mapUser(user)
+  687     });
+  688 }
+→ 689 const users = await __TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].user.findMany(
+
+    at <unknown> (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__386bb347._.js:689:169)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__386bb347._.js:689:23)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_33da51e5._.js:12304:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_33da51e5._.js:12366:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_33da51e5._.js:12419:13) {
+  code: 'ECONNREFUSED',
+  meta: [Object],
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__fa1b109e._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_d698453f._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+units_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `__TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].unit.findMany()` invocation in
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__fa1b109e._.js:419:169
+
+  416         } : null
+  417     });
+  418 }
+→ 419 const units = await __TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].unit.findMany(
+
+    at <unknown> (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__fa1b109e._.js:419:169)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__fa1b109e._.js:419:23)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_d698453f._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_d698453f._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_d698453f._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: [Object],
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__fa1b109e._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_d698453f._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+units_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `__TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].unit.findMany()` invocation in
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__fa1b109e._.js:419:169
+
+  416         } : null
+  417     });
+  418 }
+→ 419 const units = await __TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].unit.findMany(
+
+    at <unknown> (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__fa1b109e._.js:419:169)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__fa1b109e._.js:419:23)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_d698453f._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_d698453f._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_d698453f._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: [Object],
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__a5871cf5._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6ae73190._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+user_role_assignments_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `prisma.$executeRawUnsafe()` invocation:
+
+
+
+    at async ensureUserRoleMapTable (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__a5871cf5._.js:391:5)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__a5871cf5._.js:476:9)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6ae73190._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6ae73190._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6ae73190._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: undefined,
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__25a4e28c._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6d78b10f._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+user_roles_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `__TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].userRole.findMany()` invocation in
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__25a4e28c._.js:395:173
+
+  392 }
+  393 async function GET() {
+  394     try {
+→ 395         const items = await __TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].userRole.findMany(
+
+    at <unknown> (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__25a4e28c._.js:395:173)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__25a4e28c._.js:395:23)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6d78b10f._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6d78b10f._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6d78b10f._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: [Object],
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__03ef5b31._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+unit_roles_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `__TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].userRole.findMany()` invocation in
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__03ef5b31._.js:525:157
+
+  522 try {
+  523     const [items, roles] = await Promise.all([
+  524         getUnitRoleItems(),
+→ 525         __TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].userRole.findMany(
+
+    at <unknown> (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__03ef5b31._.js:525:157)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__03ef5b31._.js:523:32)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: [Object],
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__cc4eaddc._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6d78b10f._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+user_roles_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `__TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].userRole.findMany()` invocation in
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__cc4eaddc._.js:409:173
+
+  406 }
+  407 async function GET() {
+  408     try {
+→ 409         const items = await __TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].userRole.findMany(
+
+    at <unknown> (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__cc4eaddc._.js:409:173)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__cc4eaddc._.js:409:23)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6d78b10f._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6d78b10f._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_6d78b10f._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: [Object],
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__e27714c6._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_d698453f._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+units_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `__TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].unit.findMany()` invocation in
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__e27714c6._.js:433:169
+
+  430         } : null
+  431     });
+  432 }
+→ 433 const units = await __TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].unit.findMany(
+
+    at <unknown> (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__e27714c6._.js:433:169)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__e27714c6._.js:433:23)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_d698453f._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_d698453f._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_d698453f._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: [Object],
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__6b2040fd._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+unit_roles_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `prisma.$executeRawUnsafe()` invocation:
+
+
+
+    at async ensureUnitRoleMapTable (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__6b2040fd._.js:406:5)
+    at async getUnitRoleItems (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__6b2040fd._.js:508:5)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__6b2040fd._.js:537:32)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_b4440771._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: undefined,
+  clientVersion: '6.19.0'
+}
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__2e8e62db._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\@prisma\client\runtime\library.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\compiled\next-server\app-route-turbo.runtime.dev.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\base-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\next-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\dev\next-dev-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\trace\trace.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\router-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+C:\Users\user\Desktop\budget\server\ipm-v2\node_modules\next\dist\server\lib\start-server.js: Invalid source map. Only conformant source maps can be used to find the original code. Cause: Error: sourceMapURL could not be parsed
+user_units_get_error Error [PrismaClientKnownRequestError]: 
+Invalid `__TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].userUnit.findMany()` invocation in
+C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__2e8e62db._.js:431:176
+
+  428     });
+  429 }
+  430 if (userId) {
+→ 431     const rows = await __TURBOPACK__imported__module__$5b$project$5d2f$ipm$2d$v2$2f$lib$2f$prisma$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["prisma"].userUnit.findMany(
+
+    at <unknown> (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__2e8e62db._.js:431:176)
+    at async GET (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\[root-of-the-server]__2e8e62db._.js:431:26)
+    at async responseGenerator (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js:10415:38)
+    at async handleResponse (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js:10477:32)
+    at async handler (C:\Users\user\Desktop\budget\server\ipm-v2\.next\dev\server\chunks\39a25_9d58f8e7._.js:10530:13) {
+  code: 'ECONNREFUSED',
+  meta: [Object],
+  clientVersion: '6.19.0'
+}

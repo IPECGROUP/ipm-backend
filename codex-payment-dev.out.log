@@ -16,3 +16,22 @@ Creating turbopack project {
   testMode: true
 }
  ✓ Ready in 934ms
+ GET /api/base/unit-roles 500 in 606ms (compile: 468ms, render: 138ms)
+ GET /api/base/user-role-assignments 500 in 633ms (compile: 515ms, render: 118ms)
+ GET /api/admin/user-units?user_id=1 500 in 91ms (compile: 62ms, render: 29ms)
+ GET /api/base/unit-roles 500 in 19ms (compile: 3ms, render: 16ms)
+ GET /api/base/user-role-assignments 200 in 105ms (compile: 39ms, render: 67ms)
+ GET /api/base/unit-roles 200 in 136ms (compile: 62ms, render: 74ms)
+ GET /api/admin/user-units?user_id=1 500 in 63ms (compile: 36ms, render: 28ms)
+ GET /api/admin/user-units?user_id=1 200 in 80ms (compile: 39ms, render: 41ms)
+ GET /api/base/user-roles 200 in 186ms (compile: 124ms, render: 62ms)
+ GET /api/admin/users 200 in 232ms (compile: 160ms, render: 73ms)
+ GET /api/base/units 200 in 923ms (compile: 899ms, render: 24ms)
+ GET /api/base/units 200 in 43ms (compile: 13ms, render: 30ms)
+ GET /api/base/user-role-assignments 200 in 98ms (compile: 39ms, render: 60ms)
+ GET /api/base/user-roles 200 in 69ms (compile: 4ms, render: 66ms)
+ GET /api/base/unit-roles 200 in 87ms (compile: 27ms, render: 61ms)
+ GET /api/base/user-roles 200 in 144ms (compile: 97ms, render: 47ms)
+ GET /api/base/units 200 in 160ms (compile: 57ms, render: 103ms)
+ GET /api/base/unit-roles 200 in 89ms (compile: 38ms, render: 50ms)
+ GET /api/admin/user-units?user_id=1 200 in 107ms (compile: 65ms, render: 43ms)
