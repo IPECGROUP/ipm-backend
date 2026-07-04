@@ -31,7 +31,13 @@ async function getUserId(req) {
   const fromHeader = req.headers.get("x-user-id");
   const fromCookie = readCookieValue(cookie, "user_id");
   const direct = fromHeader || fromCookie;
-  if (direct && /^\d+$/.test(String(direct))) return Number(direct);
+  if (direct && /^\d+$/.test(String(direct))) {
+    const directId = Number(direct);
+    try {
+      const user = await prisma.user.findUnique({ where: { id: directId }, select: { id: true } });
+      if (user?.id) return directId;
+    } catch {}
+  }
 
   const sessionId = readCookieValue(cookie, "ipm_session");
   if (sessionId) {
@@ -164,26 +170,37 @@ async function creatorContext(userId) {
     where: { id: Number(userId) },
     select: { id: true, name: true, username: true, email: true, department: true },
   });
-  const [userUnits, userRoles] = await Promise.all([
-    prisma.userUnit.findMany({
-      where: { userId: Number(userId) },
-      include: { unit: true },
-      orderBy: { unitId: "asc" },
-    }),
-    prisma.userRoleMap.findMany({
-      where: { userId: Number(userId) },
-      include: { role: true },
-      orderBy: { roleId: "asc" },
-    }),
-  ]);
+  let userUnits = [];
+  let userRoles = [];
+  try {
+    [userUnits, userRoles] = await Promise.all([
+      prisma.userUnit.findMany({
+        where: { userId: Number(userId) },
+        include: { unit: true },
+        orderBy: { unitId: "asc" },
+      }),
+      prisma.userRoleMap.findMany({
+        where: { userId: Number(userId) },
+        include: { role: true },
+        orderBy: { roleId: "asc" },
+      }),
+    ]);
+  } catch (err) {
+    console.warn("supply_requests_creator_context_assignment_warn", err?.message || err);
+  }
   const roleIds = userRoles.map((row) => Number(row.roleId)).filter(Boolean);
-  const unitRoleRows = roleIds.length
-    ? await prisma.unitRoleMap.findMany({
-        where: { roleId: { in: roleIds } },
-        include: { unit: true, role: true },
-        orderBy: [{ unitId: "asc" }, { roleId: "asc" }],
-      })
-    : [];
+  let unitRoleRows = [];
+  if (roleIds.length) {
+    try {
+      unitRoleRows = await prisma.unitRoleMap.findMany({
+          where: { roleId: { in: roleIds } },
+          include: { unit: true, role: true },
+          orderBy: [{ unitId: "asc" }, { roleId: "asc" }],
+        });
+    } catch (err) {
+      console.warn("supply_requests_creator_context_unit_role_warn", err?.message || err);
+    }
+  }
   const membershipUnitIds = new Set(userUnits.map((row) => Number(row.unitId)).filter(Boolean));
   const matchedUnitRoleRows = unitRoleRows.filter((row) => !membershipUnitIds.size || membershipUnitIds.has(Number(row.unitId)));
   const unitNames = Array.from(

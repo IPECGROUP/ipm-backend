@@ -36,7 +36,13 @@ async function getUserId(req) {
   const fromHeader = req.headers.get("x-user-id");
   const fromCookie = readCookieValue(cookie, "user_id");
   const direct = fromHeader || fromCookie;
-  if (direct && /^\d+$/.test(String(direct))) return Number(direct);
+  if (direct && /^\d+$/.test(String(direct))) {
+    const directId = Number(direct);
+    try {
+      const user = await prisma.user.findUnique({ where: { id: directId }, select: { id: true } });
+      if (user?.id) return directId;
+    } catch {}
+  }
 
   // Primary auth: ipm_session cookie
   const sessionId = readCookieValue(cookie, "ipm_session");
@@ -440,25 +446,40 @@ async function getUserContext(req, userId) {
   });
 
   // 1) Units
-  const userUnits = await prisma.userUnit.findMany({
-    where: { userId: Number(userId) },
-    include: { unit: true },
-  });
+  let userUnits = [];
+  try {
+    userUnits = await prisma.userUnit.findMany({
+      where: { userId: Number(userId) },
+      include: { unit: true },
+    });
+  } catch (err) {
+    console.warn("requests_user_units_warn", err?.message || err);
+  }
 
   // 2) Roles
-  const roleMaps = await prisma.userRoleMap.findMany({
-    where: { userId: Number(userId) },
-    include: { role: true },
-  });
+  let roleMaps = [];
+  try {
+    roleMaps = await prisma.userRoleMap.findMany({
+      where: { userId: Number(userId) },
+      include: { role: true },
+    });
+  } catch (err) {
+    console.warn("requests_user_roles_warn", err?.message || err);
+  }
   const roleNames = (roleMaps || []).map((rm) => rm?.role?.name).filter(Boolean);
   const roleIds = (roleMaps || []).map((rm) => Number(rm?.roleId)).filter(Boolean);
-  const unitRoleRows = roleIds.length
-    ? await prisma.unitRoleMap.findMany({
-        where: { roleId: { in: roleIds } },
-        include: { unit: true, role: true },
-        orderBy: [{ unitId: "asc" }, { roleId: "asc" }],
-      })
-    : [];
+  let unitRoleRows = [];
+  if (roleIds.length) {
+    try {
+      unitRoleRows = await prisma.unitRoleMap.findMany({
+          where: { roleId: { in: roleIds } },
+          include: { unit: true, role: true },
+          orderBy: [{ unitId: "asc" }, { roleId: "asc" }],
+        });
+    } catch (err) {
+      console.warn("requests_unit_roles_warn", err?.message || err);
+    }
+  }
   const roleDerivedUnitKinds = Array.from(
     new Set(
       roleNames
