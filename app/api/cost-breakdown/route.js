@@ -97,7 +97,14 @@ function serializeItem(item) {
           name: item.project.name,
           isActive: item.project.isActive,
         }
-      : null,
+      : item.project_code || item.project_name
+        ? {
+            id: Number(item.project_id ?? item.projectId),
+            code: item.project_code ?? null,
+            name: item.project_name ?? null,
+            isActive: item.project_is_active ?? true,
+          }
+        : null,
   };
 }
 
@@ -119,28 +126,36 @@ export async function GET(req) {
       projectId
         ? prisma.$queryRaw`
             SELECT
-              id,
-              project_id,
-              budget_code,
-              budget_name,
-              base_budget,
-              created_at,
-              updated_at
-            FROM cost_breakdown_items
-            WHERE project_id = ${projectId}
-            ORDER BY budget_code ASC, id ASC
+              c.id,
+              c.project_id,
+              c.budget_code,
+              c.budget_name,
+              c.base_budget,
+              c.created_at,
+              c.updated_at,
+              p.code AS project_code,
+              p.name AS project_name,
+              p.is_active AS project_is_active
+            FROM cost_breakdown_items c
+            LEFT JOIN projects p ON p.id = c.project_id
+            WHERE c.project_id = ${projectId}
+            ORDER BY c.budget_code ASC, c.id ASC
           `
         : prisma.$queryRaw`
             SELECT
-              id,
-              project_id,
-              budget_code,
-              budget_name,
-              base_budget,
-              created_at,
-              updated_at
-            FROM cost_breakdown_items
-            ORDER BY project_id ASC, budget_code ASC, id ASC
+              c.id,
+              c.project_id,
+              c.budget_code,
+              c.budget_name,
+              c.base_budget,
+              c.created_at,
+              c.updated_at,
+              p.code AS project_code,
+              p.name AS project_name,
+              p.is_active AS project_is_active
+            FROM cost_breakdown_items c
+            LEFT JOIN projects p ON p.id = c.project_id
+            ORDER BY c.project_id ASC, c.budget_code ASC, c.id ASC
           `;
 
     let items = [];
