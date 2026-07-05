@@ -409,10 +409,12 @@ async function findWorkflowUser(kind, excludeUserId = null) {
     });
   }
 
-  const unitRoleRows = await prisma.unitRoleMap.findMany({
-      include: { unit: true, role: true },
-      orderBy: [{ unitId: "asc" }, { roleId: "asc" }],
-    }).catch(() => []);
+  const unitRoleRows = prisma.unitRoleMap
+    ? await prisma.unitRoleMap.findMany({
+        include: { unit: true, role: true },
+        orderBy: [{ unitId: "asc" }, { roleId: "asc" }],
+      }).catch(() => [])
+    : [];
   const unitNamesByRoleId = new Map();
   unitRoleRows.forEach((row) => {
     const roleId = Number(row.roleId);
