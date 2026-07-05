@@ -474,7 +474,7 @@ function getCurrentStep(historyJson) {
 }
 
 function canRejectAtStep(roleKey) {
-  return roleKey === ROLE_KEYS.PROJECT_MANAGER;
+  return [ROLE_KEYS.PROJECT_CONTROL, ROLE_KEYS.PROJECT_MANAGER].includes(roleKey);
 }
 
 function canReturnAtStep(roleKey) {
