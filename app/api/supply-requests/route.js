@@ -24,7 +24,23 @@ function mapDbError(error) {
     return { error: "database_unreachable", status: 503 };
   }
   if (message.includes("authentication failed")) return { error: "database_auth_failed", status: 503 };
+  if (code === "P2003") return { error: "invalid_relation_reference", status: 400 };
+  if (code === "P2021" || code === "P2022") return { error: "database_schema_not_ready", status: 503 };
+  if (code === "P1001") return { error: "database_unreachable", status: 503 };
+  if (code === "P1000") return { error: "database_auth_failed", status: 503 };
   return null;
+}
+
+function internalErrorPayload(error) {
+  const code = String(error?.code || "").trim();
+  const name = String(error?.name || "").trim();
+  const message = String(error?.message || "").split("\n").map((line) => line.trim()).filter(Boolean).slice(-1)[0] || "";
+  return {
+    error: "internal_error",
+    ...(code ? { code } : {}),
+    ...(name ? { name } : {}),
+    ...(message ? { message: message.slice(0, 220) } : {}),
+  };
 }
 
 async function readJson(req) {
@@ -574,7 +590,7 @@ export async function GET(req) {
     console.error("supply_requests_get_error", e);
     const mapped = mapDbError(e);
     if (mapped) return json({ error: mapped.error }, mapped.status);
-    return json({ error: "internal_error" }, 500);
+    return json(internalErrorPayload(e), 500);
   }
 }
 
@@ -798,7 +814,7 @@ export async function POST(req) {
     console.error("supply_requests_post_error", e);
     const mapped = mapDbError(e);
     if (mapped) return json({ error: mapped.error }, mapped.status);
-    return json({ error: "internal_error" }, 500);
+    return json(internalErrorPayload(e), 500);
   }
 }
 
@@ -824,6 +840,6 @@ export async function DELETE(req) {
     console.error("supply_requests_delete_error", e);
     const mapped = mapDbError(e);
     if (mapped) return json({ error: mapped.error }, mapped.status);
-    return json({ error: "internal_error" }, 500);
+    return json(internalErrorPayload(e), 500);
   }
 }
