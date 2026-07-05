@@ -23,6 +23,11 @@ async function readJson(req) {
   }
 }
 
+async function getSlug(ctx) {
+  const params = await Promise.resolve(ctx?.params || {});
+  return (params?.slug || []).map(String);
+}
+
 function readCookieValue(cookie, name) {
   const safe = String(name || "").replace(/[-/\\^$*+?.()|[\]{}]/g, "\\$&");
   const re = new RegExp(`(?:^|;\\s*)${safe}=([^;]+)`);
@@ -246,6 +251,7 @@ function normalizeOut(row) {
   if (!row) return row;
   const history = Array.isArray(row.historyJson) ? row.historyJson : [];
   const createdMeta = history.find((entry) => entry?.type === "created") || {};
+  const currentStep = getCurrentStep(history);
   return {
     id: row.id,
     serial: row.serial,
@@ -293,6 +299,8 @@ function normalizeOut(row) {
       null,
     current_assignee_user_id: row.currentAssigneeUserId,
     currentAssigneeUserId: row.currentAssigneeUserId,
+    currentStepRoleKey: currentStep?.roleKey || null,
+    currentStepIndex: typeof currentStep?.index === "number" ? currentStep.index : null,
 
     createdAt: row.createdAt,
     updatedAt: row.updatedAt,
@@ -348,8 +356,18 @@ const ROLE_KEYS = {
   PROJECT_MANAGER: "project_manager",
   ACCOUNTING: "accounting",
   FINANCE_MANAGER: "finance_manager",
+  MANAGEMENT: "management",
   PAYMENT_ORDER: "payment_order",
 };
+
+const PAYMENT_WORKFLOW_CHAIN = [
+  ROLE_KEYS.REQUESTER,
+  ROLE_KEYS.PROJECT_CONTROL,
+  ROLE_KEYS.PROJECT_MANAGER,
+  ROLE_KEYS.ACCOUNTING,
+  ROLE_KEYS.MANAGEMENT,
+  ROLE_KEYS.ACCOUNTING,
+];
 
 function norm(s) {
   return String(s || "").trim();
@@ -402,18 +420,30 @@ function detectUserRoleKeys(roleNames) {
     }
     if (r.includes("مدیر مالی")) {
       keys.add(ROLE_KEYS.FINANCE_MANAGER);
-      continue;
-    }
-    if (r.includes("حسابدار") || r.includes("حسابداری")) {
       keys.add(ROLE_KEYS.ACCOUNTING);
       continue;
     }
-    if (r.includes("کنترل پروژه")) {
+    if (r.includes("حسابدار") || r.includes("حسابداری") || r.includes("مالی")) {
+      keys.add(ROLE_KEYS.ACCOUNTING);
+      continue;
+    }
+    if (r.includes("کنترل پروژه") || r.includes("برنامه ریزی") || r.includes("برنامه‌ریزی")) {
       keys.add(ROLE_KEYS.PROJECT_CONTROL);
       continue;
     }
     if (r.includes("مدیر پروژه")) {
       keys.add(ROLE_KEYS.PROJECT_MANAGER);
+      continue;
+    }
+    if (
+      r === "admin" ||
+      r.includes("مدیریت") ||
+      r.includes("مدیرعامل") ||
+      r.includes("مدیر عامل") ||
+      r.includes("هیئت مدیره") ||
+      r.includes("هیات مدیره")
+    ) {
+      keys.add(ROLE_KEYS.MANAGEMENT);
       continue;
     }
 
@@ -430,22 +460,7 @@ function detectUserRoleKeys(roleNames) {
 }
 
 function getWorkflowChainForUnit(unitKind) {
-  switch (unitKind) {
-    case "office":
-      return [ROLE_KEYS.REQUESTER, ROLE_KEYS.ACCOUNTING, ROLE_KEYS.FINANCE_MANAGER, ROLE_KEYS.PAYMENT_ORDER];
-    case "site":
-      return [ROLE_KEYS.REQUESTER, ROLE_KEYS.PROJECT_CONTROL, ROLE_KEYS.ACCOUNTING, ROLE_KEYS.FINANCE_MANAGER, ROLE_KEYS.PAYMENT_ORDER];
-    case "finance":
-      return [ROLE_KEYS.REQUESTER, ROLE_KEYS.FINANCE_MANAGER, ROLE_KEYS.PAYMENT_ORDER];
-    case "cash":
-      return [ROLE_KEYS.REQUESTER, ROLE_KEYS.PAYMENT_ORDER];
-    case "capex":
-      return [ROLE_KEYS.REQUESTER, ROLE_KEYS.PROJECT_CONTROL, ROLE_KEYS.ACCOUNTING, ROLE_KEYS.FINANCE_MANAGER, ROLE_KEYS.PAYMENT_ORDER];
-    case "projects":
-      return [ROLE_KEYS.REQUESTER, ROLE_KEYS.PROJECT_CONTROL, ROLE_KEYS.PROJECT_MANAGER, ROLE_KEYS.ACCOUNTING, ROLE_KEYS.FINANCE_MANAGER, ROLE_KEYS.PAYMENT_ORDER];
-    default:
-      return null;
-  }
+  return unitKind === "projects" ? PAYMENT_WORKFLOW_CHAIN : PAYMENT_WORKFLOW_CHAIN;
 }
 
 function getCurrentStep(historyJson) {
@@ -458,13 +473,40 @@ function getCurrentStep(historyJson) {
   return null;
 }
 
-function canActOnStep({ row, userId, userUnitKinds, userRoleKeys }) {
-  // Phase one requests are assigned directly to a specific user (marandi).
-  // Keep the role-based workflow below for requests created before this phase.
-  if (row.currentAssigneeUserId != null) {
-    return Number(row.currentAssigneeUserId) === Number(userId);
-  }
+function canRejectAtStep(roleKey) {
+  return roleKey === ROLE_KEYS.PROJECT_MANAGER;
+}
 
+function canReturnAtStep(roleKey) {
+  return [
+    ROLE_KEYS.PROJECT_CONTROL,
+    ROLE_KEYS.PROJECT_MANAGER,
+    ROLE_KEYS.ACCOUNTING,
+    ROLE_KEYS.MANAGEMENT,
+  ].includes(roleKey);
+}
+
+function includesAny(values, patterns) {
+  const text = (Array.isArray(values) ? values : []).map((value) => normalizeFaText(value)).join(" ");
+  return patterns.some((pattern) => text.includes(normalizeFaText(pattern)));
+}
+
+function hasWorkflowUnitForRole({ roleKey, userUnitNames, roleUnitNames, roleNames }) {
+  const combinedUnitNames = [...(userUnitNames || []), ...(roleUnitNames || [])];
+  if (roleKey === ROLE_KEYS.PROJECT_MANAGER) return true;
+  if (roleKey === ROLE_KEYS.PROJECT_CONTROL) {
+    return includesAny(combinedUnitNames, ["برنامه ریزی", "برنامه‌ریزی", "کنترل پروژه"]) || includesAny(roleNames, ["برنامه ریزی", "برنامه‌ریزی", "کنترل پروژه"]);
+  }
+  if (roleKey === ROLE_KEYS.ACCOUNTING) {
+    return includesAny(combinedUnitNames, ["مالی", "حسابداری"]) || includesAny(roleNames, ["مالی", "حسابداری", "حسابدار"]);
+  }
+  if (roleKey === ROLE_KEYS.MANAGEMENT) {
+    return includesAny(combinedUnitNames, ["مدیریت"]) || includesAny(roleNames, ["مدیریت", "مدیرعامل", "مدیر عامل", "هیئت مدیره", "هیات مدیره"]);
+  }
+  return true;
+}
+
+function canActOnStep({ row, userId, userRoleKeys, userUnitNames, roleUnitNames, roleNames }) {
   const step = getCurrentStep(row.historyJson);
   if (!step) return false;
 
@@ -479,14 +521,7 @@ function canActOnStep({ row, userId, userUnitKinds, userRoleKeys }) {
   // نقش لازم را دارد؟
   if (!userRoleKeys.includes(step.roleKey)) return false;
 
-  // به‌جز نقش دستور پرداخت، بقیه نقش‌ها باید در همان واحد درخواست باشند
-  if (step.roleKey !== ROLE_KEYS.PAYMENT_ORDER) {
-    const rowUnit = String(row.scope || "").toLowerCase();
-    const units = Array.isArray(userUnitKinds) ? userUnitKinds : [];
-    if (!rowUnit || !units.includes(rowUnit)) return false;
-  }
-
-  return true;
+  return hasWorkflowUnitForRole({ roleKey: step.roleKey, userUnitNames, roleUnitNames, roleNames });
 }
 
 // --- user context (با مدل‌های واقعی Prisma شما)
@@ -577,6 +612,14 @@ async function getUserContext(req, userId) {
       ...inferredUnitNamesFromRoles(roleNames),
     ])
   );
+  const userUnitNames = Array.from(new Set((userUnits || []).map((row) => row?.unit?.name).filter(Boolean)));
+  const roleUnitNames = Array.from(
+    new Set([
+      ...unitRoleRows.map((row) => row?.unit?.name).filter(Boolean),
+      ...fallbackUnitsForRoleNames(roleNames),
+      ...inferredUnitNamesFromRoles(roleNames),
+    ])
+  );
   const unitKinds = Array.from(
     new Set([
       ...mappedUnits.map((x) => x.kind).filter(Boolean),
@@ -616,6 +659,9 @@ async function getUserContext(req, userId) {
     roleName: Array.from(new Set(roleNames)).join("، ") || "نامشخص",
     unitKind,
     unitKinds,
+    unitNames,
+    userUnitNames,
+    roleUnitNames,
     roleNames,
     roleKeys: detectUserRoleKeys(roleNames),
   };
@@ -627,7 +673,7 @@ export async function GET(req, ctx) {
   if (!userId) return json({ error: "unauthorized" }, 401);
   const uctx = await getUserContext(req, userId);
 
-  const slug = (ctx?.params?.slug || []).map(String);
+  const slug = await getSlug(ctx);
 
   // GET /api/requests/:id
   if (slug.length === 1 && slug[0] !== "status") {
@@ -642,13 +688,15 @@ export async function GET(req, ctx) {
     const canAct = canActOnStep({
       row,
       userId,
-      userUnitKinds: uctx.unitKinds,
       userRoleKeys: uctx.roleKeys,
+      userUnitNames: uctx.userUnitNames,
+      roleUnitNames: uctx.roleUnitNames,
+      roleNames: uctx.roleNames,
     });
     const canView = uctx.isMainAdmin || row.createdById === userId || canAct;
     if (!canView) return json({ error: "forbidden" }, 403);
 
-    return json({ item: { ...normalizeOut(row), canAct } });
+    return json({ item: { ...normalizeOut(row), canAct, canDelete: row.createdById === userId } });
   }
 
   // GET /api/requests (list)
@@ -683,8 +731,10 @@ export async function GET(req, ctx) {
     const canAct = canActOnStep({
       row: r,
       userId,
-      userUnitKinds: uctx.unitKinds,
       userRoleKeys: uctx.roleKeys,
+      userUnitNames: uctx.userUnitNames,
+      roleUnitNames: uctx.roleUnitNames,
+      roleNames: uctx.roleNames,
     });
     const isMine = r.createdById === userId;
     const canView = uctx.isMainAdmin || isMine || canAct;
@@ -706,6 +756,7 @@ export async function GET(req, ctx) {
     items: filtered.map((x) => ({
       ...normalizeOut(x.row),
       canAct: x.canAct,
+      canDelete: x.isMine,
     })),
   });
 }
@@ -714,7 +765,7 @@ export async function POST(req, ctx) {
   const userId = await getUserId(req);
   if (!userId) return json({ error: "unauthorized" }, 401);
 
-  const slug = (ctx?.params?.slug || []).map(String);
+  const slug = await getSlug(ctx);
 
   // POST /api/requests/status   body: {id, status, note}
   if (slug.length === 1 && slug[0] === "status") {
@@ -734,48 +785,26 @@ export async function POST(req, ctx) {
     const history = Array.isArray(row.historyJson) ? row.historyJson : [];
     const step = getCurrentStep(history);
     if (!step) return json({ error: "no_active_step" }, 400);
+    if (nextStatus === "rejected" && !canRejectAtStep(step.roleKey)) {
+      return json({ error: "reject_not_allowed_for_step" }, 403);
+    }
+    if (nextStatus === "returned" && !canReturnAtStep(step.roleKey)) {
+      return json({ error: "return_not_allowed_for_step" }, 403);
+    }
 
     if (row.createdById === userId && step.roleKey !== ROLE_KEYS.REQUESTER) {
       return json({ error: "self_action_forbidden" }, 403);
     }
 
-    if (!canActOnStep({ row, userId, userUnitKinds: uctx.unitKinds, userRoleKeys: uctx.roleKeys })) {
+    if (!canActOnStep({
+      row,
+      userId,
+      userRoleKeys: uctx.roleKeys,
+      userUnitNames: uctx.userUnitNames,
+      roleUnitNames: uctx.roleUnitNames,
+      roleNames: uctx.roleNames,
+    })) {
       return json({ error: "forbidden" }, 403);
-    }
-
-    // Directly assigned phase-one requests do not enter the legacy role chain.
-    if (row.currentAssigneeUserId != null) {
-      history.push({
-        byUserId: userId,
-        type: nextStatus,
-        status: nextStatus,
-        note,
-        at: new Date().toISOString(),
-        roleKey: ROLE_KEYS.PAYMENT_ORDER,
-        index: 1,
-      });
-
-      if (nextStatus === "returned") {
-        history.push({
-          type: "step_set",
-          at: new Date().toISOString(),
-          unitKind: row.scope,
-          roleKey: ROLE_KEYS.REQUESTER,
-          index: 0,
-        });
-      } else {
-        history.push({ type: "step_clear", at: new Date().toISOString() });
-      }
-
-      const updated = await prisma.paymentRequest.update({
-        where: { id },
-        data: {
-          status: nextStatus,
-          historyJson: history,
-          currentAssigneeUserId: null,
-        },
-      });
-      return json({ ok: true, item: normalizeOut(updated) });
     }
 
     if (nextStatus === "approved") {
@@ -870,17 +899,6 @@ export async function POST(req, ctx) {
     ? requestedScope
     : (uctx.unitKind || "office");
 
-  const marandi = await prisma.user.findFirst({
-    where: {
-      OR: [
-        { username: "marandi" },
-        { email: "marandi@ipecgroup.net" },
-      ],
-    },
-    select: { id: true },
-  });
-  if (!marandi) return json({ error: "marandi_user_not_found" }, 503);
-
   const title = data.title;
   const amountBI = data.amount ?? toBigIntSafe(body?.amountStr) ?? BigInt(0);
 
@@ -936,7 +954,7 @@ export async function POST(req, ctx) {
       attachments: data.attachments ?? null,
 
       createdById: userId,
-      currentAssigneeUserId: marandi.id,
+      currentAssigneeUserId: null,
 
       status: "pending",
       historyJson: [
@@ -957,10 +975,9 @@ export async function POST(req, ctx) {
         {
           type: "step_set",
           at: nowIso,
-          unitKind,
-          roleKey: ROLE_KEYS.PAYMENT_ORDER,
+          unitKind: enforcedScope,
+          roleKey: ROLE_KEYS.PROJECT_CONTROL,
           index: 1,
-          assignedToUserId: marandi.id,
         },
       ],
     },
@@ -973,7 +990,7 @@ export async function PATCH(req, ctx) {
   const userId = await getUserId(req);
   if (!userId) return json({ error: "unauthorized" }, 401);
 
-  const slug = (ctx?.params?.slug || []).map(String);
+  const slug = await getSlug(ctx);
   if (slug.length !== 1) return json({ error: "invalid_path" }, 400);
 
   const id = Number(slug[0]);
@@ -1013,7 +1030,7 @@ export async function DELETE(req, ctx) {
   const userId = await getUserId(req);
   if (!userId) return json({ error: "unauthorized" }, 401);
 
-  const slug = (ctx?.params?.slug || []).map(String);
+  const slug = await getSlug(ctx);
   if (slug.length !== 1) return json({ error: "invalid_path" }, 400);
 
   const id = Number(slug[0]);

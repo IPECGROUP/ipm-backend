@@ -22,3 +22,4 @@ Creating turbopack project {
  GET /api/admin/users 200 in 97ms (compile: 73ms, render: 23ms)
  GET /api/base/user-role-assignments 200 in 21ms (compile: 3ms, render: 18ms)
  GET /api/base/units 200 in 27ms (compile: 8ms, render: 19ms)
+ GET /api/cost-breakdown 500 in 156ms (compile: 123ms, render: 33ms)
