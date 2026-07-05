@@ -17,6 +17,16 @@ const json = (data, status = 200) =>
     headers: { "Cache-Control": "no-store" },
   });
 
+function mapDbError(error) {
+  const code = String(error?.code || "");
+  const message = String(error?.message || "").toLowerCase();
+  if (code === "ECONNREFUSED" || message.includes("can't reach database") || message.includes("econnrefused")) {
+    return { error: "database_unreachable", status: 503 };
+  }
+  if (message.includes("authentication failed")) return { error: "database_auth_failed", status: 503 };
+  return null;
+}
+
 async function readJson(req) {
   try {
     return await req.json();
@@ -365,20 +375,28 @@ function isProjectManagerContext(ctx) {
 }
 
 async function findWorkflowUser(kind, excludeUserId = null) {
-  const [users, unitRoleRows] = await Promise.all([
-    prisma.user.findMany({
+  let users = [];
+  try {
+    users = await prisma.user.findMany({
       include: {
         units: { include: { unit: true } },
         roles: { include: { role: true } },
       },
       orderBy: { id: "asc" },
       take: 500,
-    }),
-    prisma.unitRoleMap.findMany({
+    });
+  } catch (err) {
+    console.warn("supply_requests_find_workflow_users_include_warn", err?.message || err);
+    users = await prisma.user.findMany({
+      orderBy: { id: "asc" },
+      take: 500,
+    });
+  }
+
+  const unitRoleRows = await prisma.unitRoleMap.findMany({
       include: { unit: true, role: true },
       orderBy: [{ unitId: "asc" }, { roleId: "asc" }],
-    }).catch(() => []),
-  ]);
+    }).catch(() => []);
   const unitNamesByRoleId = new Map();
   unitRoleRows.forEach((row) => {
     const roleId = Number(row.roleId);
@@ -554,6 +572,8 @@ export async function GET(req) {
     });
   } catch (e) {
     console.error("supply_requests_get_error", e);
+    const mapped = mapDbError(e);
+    if (mapped) return json({ error: mapped.error }, mapped.status);
     return json({ error: "internal_error" }, 500);
   }
 }
@@ -776,6 +796,8 @@ export async function POST(req) {
     return json({ ok: true, item: serializeItem({ ...created, project, canAct: false, canDelete: true }) }, 201);
   } catch (e) {
     console.error("supply_requests_post_error", e);
+    const mapped = mapDbError(e);
+    if (mapped) return json({ error: mapped.error }, mapped.status);
     return json({ error: "internal_error" }, 500);
   }
 }
@@ -800,6 +822,8 @@ export async function DELETE(req) {
     return json({ ok: true });
   } catch (e) {
     console.error("supply_requests_delete_error", e);
+    const mapped = mapDbError(e);
+    if (mapped) return json({ error: mapped.error }, mapped.status);
     return json({ error: "internal_error" }, 500);
   }
 }
