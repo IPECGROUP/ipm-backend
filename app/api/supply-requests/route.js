@@ -365,22 +365,38 @@ function isProjectManagerContext(ctx) {
 }
 
 async function findWorkflowUser(kind, excludeUserId = null) {
-  const users = await prisma.user.findMany({
-    include: {
-      units: { include: { unit: true } },
-      roles: { include: { role: true } },
-    },
-    orderBy: { id: "asc" },
-    take: 500,
+  const [users, unitRoleRows] = await Promise.all([
+    prisma.user.findMany({
+      include: {
+        units: { include: { unit: true } },
+        roles: { include: { role: true } },
+      },
+      orderBy: { id: "asc" },
+      take: 500,
+    }),
+    prisma.unitRoleMap.findMany({
+      include: { unit: true, role: true },
+      orderBy: [{ unitId: "asc" }, { roleId: "asc" }],
+    }).catch(() => []),
+  ]);
+  const unitNamesByRoleId = new Map();
+  unitRoleRows.forEach((row) => {
+    const roleId = Number(row.roleId);
+    if (!roleId || !row.unit?.name) return;
+    const list = unitNamesByRoleId.get(roleId) || [];
+    list.push(row.unit.name);
+    unitNamesByRoleId.set(roleId, list);
   });
   const candidates = users
     .map((user) => {
+      const roleIds = Array.isArray(user.roles) ? user.roles.map((row) => Number(row.roleId)).filter(Boolean) : [];
       const roleNames = [
         ...(Array.isArray(user.roles) ? user.roles.map((row) => row.role?.name).filter(Boolean) : []),
         user.role && user.role !== "user" ? user.role : "",
       ].filter(Boolean);
       const unitNames = [
         ...(Array.isArray(user.units) ? user.units.map((row) => row.unit?.name).filter(Boolean) : []),
+        ...roleIds.flatMap((roleId) => unitNamesByRoleId.get(roleId) || []),
         ...fallbackUnitsForRoleNames(roleNames),
         ...inferredUnitNamesFromRoles(roleNames),
       ];
@@ -519,11 +535,15 @@ export async function GET(req) {
     const userCtx = await userRoleAndUnitContext(userId);
     const visibleRows = mainAdmin
       ? rows
-      : rows.filter((row) =>
-          Number(row.createdById) === Number(userId) ||
-          Number(row.currentAssigneeUserId) === Number(userId) ||
-          ccUserIdsOf(row).includes(String(userId))
-        );
+      : rows.filter((row) => {
+          const canAct = canActOnSupplyStep({ row, userId, userCtx, mainAdmin });
+          return (
+            canAct ||
+            Number(row.createdById) === Number(userId) ||
+            Number(row.currentAssigneeUserId) === Number(userId) ||
+            ccUserIdsOf(row).includes(String(userId))
+          );
+        });
     return json({
       items: visibleRows.map((row) => serializeItem({
         ...row,
