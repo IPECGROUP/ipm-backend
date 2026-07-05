@@ -5,6 +5,11 @@ import { fallbackUnitsForRoleNames } from "../../../lib/orgStructureFallback";
 export const runtime = "nodejs";
 
 const REQUEST_DOC_ID = "supply_request";
+const SUPPLY_STEP = {
+  REQUESTER: "requester",
+  PROJECT_CONTROL: "project_control",
+  PROJECT_MANAGER: "project_manager",
+};
 
 const json = (data, status = 200) =>
   NextResponse.json(data, {
@@ -161,6 +166,48 @@ function createdHistory(row) {
   return history.find((entry) => entry?.type === "created") || {};
 }
 
+function getCurrentStep(historyJson) {
+  const history = Array.isArray(historyJson) ? historyJson : [];
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const entry = history[i];
+    if (entry?.type === "step_set" && entry.roleKey) return entry;
+    if (entry?.type === "step_clear") return null;
+  }
+  return null;
+}
+
+function workflowStatusOf(row) {
+  if (row?.status === "approved") return "done";
+  if (row?.status === "rejected") return "canceled";
+  if (row?.status === "returned") return "in_progress";
+  const step = getCurrentStep(row?.historyJson);
+  if (step?.roleKey === SUPPLY_STEP.PROJECT_MANAGER) return "final_approval";
+  if (step?.roleKey === SUPPLY_STEP.REQUESTER) return "in_progress";
+  return "pending";
+}
+
+function ccUserIdsOf(row) {
+  const history = Array.isArray(row?.historyJson) ? row.historyJson : [];
+  const ids = new Set();
+  history.forEach((entry) => {
+    if (entry?.type !== "cc_added") return;
+    normalizeIdList(entry.userIds).forEach((id) => ids.add(String(id)));
+  });
+  return Array.from(ids);
+}
+
+function latestWorkflowMeta(row) {
+  const history = Array.isArray(row?.historyJson) ? row.historyJson : [];
+  const meta = {};
+  history.forEach((entry) => {
+    if (entry?.type !== "workflow_meta") return;
+    if (entry.finalAmount !== undefined) meta.finalAmount = entry.finalAmount;
+    if (entry.actionText !== undefined) meta.actionText = entry.actionText;
+    if (entry.deadlineDate !== undefined) meta.deadlineDate = entry.deadlineDate;
+  });
+  return meta;
+}
+
 function normalizeIdList(value) {
   if (!Array.isArray(value)) return [];
   return value.map((item) => String(item ?? "").trim()).filter(Boolean);
@@ -295,9 +342,72 @@ async function creatorContext(userId) {
   return { user, userName, unitName, roleName, unitNames, roleNames };
 }
 
+async function userRoleAndUnitContext(userId) {
+  const base = await creatorContext(userId);
+  return {
+    ...base,
+    unitNames: Array.isArray(base.unitNames) ? base.unitNames : [],
+    roleNames: Array.isArray(base.roleNames) ? base.roleNames : [],
+  };
+}
+
+function includesAny(values, patterns) {
+  const text = (Array.isArray(values) ? values : []).map((value) => normalizeFaText(value)).join(" ");
+  return patterns.some((pattern) => text.includes(normalizeFaText(pattern)));
+}
+
+function isProjectControlContext(ctx) {
+  return includesAny([...(ctx?.unitNames || []), ...(ctx?.roleNames || [])], ["برنامه ریزی", "برنامه‌ریزی", "کنترل پروژه"]);
+}
+
+function isProjectManagerContext(ctx) {
+  return includesAny(ctx?.roleNames || [], ["مدیر پروژه", "مدیریت پروژه", "project manager"]);
+}
+
+async function findWorkflowUser(kind, excludeUserId = null) {
+  const users = await prisma.user.findMany({
+    include: {
+      units: { include: { unit: true } },
+      roles: { include: { role: true } },
+    },
+    orderBy: { id: "asc" },
+    take: 500,
+  });
+  const candidates = users
+    .map((user) => {
+      const roleNames = [
+        ...(Array.isArray(user.roles) ? user.roles.map((row) => row.role?.name).filter(Boolean) : []),
+        user.role && user.role !== "user" ? user.role : "",
+      ].filter(Boolean);
+      const unitNames = [
+        ...(Array.isArray(user.units) ? user.units.map((row) => row.unit?.name).filter(Boolean) : []),
+        ...fallbackUnitsForRoleNames(roleNames),
+        ...inferredUnitNamesFromRoles(roleNames),
+      ];
+      return { user, roleNames, unitNames };
+    })
+    .filter((ctx) => (kind === SUPPLY_STEP.PROJECT_CONTROL ? isProjectControlContext(ctx) : isProjectManagerContext(ctx)));
+
+  const preferred = candidates.find((ctx) => Number(ctx.user.id) !== Number(excludeUserId)) || candidates[0];
+  return preferred?.user || null;
+}
+
+function canActOnSupplyStep({ row, userId, userCtx, mainAdmin }) {
+  const step = getCurrentStep(row?.historyJson);
+  if (!step) return false;
+  if (mainAdmin) return true;
+  if (Number(row.currentAssigneeUserId) === Number(userId)) return true;
+  if (step.roleKey === SUPPLY_STEP.REQUESTER) return Number(row.createdById) === Number(userId);
+  if (step.roleKey === SUPPLY_STEP.PROJECT_CONTROL) return isProjectControlContext(userCtx);
+  if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER) return isProjectManagerContext(userCtx);
+  return false;
+}
+
 function serializeItem(row) {
   if (!row) return null;
   const created = createdHistory(row);
+  const step = getCurrentStep(row.historyJson);
+  const canAct = row.canAct === true;
   return {
     id: row.id,
     serial: row.serial,
@@ -314,6 +424,16 @@ function serializeItem(row) {
     attachments: row.attachments,
     relatedLetterIds: normalizeIdList(created.relatedLetterIds),
     status: row.status,
+    workflowStatus: workflowStatusOf(row),
+    historyJson: row.historyJson,
+    currentStepRoleKey: step?.roleKey || null,
+    currentStepIndex: typeof step?.index === "number" ? step.index : null,
+    currentAssigneeUserId: row.currentAssigneeUserId,
+    currentAssigneeName: row.currentAssigneeUser?.name || row.currentAssigneeUser?.username || row.currentAssigneeUser?.email || null,
+    ccUserIds: ccUserIdsOf(row),
+    workflowMeta: latestWorkflowMeta(row),
+    canAct,
+    canDelete: row.canDelete === true,
     createdById: row.createdById,
     createdByName: row.createdBy?.name || row.createdBy?.username || row.createdBy?.email || null,
     registrationInfo: created.registrationInfo || null,
@@ -362,20 +482,26 @@ export async function GET(req) {
     const userId = await getUserId(req);
     if (!userId) return json({ error: "unauthorized" }, 401);
 
+    const url = new URL(req.url);
+    if (url.searchParams.get("users") === "1") {
+      const users = await prisma.user.findMany({
+        select: { id: true, name: true, username: true, email: true, department: true },
+        orderBy: { id: "asc" },
+        take: 1000,
+      });
+      return json({ users });
+    }
+
     const { mainAdmin } = await userContext(userId);
     const where = {
       docId: REQUEST_DOC_ID,
-      ...(mainAdmin
-        ? {}
-        : {
-            OR: [{ createdById: Number(userId) }, { currentAssigneeUserId: Number(userId) }],
-          }),
     };
 
     const rows = await prisma.paymentRequest.findMany({
       where,
       include: {
         createdBy: { select: { name: true, username: true, email: true } },
+        currentAssigneeUser: { select: { name: true, username: true, email: true } },
       },
       orderBy: { id: "desc" },
       take: 500,
@@ -390,8 +516,21 @@ export async function GET(req) {
       : [];
     const projectById = new Map(projects.map((project) => [Number(project.id), project]));
 
+    const userCtx = await userRoleAndUnitContext(userId);
+    const visibleRows = mainAdmin
+      ? rows
+      : rows.filter((row) =>
+          Number(row.createdById) === Number(userId) ||
+          Number(row.currentAssigneeUserId) === Number(userId) ||
+          ccUserIdsOf(row).includes(String(userId))
+        );
     return json({
-      items: rows.map((row) => serializeItem({ ...row, project: projectById.get(Number(row.projectId)) || null })),
+      items: visibleRows.map((row) => serializeItem({
+        ...row,
+        project: projectById.get(Number(row.projectId)) || null,
+        canAct: canActOnSupplyStep({ row, userId, userCtx, mainAdmin }),
+        canDelete: Number(row.createdById) === Number(userId),
+      })),
     });
   } catch (e) {
     console.error("supply_requests_get_error", e);
@@ -405,6 +544,129 @@ export async function POST(req) {
     if (!userId) return json({ error: "unauthorized" }, 401);
 
     const body = await readJson(req);
+    const workflowAction = cleanText(body.workflowAction ?? body.action, 40);
+    if (workflowAction) {
+      const id = toPositiveInt(body.id);
+      const note = cleanText(body.note, 2000);
+      const nextBudgetCode = cleanText(body.budgetCode ?? body.budget_code, 80);
+      const finalAmount = body.finalAmount !== undefined || body.final_amount !== undefined ? toBigIntAmount(body.finalAmount ?? body.final_amount) : null;
+      const actionText = cleanText(body.actionText ?? body.action_text, 500);
+      const deadlineDate = cleanText(body.deadlineDate ?? body.deadline_date, 20).replaceAll("-", "/");
+      const ccUserIds = normalizeIdList(body.ccUserIds ?? body.cc_user_ids).map(Number).filter((n) => Number.isFinite(n) && n > 0);
+      if (!id) return json({ error: "invalid_id" }, 400);
+      if (!["approve", "return", "reject"].includes(workflowAction)) return json({ error: "invalid_action" }, 400);
+
+      const row = await prisma.paymentRequest.findFirst({
+        where: { id, docId: REQUEST_DOC_ID },
+        include: {
+          createdBy: { select: { name: true, username: true, email: true } },
+          currentAssigneeUser: { select: { name: true, username: true, email: true } },
+        },
+      });
+      if (!row) return json({ error: "not_found" }, 404);
+
+      const { mainAdmin } = await userContext(userId);
+      const userCtx = await userRoleAndUnitContext(userId);
+      if (!canActOnSupplyStep({ row, userId, userCtx, mainAdmin })) return json({ error: "forbidden" }, 403);
+
+      const history = Array.isArray(row.historyJson) ? row.historyJson : [];
+      const step = getCurrentStep(history);
+      if (!step) return json({ error: "no_active_step" }, 400);
+
+      const nowIso = new Date().toISOString();
+      const currentIndex = typeof step.index === "number" ? step.index : 0;
+      const scalarUpdates = {};
+      if (step.roleKey === SUPPLY_STEP.PROJECT_CONTROL && nextBudgetCode) scalarUpdates.budgetCode = nextBudgetCode;
+      if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER && finalAmount !== null && finalAmount > 0n) scalarUpdates.amount = finalAmount;
+      if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER && (actionText || deadlineDate || finalAmount !== null)) {
+        history.push({
+          byUserId: Number(userId),
+          type: "workflow_meta",
+          at: nowIso,
+          roleKey: step.roleKey,
+          ...(finalAmount !== null && finalAmount > 0n ? { finalAmount: bigintToJson(finalAmount) } : {}),
+          ...(actionText ? { actionText } : {}),
+          ...(deadlineDate ? { deadlineDate } : {}),
+        });
+      }
+      if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER && ccUserIds.length) {
+        history.push({
+          byUserId: Number(userId),
+          type: "cc_added",
+          at: nowIso,
+          roleKey: step.roleKey,
+          userIds: Array.from(new Set(ccUserIds.map(String))),
+        });
+      }
+      history.push({
+        byUserId: Number(userId),
+        type: workflowAction === "approve" ? "approved" : workflowAction === "return" ? "returned" : "rejected",
+        status: workflowAction === "approve" ? "approved" : workflowAction === "return" ? "returned" : "rejected",
+        note,
+        at: nowIso,
+        roleKey: step.roleKey,
+        index: currentIndex,
+      });
+
+      let data = { historyJson: history };
+      if (workflowAction === "return") {
+        if (![SUPPLY_STEP.PROJECT_CONTROL, SUPPLY_STEP.PROJECT_MANAGER].includes(step.roleKey)) return json({ error: "return_not_allowed_for_step" }, 403);
+        history.push({
+          type: "step_set",
+          at: nowIso,
+          roleKey: SUPPLY_STEP.REQUESTER,
+          index: 0,
+          assignedToUserId: Number(row.createdById),
+        });
+        data = { ...scalarUpdates, status: "returned", currentAssigneeUserId: Number(row.createdById), historyJson: history };
+      } else if (workflowAction === "reject") {
+        if (step.roleKey !== SUPPLY_STEP.PROJECT_MANAGER) return json({ error: "reject_not_allowed_for_step" }, 403);
+        history.push({ type: "step_clear", at: nowIso });
+        data = { ...scalarUpdates, status: "rejected", currentAssigneeUserId: null, historyJson: history };
+      } else if (step.roleKey === SUPPLY_STEP.REQUESTER) {
+        const projectControlUser = await findWorkflowUser(SUPPLY_STEP.PROJECT_CONTROL, row.createdById);
+        if (!projectControlUser?.id) return json({ error: "project_control_user_not_found" }, 400);
+        history.push({
+          type: "step_set",
+          at: nowIso,
+          roleKey: SUPPLY_STEP.PROJECT_CONTROL,
+          index: 1,
+          assignedToUserId: Number(projectControlUser.id),
+        });
+        data = { ...scalarUpdates, status: "pending", currentAssigneeUserId: Number(projectControlUser.id), historyJson: history };
+      } else if (step.roleKey === SUPPLY_STEP.PROJECT_CONTROL) {
+        const projectManagerUser = await findWorkflowUser(SUPPLY_STEP.PROJECT_MANAGER, row.createdById);
+        if (!projectManagerUser?.id) return json({ error: "project_manager_user_not_found" }, 400);
+        history.push({
+          type: "step_set",
+          at: nowIso,
+          roleKey: SUPPLY_STEP.PROJECT_MANAGER,
+          index: 2,
+          assignedToUserId: Number(projectManagerUser.id),
+        });
+        data = { ...scalarUpdates, status: "pending", currentAssigneeUserId: Number(projectManagerUser.id), historyJson: history };
+      } else if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER) {
+        history.push({ type: "step_clear", at: nowIso });
+        data = { ...scalarUpdates, status: "approved", currentAssigneeUserId: Number(row.createdById), historyJson: history };
+      } else {
+        return json({ error: "invalid_step" }, 400);
+      }
+
+      const updated = await prisma.paymentRequest.update({
+        where: { id },
+        data,
+        include: {
+          createdBy: { select: { name: true, username: true, email: true } },
+          currentAssigneeUser: { select: { name: true, username: true, email: true } },
+        },
+      });
+      return json({ ok: true, item: serializeItem({
+        ...updated,
+        canAct: canActOnSupplyStep({ row: updated, userId, userCtx, mainAdmin }),
+        canDelete: Number(updated.createdById) === Number(userId),
+      }) });
+    }
+
     const projectId = toPositiveInt(body.projectId ?? body.project_id);
     const project = await resolveProject(projectId);
     if (!project) return json({ error: "active_project_not_found" }, 404);
@@ -420,10 +682,8 @@ export async function POST(req) {
     if (!budgetCode) return json({ error: "budget_code_required" }, 400);
     if (amount <= 0n) return json({ error: "amount_must_be_positive" }, 400);
 
-    const marandi = await prisma.user.findFirst({
-      where: { OR: [{ username: "marandi" }, { email: "marandi@ipecgroup.net" }] },
-      select: { id: true },
-    });
+    const projectControlUser = await findWorkflowUser(SUPPLY_STEP.PROJECT_CONTROL, userId);
+    if (!projectControlUser?.id) return json({ error: "project_control_user_not_found" }, 400);
 
     const serial = await makeSerial({ dateJalali });
     if (!serial) return json({ error: "serial_generation_failed" }, 400);
@@ -465,7 +725,7 @@ export async function POST(req) {
         budgetCode,
         attachments: Array.isArray(body.attachments) ? body.attachments : [],
         createdById: Number(userId),
-        currentAssigneeUserId: marandi?.id || null,
+        currentAssigneeUserId: Number(projectControlUser.id),
         status: "pending",
         historyJson: [
           {
@@ -478,12 +738,22 @@ export async function POST(req) {
             registrationInfo,
             relatedLetterIds,
           },
+          {
+            type: "step_set",
+            at: nowIso,
+            roleKey: SUPPLY_STEP.PROJECT_CONTROL,
+            index: 1,
+            assignedToUserId: Number(projectControlUser.id),
+          },
         ],
       },
-      include: { createdBy: { select: { name: true, username: true, email: true } } },
+      include: {
+        createdBy: { select: { name: true, username: true, email: true } },
+        currentAssigneeUser: { select: { name: true, username: true, email: true } },
+      },
     });
 
-    return json({ ok: true, item: serializeItem({ ...created, project }) }, 201);
+    return json({ ok: true, item: serializeItem({ ...created, project, canAct: false, canDelete: true }) }, 201);
   } catch (e) {
     console.error("supply_requests_post_error", e);
     return json({ error: "internal_error" }, 500);
@@ -499,13 +769,12 @@ export async function DELETE(req) {
     const id = toPositiveInt(url.searchParams.get("id"));
     if (!id) return json({ error: "invalid_id" }, 400);
 
-    const { mainAdmin } = await userContext(userId);
     const row = await prisma.paymentRequest.findFirst({
       where: { id, docId: REQUEST_DOC_ID },
       select: { id: true, createdById: true },
     });
     if (!row) return json({ error: "not_found" }, 404);
-    if (!mainAdmin && Number(row.createdById) !== Number(userId)) return json({ error: "forbidden" }, 403);
+    if (Number(row.createdById) !== Number(userId)) return json({ error: "forbidden" }, 403);
 
     await prisma.paymentRequest.delete({ where: { id } });
     return json({ ok: true });
