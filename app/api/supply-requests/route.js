@@ -696,6 +696,7 @@ export async function POST(req) {
       if (!step) return json({ error: "no_active_step" }, 400);
 
       const nowIso = new Date().toISOString();
+      const actorName = userCtx.user?.name || userCtx.user?.username || userCtx.user?.email || `کاربر #${userId}`;
       const currentIndex = typeof step.index === "number" ? step.index : 0;
       const scalarUpdates = {};
       if (step.roleKey === SUPPLY_STEP.PROJECT_CONTROL && nextBudgetCode) scalarUpdates.budgetCode = nextBudgetCode;
@@ -726,6 +727,7 @@ export async function POST(req) {
         status: workflowAction === "approve" ? "approved" : workflowAction === "return" ? "returned" : "rejected",
         note,
         at: nowIso,
+        actorName,
         roleKey: step.roleKey,
         index: currentIndex,
       });
