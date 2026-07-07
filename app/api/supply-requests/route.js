@@ -677,6 +677,7 @@ export async function POST(req) {
       const targetAssigneeUserId = toPositiveInt(body.targetAssigneeUserId ?? body.target_assignee_user_id ?? body.assigneeUserId ?? body.assignee_user_id);
       if (!id) return json({ error: "invalid_id" }, 400);
       if (!["approve", "return", "reject"].includes(workflowAction)) return json({ error: "invalid_action" }, 400);
+      if (["return", "reject"].includes(workflowAction) && !note) return json({ error: "note_required" }, 400);
 
       const row = await prisma.paymentRequest.findFirst({
         where: { id, docId: REQUEST_DOC_ID },
