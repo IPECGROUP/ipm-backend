@@ -362,7 +362,7 @@ async function creatorContext(userId) {
     ])
   );
   const roleNames = roleNamesRaw;
-  const userName = user?.username || user?.name || user?.email || `کاربر #${userId}`;
+  const userName = user?.name || user?.username || user?.email || `کاربر #${userId}`;
   const unitName = unitNames.join("، ") || "نامشخص";
   const roleName = roleNames.join("، ") || "نامشخص";
   return { user, userName, unitName, roleName, unitNames, roleNames };
