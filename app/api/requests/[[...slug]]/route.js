@@ -335,8 +335,18 @@ function pickUpdatable(body) {
     docNumber: body?.docNumber ?? undefined,
     docDateJalali: body?.docDateJalali ?? body?.docDate ?? undefined,
 
-    currencyTypeId: body?.currencyTypeId != null ? Number(body.currencyTypeId) : undefined,
-    currencySourceId: body?.currencySourceId != null ? Number(body.currencySourceId) : undefined,
+    currencyTypeId:
+      body?.currencyTypeId === "" || body?.currencyTypeId === null
+        ? null
+        : body?.currencyTypeId != null
+          ? Number(body.currencyTypeId)
+          : undefined,
+    currencySourceId:
+      body?.currencySourceId === "" || body?.currencySourceId === null
+        ? null
+        : body?.currencySourceId != null
+          ? Number(body.currencySourceId)
+          : undefined,
 
     projectId: body?.projectId != null ? Number(body.projectId) : undefined,
     budgetCode: body?.budgetCode ?? undefined,
@@ -1009,7 +1019,35 @@ export async function PATCH(req, ctx) {
   if (data.cashAmount == null) delete data.cashAmount;
   if (data.creditAmount == null) delete data.creditAmount;
 
-  const history = Array.isArray(row.historyJson) ? row.historyJson : [];
+  const history = Array.isArray(row.historyJson) ? [...row.historyJson] : [];
+  const supplyMetaTouched =
+    Object.prototype.hasOwnProperty.call(body, "hasSupplyRequest") ||
+    Object.prototype.hasOwnProperty.call(body, "supplyRequestId") ||
+    Object.prototype.hasOwnProperty.call(body, "relatedLetterIds") ||
+    Object.prototype.hasOwnProperty.call(body, "related_letter_ids");
+  if (supplyMetaTouched) {
+    const createdIndex = history.findIndex((entry) => entry?.type === "created");
+    if (createdIndex >= 0) {
+      const previous = history[createdIndex] || {};
+      const hasSupplyRequest = Object.prototype.hasOwnProperty.call(body, "hasSupplyRequest")
+        ? (body?.hasSupplyRequest === "yes" ? "yes" : "no")
+        : (previous.hasSupplyRequest || (body?.supplyRequestId ? "yes" : "no"));
+      const supplyRequestId = Object.prototype.hasOwnProperty.call(body, "supplyRequestId")
+        ? String(body?.supplyRequestId || "")
+        : String(previous.supplyRequestId || "");
+      history[createdIndex] = {
+        ...previous,
+        hasSupplyRequest,
+        supplyRequestId: hasSupplyRequest === "yes" ? supplyRequestId : null,
+        relatedLetterIds: (
+          Object.prototype.hasOwnProperty.call(body, "relatedLetterIds") ||
+          Object.prototype.hasOwnProperty.call(body, "related_letter_ids")
+        )
+          ? normalizeIdList(body?.relatedLetterIds ?? body?.related_letter_ids)
+          : normalizeIdList(previous.relatedLetterIds),
+      };
+    }
+  }
   history.push({
     byUserId: userId,
     type: "edited",
