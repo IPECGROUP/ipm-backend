@@ -492,15 +492,14 @@ async function nextApproveRoleKeyForRow(row, step) {
 function canActOnSupplyStep({ row, userId, userCtx, mainAdmin }) {
   const step = getCurrentStep(row?.historyJson);
   if (!step) return false;
-  if (mainAdmin) return true;
+  const isCreator = Number(row.createdById) === Number(userId);
   if (step.roleKey === SUPPLY_STEP.REQUESTER) {
     const latestAction = latestWorkflowAction(row?.historyJson);
-    return (
-      Number(row.createdById) === Number(userId) &&
-      Number(row.currentAssigneeUserId) === Number(userId) &&
-      latestAction?.type === "returned"
-    );
+    if (isCreator) return Number(row.currentAssigneeUserId) === Number(userId) && latestAction?.type === "returned";
+    return mainAdmin || Number(row.currentAssigneeUserId) === Number(userId);
   }
+  if (isCreator) return false;
+  if (mainAdmin) return true;
   if (Number(row.currentAssigneeUserId) === Number(userId)) return true;
   return false;
 }
@@ -657,7 +656,7 @@ export async function GET(req) {
     const finalRows = cartableOnly
       ? visibleRows.filter((row) => {
           const step = getCurrentStep(row.historyJson);
-          return !!step && (mainAdmin || Number(row.currentAssigneeUserId) === Number(userId));
+          return !!step && canActOnSupplyStep({ row, userId, userCtx, mainAdmin });
         })
       : visibleRows;
     return json({
@@ -712,6 +711,9 @@ export async function POST(req) {
       const history = Array.isArray(row.historyJson) ? row.historyJson : [];
       const step = getCurrentStep(history);
       if (!step) return json({ error: "no_active_step" }, 400);
+      if (Number(row.createdById) === Number(userId) && step.roleKey !== SUPPLY_STEP.REQUESTER) {
+        return json({ error: "forbidden" }, 403);
+      }
       if (step.roleKey === SUPPLY_STEP.REQUESTER && latestWorkflowAction(history)?.type !== "returned") {
         return json({ error: "forbidden" }, 403);
       }
