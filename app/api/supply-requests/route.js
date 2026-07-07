@@ -720,6 +720,7 @@ export async function POST(req) {
 
       const nowIso = new Date().toISOString();
       const actorName = userCtx.user?.name || userCtx.user?.username || userCtx.user?.email || `کاربر #${userId}`;
+      const actionClientInfo = clientDateTimeInfo(body.clientRegistrationInfo);
       const currentIndex = typeof step.index === "number" ? step.index : 0;
       const scalarUpdates = {};
       if (step.roleKey === SUPPLY_STEP.PROJECT_CONTROL && nextBudgetCode) scalarUpdates.budgetCode = nextBudgetCode;
@@ -750,6 +751,7 @@ export async function POST(req) {
         status: workflowAction === "approve" ? "approved" : workflowAction === "return" ? "returned" : "rejected",
         note,
         at: nowIso,
+        ...(actionClientInfo ? { clientRegistrationInfo: actionClientInfo } : {}),
         actorName,
         roleKey: step.roleKey,
         index: currentIndex,
