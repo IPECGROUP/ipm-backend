@@ -390,7 +390,7 @@ function isProjectManagerContext(ctx) {
   return includesAny(ctx?.roleNames || [], ["مدیر پروژه", "مدیریت پروژه", "project manager"]);
 }
 
-async function findWorkflowUser(kind, excludeUserId = null) {
+async function findWorkflowUsers(kind, excludeUserId = null) {
   let users = [];
   try {
     users = await prisma.user.findMany({
@@ -440,8 +440,43 @@ async function findWorkflowUser(kind, excludeUserId = null) {
     })
     .filter((ctx) => (kind === SUPPLY_STEP.PROJECT_CONTROL ? isProjectControlContext(ctx) : isProjectManagerContext(ctx)));
 
-  const preferred = candidates.find((ctx) => Number(ctx.user.id) !== Number(excludeUserId)) || candidates[0];
-  return preferred?.user || null;
+  return candidates
+    .filter((ctx) => !excludeUserId || Number(ctx.user.id) !== Number(excludeUserId))
+    .map((ctx) => ctx.user);
+}
+
+function serializeWorkflowUsers(users = []) {
+  return (Array.isArray(users) ? users : []).map((user) => ({
+    id: user.id,
+    name: user.name || user.username || user.email || `کاربر #${user.id}`,
+    username: user.username || null,
+    email: user.email || null,
+    department: user.department || null,
+  }));
+}
+
+async function requireWorkflowAssignee(kind, selectedUserId, excludeUserId, errorCode) {
+  const users = await findWorkflowUsers(kind, excludeUserId);
+  if (!users.length) return { error: errorCode };
+  const selected = selectedUserId ? users.find((user) => Number(user.id) === Number(selectedUserId)) : null;
+  if (!selected) return { error: selectedUserId ? "target_assignee_invalid" : "target_assignee_required" };
+  return { user: selected, users };
+}
+
+function nextRoleKeyForCreatorContext(ctx) {
+  if (isProjectManagerContext(ctx)) return null;
+  if (isProjectControlContext(ctx)) return SUPPLY_STEP.PROJECT_MANAGER;
+  return SUPPLY_STEP.PROJECT_CONTROL;
+}
+
+async function nextApproveRoleKeyForRow(row, step) {
+  if (!step) return null;
+  if (step.roleKey === SUPPLY_STEP.REQUESTER) {
+    const creatorCtx = await userRoleAndUnitContext(row.createdById);
+    return nextRoleKeyForCreatorContext(creatorCtx);
+  }
+  if (step.roleKey === SUPPLY_STEP.PROJECT_CONTROL) return SUPPLY_STEP.PROJECT_MANAGER;
+  return null;
 }
 
 function canActOnSupplyStep({ row, userId, userCtx, mainAdmin }) {
@@ -449,9 +484,7 @@ function canActOnSupplyStep({ row, userId, userCtx, mainAdmin }) {
   if (!step) return false;
   if (mainAdmin) return true;
   if (Number(row.currentAssigneeUserId) === Number(userId)) return true;
-  if (step.roleKey === SUPPLY_STEP.REQUESTER) return Number(row.createdById) === Number(userId);
-  if (step.roleKey === SUPPLY_STEP.PROJECT_CONTROL) return isProjectControlContext(userCtx);
-  if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER) return isProjectManagerContext(userCtx);
+  if (!row.currentAssigneeUserId && step.roleKey === SUPPLY_STEP.REQUESTER) return Number(row.createdById) === Number(userId);
   return false;
 }
 
@@ -535,6 +568,30 @@ export async function GET(req) {
     if (!userId) return json({ error: "unauthorized" }, 401);
 
     const url = new URL(req.url);
+    if (url.searchParams.get("nextRecipientsForCreate") === "1") {
+      const creatorCtx = await userRoleAndUnitContext(userId);
+      const targetRoleKey = nextRoleKeyForCreatorContext(creatorCtx);
+      if (!targetRoleKey) return json({ targetRoleKey: null, users: [] });
+      const users = await findWorkflowUsers(targetRoleKey, userId);
+      return json({ targetRoleKey, users: serializeWorkflowUsers(users) });
+    }
+
+    const nextRecipientsForItem = toPositiveInt(url.searchParams.get("nextRecipientsForItem"));
+    if (nextRecipientsForItem) {
+      const row = await prisma.paymentRequest.findFirst({
+        where: { id: nextRecipientsForItem, docId: REQUEST_DOC_ID },
+      });
+      if (!row) return json({ error: "not_found" }, 404);
+      const { mainAdmin } = await userContext(userId);
+      const userCtx = await userRoleAndUnitContext(userId);
+      if (!canActOnSupplyStep({ row, userId, userCtx, mainAdmin })) return json({ error: "forbidden" }, 403);
+      const step = getCurrentStep(row.historyJson);
+      const targetRoleKey = await nextApproveRoleKeyForRow(row, step);
+      if (!targetRoleKey) return json({ targetRoleKey: null, users: [] });
+      const users = await findWorkflowUsers(targetRoleKey, row.createdById);
+      return json({ targetRoleKey, users: serializeWorkflowUsers(users) });
+    }
+
     if (url.searchParams.get("users") === "1") {
       const users = await prisma.user.findMany({
         select: { id: true, name: true, username: true, email: true, department: true },
@@ -569,19 +626,25 @@ export async function GET(req) {
     const projectById = new Map(projects.map((project) => [Number(project.id), project]));
 
     const userCtx = await userRoleAndUnitContext(userId);
+    const cartableOnly = url.searchParams.get("cartable") === "1";
     const visibleRows = mainAdmin
       ? rows
       : rows.filter((row) => {
           const canAct = canActOnSupplyStep({ row, userId, userCtx, mainAdmin });
+          if (cartableOnly) return canAct && Number(row.currentAssigneeUserId) === Number(userId);
           return (
-            canAct ||
             Number(row.createdById) === Number(userId) ||
-            Number(row.currentAssigneeUserId) === Number(userId) ||
             ccUserIdsOf(row).includes(String(userId))
           );
         });
+    const finalRows = cartableOnly
+      ? visibleRows.filter((row) => {
+          const step = getCurrentStep(row.historyJson);
+          return !!step && (mainAdmin || Number(row.currentAssigneeUserId) === Number(userId));
+        })
+      : visibleRows;
     return json({
-      items: visibleRows.map((row) => serializeItem({
+      items: finalRows.map((row) => serializeItem({
         ...row,
         project: projectById.get(Number(row.projectId)) || null,
         canAct: canActOnSupplyStep({ row, userId, userCtx, mainAdmin }),
@@ -611,6 +674,7 @@ export async function POST(req) {
       const actionText = cleanText(body.actionText ?? body.action_text, 500);
       const deadlineDate = cleanText(body.deadlineDate ?? body.deadline_date, 20).replaceAll("-", "/");
       const ccUserIds = normalizeIdList(body.ccUserIds ?? body.cc_user_ids).map(Number).filter((n) => Number.isFinite(n) && n > 0);
+      const targetAssigneeUserId = toPositiveInt(body.targetAssigneeUserId ?? body.target_assignee_user_id ?? body.assigneeUserId ?? body.assignee_user_id);
       if (!id) return json({ error: "invalid_id" }, 400);
       if (!["approve", "return", "reject"].includes(workflowAction)) return json({ error: "invalid_action" }, 400);
 
@@ -682,27 +746,38 @@ export async function POST(req) {
         history.push({ type: "step_clear", at: nowIso });
         data = { ...scalarUpdates, status: "rejected", currentAssigneeUserId: null, historyJson: history };
       } else if (step.roleKey === SUPPLY_STEP.REQUESTER) {
-        const projectControlUser = await findWorkflowUser(SUPPLY_STEP.PROJECT_CONTROL, row.createdById);
-        if (!projectControlUser?.id) return json({ error: "project_control_user_not_found" }, 400);
-        history.push({
-          type: "step_set",
-          at: nowIso,
-          roleKey: SUPPLY_STEP.PROJECT_CONTROL,
-          index: 1,
-          assignedToUserId: Number(projectControlUser.id),
-        });
-        data = { ...scalarUpdates, status: "pending", currentAssigneeUserId: Number(projectControlUser.id), historyJson: history };
+        const nextRoleKey = await nextApproveRoleKeyForRow(row, step);
+        if (!nextRoleKey) {
+          history.push({ type: "step_clear", at: nowIso });
+          data = { ...scalarUpdates, status: "approved", currentAssigneeUserId: Number(row.createdById), historyJson: history };
+        } else {
+          const resolved = await requireWorkflowAssignee(
+            nextRoleKey,
+            targetAssigneeUserId,
+            row.createdById,
+            nextRoleKey === SUPPLY_STEP.PROJECT_CONTROL ? "project_control_user_not_found" : "project_manager_user_not_found"
+          );
+          if (resolved.error) return json({ error: resolved.error }, 400);
+          history.push({
+            type: "step_set",
+            at: nowIso,
+            roleKey: nextRoleKey,
+            index: nextRoleKey === SUPPLY_STEP.PROJECT_CONTROL ? 1 : 2,
+            assignedToUserId: Number(resolved.user.id),
+          });
+          data = { ...scalarUpdates, status: "pending", currentAssigneeUserId: Number(resolved.user.id), historyJson: history };
+        }
       } else if (step.roleKey === SUPPLY_STEP.PROJECT_CONTROL) {
-        const projectManagerUser = await findWorkflowUser(SUPPLY_STEP.PROJECT_MANAGER, row.createdById);
-        if (!projectManagerUser?.id) return json({ error: "project_manager_user_not_found" }, 400);
+        const resolved = await requireWorkflowAssignee(SUPPLY_STEP.PROJECT_MANAGER, targetAssigneeUserId, row.createdById, "project_manager_user_not_found");
+        if (resolved.error) return json({ error: resolved.error }, 400);
         history.push({
           type: "step_set",
           at: nowIso,
           roleKey: SUPPLY_STEP.PROJECT_MANAGER,
           index: 2,
-          assignedToUserId: Number(projectManagerUser.id),
+          assignedToUserId: Number(resolved.user.id),
         });
-        data = { ...scalarUpdates, status: "pending", currentAssigneeUserId: Number(projectManagerUser.id), historyJson: history };
+        data = { ...scalarUpdates, status: "pending", currentAssigneeUserId: Number(resolved.user.id), historyJson: history };
       } else if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER) {
         history.push({ type: "step_clear", at: nowIso });
         data = { ...scalarUpdates, status: "approved", currentAssigneeUserId: Number(row.createdById), historyJson: history };
@@ -735,13 +810,23 @@ export async function POST(req) {
     const needDateJalali = cleanText(body.needDateJalali ?? body.need_date_jalali, 20);
     const description = cleanText(body.description, 2000);
     const amount = toBigIntAmount(body.amount);
+    const targetAssigneeUserId = toPositiveInt(body.targetAssigneeUserId ?? body.target_assignee_user_id ?? body.assigneeUserId ?? body.assignee_user_id);
 
     if (!title) return json({ error: "title_required" }, 400);
     if (!budgetCode) return json({ error: "budget_code_required" }, 400);
     if (amount <= 0n) return json({ error: "amount_must_be_positive" }, 400);
 
-    const projectControlUser = await findWorkflowUser(SUPPLY_STEP.PROJECT_CONTROL, userId);
-    if (!projectControlUser?.id) return json({ error: "project_control_user_not_found" }, 400);
+    const creatorCtxForRouting = await userRoleAndUnitContext(userId);
+    const initialTargetRoleKey = nextRoleKeyForCreatorContext(creatorCtxForRouting);
+    const initialAssignee = initialTargetRoleKey
+      ? await requireWorkflowAssignee(
+          initialTargetRoleKey,
+          targetAssigneeUserId,
+          userId,
+          initialTargetRoleKey === SUPPLY_STEP.PROJECT_CONTROL ? "project_control_user_not_found" : "project_manager_user_not_found"
+        )
+      : { user: null };
+    if (initialAssignee.error) return json({ error: initialAssignee.error }, 400);
 
     const serial = await makeSerial({ dateJalali });
     if (!serial) return json({ error: "serial_generation_failed" }, 400);
@@ -759,6 +844,29 @@ export async function POST(req) {
       roleName,
     };
     const relatedLetterIds = normalizeIdList(body.relatedLetterIds ?? body.related_letter_ids);
+    const historyJson = [
+      {
+        byUserId: Number(userId),
+        type: "created",
+        status: initialTargetRoleKey ? "pending" : "approved",
+        note: "",
+        at: nowIso,
+        requestKind: REQUEST_DOC_ID,
+        registrationInfo,
+        relatedLetterIds,
+      },
+    ];
+    if (initialTargetRoleKey) {
+      historyJson.push({
+        type: "step_set",
+        at: nowIso,
+        roleKey: initialTargetRoleKey,
+        index: initialTargetRoleKey === SUPPLY_STEP.PROJECT_CONTROL ? 1 : 2,
+        assignedToUserId: Number(initialAssignee.user.id),
+      });
+    } else {
+      historyJson.push({ type: "step_clear", at: nowIso });
+    }
     const created = await prisma.paymentRequest.create({
       data: {
         serial,
@@ -783,27 +891,9 @@ export async function POST(req) {
         budgetCode,
         attachments: Array.isArray(body.attachments) ? body.attachments : [],
         createdById: Number(userId),
-        currentAssigneeUserId: Number(projectControlUser.id),
-        status: "pending",
-        historyJson: [
-          {
-            byUserId: Number(userId),
-            type: "created",
-            status: "pending",
-            note: "",
-            at: nowIso,
-            requestKind: REQUEST_DOC_ID,
-            registrationInfo,
-            relatedLetterIds,
-          },
-          {
-            type: "step_set",
-            at: nowIso,
-            roleKey: SUPPLY_STEP.PROJECT_CONTROL,
-            index: 1,
-            assignedToUserId: Number(projectControlUser.id),
-          },
-        ],
+        currentAssigneeUserId: initialTargetRoleKey ? Number(initialAssignee.user.id) : Number(userId),
+        status: initialTargetRoleKey ? "pending" : "approved",
+        historyJson,
       },
       include: {
         createdBy: { select: { name: true, username: true, email: true } },
