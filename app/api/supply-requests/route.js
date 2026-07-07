@@ -202,6 +202,15 @@ function getCurrentStep(historyJson) {
   return null;
 }
 
+function latestWorkflowAction(historyJson) {
+  const history = Array.isArray(historyJson) ? historyJson : [];
+  for (let i = history.length - 1; i >= 0; i -= 1) {
+    const entry = history[i];
+    if (["approved", "returned", "rejected"].includes(entry?.type)) return entry;
+  }
+  return null;
+}
+
 function workflowStatusOf(row) {
   const step = getCurrentStep(row?.historyJson);
   if (step?.roleKey === SUPPLY_STEP.PROJECT_CONTROL) return "pending";
@@ -484,8 +493,15 @@ function canActOnSupplyStep({ row, userId, userCtx, mainAdmin }) {
   const step = getCurrentStep(row?.historyJson);
   if (!step) return false;
   if (mainAdmin) return true;
+  if (step.roleKey === SUPPLY_STEP.REQUESTER) {
+    const latestAction = latestWorkflowAction(row?.historyJson);
+    return (
+      Number(row.createdById) === Number(userId) &&
+      Number(row.currentAssigneeUserId) === Number(userId) &&
+      latestAction?.type === "returned"
+    );
+  }
   if (Number(row.currentAssigneeUserId) === Number(userId)) return true;
-  if (!row.currentAssigneeUserId && step.roleKey === SUPPLY_STEP.REQUESTER) return Number(row.createdById) === Number(userId);
   return false;
 }
 
@@ -696,6 +712,9 @@ export async function POST(req) {
       const history = Array.isArray(row.historyJson) ? row.historyJson : [];
       const step = getCurrentStep(history);
       if (!step) return json({ error: "no_active_step" }, 400);
+      if (step.roleKey === SUPPLY_STEP.REQUESTER && latestWorkflowAction(history)?.type !== "returned") {
+        return json({ error: "forbidden" }, 403);
+      }
 
       const nowIso = new Date().toISOString();
       const actorName = userCtx.user?.name || userCtx.user?.username || userCtx.user?.email || `کاربر #${userId}`;
