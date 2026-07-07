@@ -203,12 +203,13 @@ function getCurrentStep(historyJson) {
 }
 
 function workflowStatusOf(row) {
+  const step = getCurrentStep(row?.historyJson);
+  if (step?.roleKey === SUPPLY_STEP.PROJECT_CONTROL) return "pending";
+  if (step?.roleKey === SUPPLY_STEP.PROJECT_MANAGER) return "final_approval";
+  if (step?.roleKey === SUPPLY_STEP.REQUESTER) return "in_progress";
   if (row?.status === "approved") return "done";
   if (row?.status === "rejected") return "canceled";
   if (row?.status === "returned") return "in_progress";
-  const step = getCurrentStep(row?.historyJson);
-  if (step?.roleKey === SUPPLY_STEP.PROJECT_MANAGER) return "final_approval";
-  if (step?.roleKey === SUPPLY_STEP.REQUESTER) return "in_progress";
   return "pending";
 }
 
