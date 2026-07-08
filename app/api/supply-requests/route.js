@@ -670,7 +670,7 @@ export async function GET(req) {
     const finalRows = cartableOnly
       ? visibleRows.filter((row) => {
           const step = getCurrentStep(row.historyJson);
-          return !!step && canActOnSupplyStep({ row, userId, userCtx, mainAdmin });
+          return !!step && step.roleKey !== SUPPLY_STEP.COMMERCIAL && canActOnSupplyStep({ row, userId, userCtx, mainAdmin });
         })
       : visibleRows;
     return json({
