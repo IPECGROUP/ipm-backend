@@ -896,6 +896,7 @@ export async function POST(req) {
     const registrationInfo = {
       ...formatRegistrationDateTime(now),
       ...(clientInfo || {}),
+      serial,
       userId: Number(userId),
       userName,
       unitName,
