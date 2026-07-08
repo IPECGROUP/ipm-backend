@@ -563,26 +563,28 @@ async function resolveProject(projectId) {
   });
 }
 
-async function makeSerial({ dateJalali }) {
+async function makeSerial({ dateJalali, projectCode }) {
   const yy = getJalaliYY(dateJalali);
-  const prefix = `${yy}/`;
+  const normalizedProjectCode = normalizeDigits(String(projectCode || "").trim()).replace(/[^\d]/g, "");
+  const prefix = normalizedProjectCode ? `${yy}/${normalizedProjectCode}` : yy;
   const rows = await prisma.paymentRequest.findMany({
     where: {
       docId: REQUEST_DOC_ID,
-      serial: { startsWith: prefix },
+      serial: { startsWith: `${prefix}/` },
     },
     select: { serial: true },
     take: 1000,
   });
 
   let maxSeq = 0;
-  const re = new RegExp(`^${yy}/(?:\\d{3}/)?(\\d{3})$`);
+  const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`^${escapedPrefix}/(\\d{3})$`);
   for (const row of rows) {
     const m = String(row?.serial || "").match(re);
     if (m) maxSeq = Math.max(maxSeq, Number(m[1]) || 0);
   }
 
-  return `${prefix}${String(maxSeq + 1).padStart(3, "0")}`;
+  return `${prefix}/${String(maxSeq + 1).padStart(3, "0")}`;
 }
 
 async function userContext(userId) {
@@ -886,7 +888,7 @@ export async function POST(req) {
       : { user: null };
     if (initialAssignee.error) return json({ error: initialAssignee.error }, 400);
 
-    const serial = await makeSerial({ dateJalali });
+    const serial = await makeSerial({ dateJalali, projectCode: project.code });
     if (!serial) return json({ error: "serial_generation_failed" }, 400);
 
     const now = new Date();
