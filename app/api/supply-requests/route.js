@@ -9,6 +9,7 @@ const SUPPLY_STEP = {
   REQUESTER: "requester",
   PROJECT_CONTROL: "project_control",
   PROJECT_MANAGER: "project_manager",
+  COMMERCIAL: "commercial",
 };
 
 const json = (data, status = 200) =>
@@ -215,6 +216,7 @@ function workflowStatusOf(row) {
   const step = getCurrentStep(row?.historyJson);
   if (step?.roleKey === SUPPLY_STEP.PROJECT_CONTROL) return "pending";
   if (step?.roleKey === SUPPLY_STEP.PROJECT_MANAGER) return "final_approval";
+  if (step?.roleKey === SUPPLY_STEP.COMMERCIAL) return "in_progress";
   if (step?.roleKey === SUPPLY_STEP.REQUESTER) return "in_progress";
   if (row?.status === "approved") return "done";
   if (row?.status === "rejected") return "canceled";
@@ -400,6 +402,10 @@ function isProjectManagerContext(ctx) {
   return includesAny(ctx?.roleNames || [], ["مدیر پروژه", "مدیریت پروژه", "project manager"]);
 }
 
+function isCommercialContext(ctx) {
+  return includesAny([...(ctx?.unitNames || []), ...(ctx?.roleNames || [])], ["بازرگانی", "تامین", "تأمین", "تامین و پشتیبانی"]);
+}
+
 async function findWorkflowUsers(kind, excludeUserId = null) {
   let users = [];
   try {
@@ -448,7 +454,12 @@ async function findWorkflowUsers(kind, excludeUserId = null) {
       ];
       return { user, roleNames, unitNames };
     })
-    .filter((ctx) => (kind === SUPPLY_STEP.PROJECT_CONTROL ? isProjectControlContext(ctx) : isProjectManagerContext(ctx)));
+    .filter((ctx) => {
+      if (kind === SUPPLY_STEP.PROJECT_CONTROL) return isProjectControlContext(ctx);
+      if (kind === SUPPLY_STEP.PROJECT_MANAGER) return isProjectManagerContext(ctx);
+      if (kind === SUPPLY_STEP.COMMERCIAL) return isCommercialContext(ctx);
+      return false;
+    });
 
   return candidates
     .filter((ctx) => !excludeUserId || Number(ctx.user.id) !== Number(excludeUserId))
@@ -474,7 +485,7 @@ async function requireWorkflowAssignee(kind, selectedUserId, excludeUserId, erro
 }
 
 function nextRoleKeyForCreatorContext(ctx) {
-  if (isProjectManagerContext(ctx)) return null;
+  if (isProjectManagerContext(ctx)) return SUPPLY_STEP.COMMERCIAL;
   if (isProjectControlContext(ctx)) return SUPPLY_STEP.PROJECT_MANAGER;
   return SUPPLY_STEP.PROJECT_CONTROL;
 }
@@ -486,6 +497,7 @@ async function nextApproveRoleKeyForRow(row, step) {
     return nextRoleKeyForCreatorContext(creatorCtx);
   }
   if (step.roleKey === SUPPLY_STEP.PROJECT_CONTROL) return SUPPLY_STEP.PROJECT_MANAGER;
+  if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER) return SUPPLY_STEP.COMMERCIAL;
   return null;
 }
 
@@ -782,14 +794,18 @@ export async function POST(req) {
             nextRoleKey,
             targetAssigneeUserId,
             row.createdById,
-            nextRoleKey === SUPPLY_STEP.PROJECT_CONTROL ? "project_control_user_not_found" : "project_manager_user_not_found"
+            nextRoleKey === SUPPLY_STEP.PROJECT_CONTROL
+              ? "project_control_user_not_found"
+              : nextRoleKey === SUPPLY_STEP.PROJECT_MANAGER
+                ? "project_manager_user_not_found"
+                : "commercial_user_not_found"
           );
           if (resolved.error) return json({ error: resolved.error }, 400);
           history.push({
             type: "step_set",
             at: nowIso,
             roleKey: nextRoleKey,
-            index: nextRoleKey === SUPPLY_STEP.PROJECT_CONTROL ? 1 : 2,
+            index: nextRoleKey === SUPPLY_STEP.PROJECT_CONTROL ? 1 : nextRoleKey === SUPPLY_STEP.PROJECT_MANAGER ? 2 : 3,
             assignedToUserId: Number(resolved.user.id),
           });
           data = { ...scalarUpdates, status: "pending", currentAssigneeUserId: Number(resolved.user.id), historyJson: history };
@@ -806,6 +822,17 @@ export async function POST(req) {
         });
         data = { ...scalarUpdates, status: "pending", currentAssigneeUserId: Number(resolved.user.id), historyJson: history };
       } else if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER) {
+        const resolved = await requireWorkflowAssignee(SUPPLY_STEP.COMMERCIAL, targetAssigneeUserId, row.createdById, "commercial_user_not_found");
+        if (resolved.error) return json({ error: resolved.error }, 400);
+        history.push({
+          type: "step_set",
+          at: nowIso,
+          roleKey: SUPPLY_STEP.COMMERCIAL,
+          index: 3,
+          assignedToUserId: Number(resolved.user.id),
+        });
+        data = { ...scalarUpdates, status: "pending", currentAssigneeUserId: Number(resolved.user.id), historyJson: history };
+      } else if (step.roleKey === SUPPLY_STEP.COMMERCIAL) {
         history.push({ type: "step_clear", at: nowIso });
         data = { ...scalarUpdates, status: "approved", currentAssigneeUserId: Number(row.createdById), historyJson: history };
       } else {
@@ -850,7 +877,11 @@ export async function POST(req) {
           initialTargetRoleKey,
           targetAssigneeUserId,
           userId,
-          initialTargetRoleKey === SUPPLY_STEP.PROJECT_CONTROL ? "project_control_user_not_found" : "project_manager_user_not_found"
+          initialTargetRoleKey === SUPPLY_STEP.PROJECT_CONTROL
+            ? "project_control_user_not_found"
+            : initialTargetRoleKey === SUPPLY_STEP.PROJECT_MANAGER
+              ? "project_manager_user_not_found"
+              : "commercial_user_not_found"
         )
       : { user: null };
     if (initialAssignee.error) return json({ error: initialAssignee.error }, 400);
@@ -888,7 +919,7 @@ export async function POST(req) {
         type: "step_set",
         at: nowIso,
         roleKey: initialTargetRoleKey,
-        index: initialTargetRoleKey === SUPPLY_STEP.PROJECT_CONTROL ? 1 : 2,
+        index: initialTargetRoleKey === SUPPLY_STEP.PROJECT_CONTROL ? 1 : initialTargetRoleKey === SUPPLY_STEP.PROJECT_MANAGER ? 2 : 3,
         assignedToUserId: Number(initialAssignee.user.id),
       });
     } else {
