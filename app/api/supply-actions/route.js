@@ -76,6 +76,16 @@ function normalizeDate(value) {
   return `${m[1]}/${String(m[2]).padStart(2, "0")}/${String(m[3]).padStart(2, "0")}`;
 }
 
+function normalizeTime(value) {
+  const raw = normalizeDigits(value).trim();
+  const m = raw.match(/^(\d{1,2}):(\d{2})$/);
+  if (!m) return "";
+  const hour = Number(m[1]);
+  const minute = Number(m[2]);
+  if (hour > 23 || minute > 59) return "";
+  return `${String(hour).padStart(2, "0")}:${String(minute).padStart(2, "0")}`;
+}
+
 function normalizeFiles(value) {
   if (!Array.isArray(value)) return [];
   return value
@@ -109,6 +119,7 @@ async function ensureSupplyActionStorage() {
       "updated_at" TIMESTAMPTZ NOT NULL DEFAULT now()
     )
   `);
+  await prisma.$executeRawUnsafe(`ALTER TABLE "supply_action_entries" ADD COLUMN IF NOT EXISTS "action_time" VARCHAR(8)`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "supply_action_entries_request_id_idx" ON "supply_action_entries" ("request_id")`);
   await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "supply_action_entries_created_by_idx" ON "supply_action_entries" ("created_by")`);
   storageReady = true;
@@ -130,6 +141,7 @@ function supplyActionsOf(history) {
     .map((entry) => ({
       id: String(entry.actionId),
       date: entry.date || "",
+      time: entry.time || "",
       description: entry.description || "",
       status: ACTION_STATUSES.has(entry.lastStatus) ? entry.lastStatus : "in_progress",
       files: normalizeFiles(entry.files),
@@ -144,6 +156,7 @@ function serializeStoredAction(row) {
   return {
     id: String(row.id),
     date: row.action_date || "",
+    time: row.action_time || "",
     description: row.description || "",
     status: ACTION_STATUSES.has(row.status) ? row.status : "in_progress",
     files: normalizeFiles(row.files),
@@ -157,7 +170,7 @@ async function actionsByRequestIds(ids) {
   const cleanIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map(Number).filter((n) => Number.isFinite(n) && n > 0)));
   if (!cleanIds.length) return new Map();
   const rows = await prisma.$queryRawUnsafe(
-    `SELECT "id", "request_id", "action_date", "description", "status", "files", "created_by", "created_at", "updated_at"
+    `SELECT "id", "request_id", "action_date", "action_time", "description", "status", "files", "created_by", "created_at", "updated_at"
      FROM "supply_action_entries"
      WHERE "request_id" = ANY($1::int[])
      ORDER BY "created_at" ASC, "id" ASC`,
@@ -333,10 +346,11 @@ export async function POST(req) {
     const nowIso = new Date().toISOString();
     const nextStatus = ACTION_STATUSES.has(body.status) ? body.status : "in_progress";
     await prisma.$executeRawUnsafe(
-      `INSERT INTO "supply_action_entries" ("id", "request_id", "action_date", "description", "status", "files", "created_by", "created_at", "updated_at")
-       VALUES ($1, $2, $3, $4, $5, $6::jsonb, $7, now(), now())
+      `INSERT INTO "supply_action_entries" ("id", "request_id", "action_date", "action_time", "description", "status", "files", "created_by", "created_at", "updated_at")
+       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, now(), now())
        ON CONFLICT ("id") DO UPDATE SET
          "action_date" = EXCLUDED."action_date",
+         "action_time" = EXCLUDED."action_time",
          "description" = EXCLUDED."description",
          "status" = EXCLUDED."status",
          "files" = EXCLUDED."files",
@@ -345,6 +359,7 @@ export async function POST(req) {
       actionId,
       requestId,
       normalizeDate(body.date ?? body.actionDate ?? body.action_date),
+      normalizeTime(body.time ?? body.actionTime ?? body.action_time),
       cleanText(body.description ?? body.note ?? body.actionText ?? "", 3000),
       nextStatus,
       JSON.stringify(normalizeFiles(body.files)),
