@@ -73,6 +73,20 @@ export async function POST(req) {
     const buffer = Buffer.from(await file.arrayBuffer());
     const contentHash = crypto.createHash("sha256").update(buffer).digest("hex");
     const sha256 = `supply-actions:${contentHash}`;
+    const existing = await prisma.uploadedFile.findUnique({ where: { sha256 } });
+    if (existing) {
+      return json({
+        ok: true,
+        file: {
+          id: existing.id,
+          serverId: existing.id,
+          url: existing.url,
+          name: existing.originalName,
+          size: existing.size,
+          type: existing.mimeType || mimeType,
+        },
+      });
+    }
     const ext = safeExtFromName(originalName);
     const storedName = `${crypto.randomUUID()}${ext}`;
     const url = `/uploads/supply-actions/${storedName}`;
@@ -81,14 +95,7 @@ export async function POST(req) {
 
     const rec = await prisma.uploadedFile.upsert({
       where: { sha256 },
-      update: {
-        originalName,
-        storedName,
-        mimeType,
-        size,
-        url,
-        createdBy: Number(userId),
-      },
+      update: {},
       create: {
         sha256,
         originalName,
