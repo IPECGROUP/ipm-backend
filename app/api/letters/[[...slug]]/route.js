@@ -639,9 +639,10 @@ async function computeNextLetterCodeFromDb(projectId) {
 
 async function resolveSecretariatNoForCreate(payload) {
   const raw = String(payload?.secretariatNo || "").trim();
-  const nextCode = await computeNextLetterCodeFromDb(payload?.projectId);
-  if (nextCode) return nextCode;
-  return raw;
+  // A manually entered suffix distinguishes letters that share a registry number.
+  // Preserve it verbatim instead of replacing it with the generated next code.
+  if (raw) return raw;
+  return await computeNextLetterCodeFromDb(payload?.projectId);
 }
 
 // تلاش برای گرفتن userId از Session (اگر session cookie دارید)
