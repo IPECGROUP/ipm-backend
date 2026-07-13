@@ -343,8 +343,15 @@ export async function POST(req) {
       return json({ ok: true, item: serialize({ ...updatedWithProject, supplyActions: remainingActions }) });
     }
 
-    const nowIso = new Date().toISOString();
-    const nextStatus = ACTION_STATUSES.has(body.status) ? body.status : "in_progress";
+    // وضعیت فقط هنگام ثبت اولیه تعیین می‌شود؛ ویرایش اقدام قبلی نباید
+    // بتواند درخواست را ناگهان «انجام شد» یا «لغو شد» کند.
+    const existingRows = await prisma.$queryRawUnsafe(
+      `SELECT "status" FROM "supply_action_entries" WHERE "id" = $1 AND "request_id" = $2 LIMIT 1`,
+      actionId,
+      requestId
+    );
+    const existingStatus = ACTION_STATUSES.has(existingRows?.[0]?.status) ? existingRows[0].status : null;
+    const nextStatus = existingStatus || (ACTION_STATUSES.has(body.status) ? body.status : "in_progress");
     await prisma.$executeRawUnsafe(
       `INSERT INTO "supply_action_entries" ("id", "request_id", "action_date", "action_time", "description", "status", "files", "created_by", "created_at", "updated_at")
        VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, now(), now())
