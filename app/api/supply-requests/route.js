@@ -664,7 +664,8 @@ export async function GET(req) {
           if (cartableOnly) return canAct && Number(row.currentAssigneeUserId) === Number(userId);
           return (
             Number(row.createdById) === Number(userId) ||
-            ccUserIdsOf(row).includes(String(userId))
+            ccUserIdsOf(row).includes(String(userId)) ||
+            (canAct && Number(row.currentAssigneeUserId) === Number(userId))
           );
         });
     const finalRows = cartableOnly
