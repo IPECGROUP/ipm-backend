@@ -730,6 +730,21 @@ export async function GET(req, ctx) {
     return json({ targetRoleKey, users: serializeWorkflowUsers(users) });
   }
 
+  const nextRecipientsForItem = Number(url.searchParams.get("nextRecipientsForItem"));
+  if (slug.length === 0 && Number.isFinite(nextRecipientsForItem) && nextRecipientsForItem > 0) {
+    const row = await prisma.paymentRequest.findUnique({ where: { id: nextRecipientsForItem } });
+    if (!row) return json({ error: "not_found" }, 404);
+    const canAct = canActOnStep({ row, userId, userRoleKeys: uctx.roleKeys, userUnitNames: uctx.userUnitNames, roleUnitNames: uctx.roleUnitNames, roleNames: uctx.roleNames });
+    if (!canAct) return json({ error: "forbidden" }, 403);
+    const step = getCurrentStep(row.historyJson);
+    const chain = getWorkflowChainForUnit(row.scope);
+    const nextIndex = Number(step?.index ?? -1) + 1;
+    const targetRoleKey = chain?.[nextIndex] || null;
+    if (!targetRoleKey) return json({ targetRoleKey: null, users: [] });
+    const users = await findWorkflowUsersForRole(targetRoleKey, row.createdById);
+    return json({ targetRoleKey, users: serializeWorkflowUsers(users) });
+  }
+
   // GET /api/requests/:id
   if (slug.length === 1 && slug[0] !== "status") {
     const id = Number(slug[0]);
@@ -827,6 +842,7 @@ export async function POST(req, ctx) {
     const id = Number(body?.id);
     const nextStatus = String(body?.status || "").trim(); // approved/rejected/returned
     const note = (body?.note ?? "").toString();
+    const targetAssigneeUserId = Number(body?.targetAssigneeUserId ?? body?.target_assignee_user_id);
 
     if (!Number.isFinite(id)) return json({ error: "invalid_id" }, 400);
     if (!["approved", "rejected", "returned"].includes(nextStatus))
@@ -894,19 +910,23 @@ export async function POST(req, ctx) {
       }
 
       const nextRoleKey = chain[nextIndex];
+      const workflowUsers = await findWorkflowUsersForRole(nextRoleKey, row.createdById);
+      const nextAssignee = workflowUsers.find((candidate) => Number(candidate.id) === targetAssigneeUserId);
+      if (!nextAssignee) return json({ error: targetAssigneeUserId ? "target_assignee_invalid" : "target_assignee_required" }, 400);
       history.push({
         type: "step_set",
         at: new Date().toISOString(),
         unitKind,
         roleKey: nextRoleKey,
         index: nextIndex,
+        assignedToUserId: Number(nextAssignee.id),
       });
 
       const updated = await prisma.paymentRequest.update({
         where: { id },
         data: {
           status: "pending",
-          currentAssigneeUserId: null,
+          currentAssigneeUserId: Number(nextAssignee.id),
           historyJson: history,
         },
       });
