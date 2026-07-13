@@ -520,6 +520,9 @@ function canActOnStep({ row, userId, userRoleKeys, userUnitNames, roleUnitNames,
   const step = getCurrentStep(row.historyJson);
   if (!step) return false;
 
+  // ارجاعِ مشخص به کاربر، اولویت دارد و کارتابل را فقط برای همان فرد می‌سازد.
+  if (row.currentAssigneeUserId != null) return Number(row.currentAssigneeUserId) === Number(userId);
+
   // اگر برگشت خورده و step روی requester است، فقط سازنده حق اقدام دارد
   if (step.roleKey === ROLE_KEYS.REQUESTER) {
     return row.createdById === userId;
@@ -532,6 +535,41 @@ function canActOnStep({ row, userId, userRoleKeys, userUnitNames, roleUnitNames,
   if (!userRoleKeys.includes(step.roleKey)) return false;
 
   return hasWorkflowUnitForRole({ roleKey: step.roleKey, userUnitNames, roleUnitNames, roleNames });
+}
+
+async function findWorkflowUsersForRole(roleKey, excludeUserId = null) {
+  let users = [];
+  try {
+    users = await prisma.user.findMany({
+      include: { units: { include: { unit: true } }, roles: { include: { role: true } } },
+      orderBy: { id: "asc" },
+      take: 500,
+    });
+  } catch {
+    users = await prisma.user.findMany({ orderBy: { id: "asc" }, take: 500 });
+  }
+  return users.filter((candidate) => {
+    if (excludeUserId && Number(candidate.id) === Number(excludeUserId)) return false;
+    const roleNames = [
+      ...(Array.isArray(candidate.roles) ? candidate.roles.map((row) => row.role?.name).filter(Boolean) : []),
+      candidate.role && candidate.role !== "user" ? candidate.role : "",
+    ].filter(Boolean);
+    const userUnitNames = [
+      ...(Array.isArray(candidate.units) ? candidate.units.map((row) => row.unit?.name).filter(Boolean) : []),
+      ...fallbackUnitsForRoleNames(roleNames),
+      ...inferredUnitNamesFromRoles(roleNames),
+    ];
+    return detectUserRoleKeys(roleNames).includes(roleKey) && hasWorkflowUnitForRole({ roleKey, userUnitNames, roleUnitNames: [], roleNames });
+  });
+}
+
+function serializeWorkflowUsers(users = []) {
+  return users.map((candidate) => ({
+    id: candidate.id,
+    name: candidate.name || candidate.username || candidate.email || `کاربر #${candidate.id}`,
+    username: candidate.username || null,
+    email: candidate.email || null,
+  }));
 }
 
 // --- user context (با مدل‌های واقعی Prisma شما)
@@ -684,6 +722,13 @@ export async function GET(req, ctx) {
   const uctx = await getUserContext(req, userId);
 
   const slug = await getSlug(ctx);
+  const url = new URL(req.url);
+
+  if (slug.length === 0 && url.searchParams.get("nextRecipientsForCreate") === "1") {
+    const targetRoleKey = ROLE_KEYS.PROJECT_CONTROL;
+    const users = await findWorkflowUsersForRole(targetRoleKey, userId);
+    return json({ targetRoleKey, users: serializeWorkflowUsers(users) });
+  }
 
   // GET /api/requests/:id
   if (slug.length === 1 && slug[0] !== "status") {
@@ -706,11 +751,10 @@ export async function GET(req, ctx) {
     const canView = uctx.isMainAdmin || row.createdById === userId || canAct;
     if (!canView) return json({ error: "forbidden" }, 403);
 
-    return json({ item: { ...normalizeOut(row), canAct, canDelete: row.createdById === userId } });
+    return json({ item: { ...normalizeOut(row), canAct, canDelete: row.createdById === userId && !["approved", "rejected", "canceled", "cancelled"].includes(row.status) } });
   }
 
   // GET /api/requests (list)
-  const url = new URL(req.url);
   const scope = url.searchParams.get("scope") || "";
   const status = url.searchParams.get("status") || "";
   const q = url.searchParams.get("q") || "";
@@ -766,7 +810,7 @@ export async function GET(req, ctx) {
     items: filtered.map((x) => ({
       ...normalizeOut(x.row),
       canAct: x.canAct,
-      canDelete: x.isMine,
+      canDelete: x.isMine && !["approved", "rejected", "canceled", "cancelled"].includes(x.row.status),
     })),
   });
 }
@@ -842,6 +886,7 @@ export async function POST(req, ctx) {
           where: { id },
           data: {
             status: "approved",
+            currentAssigneeUserId: null,
             historyJson: history,
           },
         });
@@ -861,6 +906,7 @@ export async function POST(req, ctx) {
         where: { id },
         data: {
           status: "pending",
+          currentAssigneeUserId: null,
           historyJson: history,
         },
       });
@@ -879,11 +925,11 @@ export async function POST(req, ctx) {
       index: typeof step?.index === "number" ? step.index : null,
     });
 
-    let data = { status: nextStatus, historyJson: history };
+    let data = { status: nextStatus, currentAssigneeUserId: null, historyJson: history };
 
     if (nextStatus === "rejected") {
       history.push({ type: "step_clear", at: new Date().toISOString() });
-      data = { status: "rejected", historyJson: history };
+      data = { status: "rejected", currentAssigneeUserId: null, historyJson: history };
     } else if (nextStatus === "returned") {
       history.push({
         type: "step_set",
@@ -892,7 +938,7 @@ export async function POST(req, ctx) {
         roleKey: ROLE_KEYS.REQUESTER,
         index: 0,
       });
-      data = { status: "returned", historyJson: history };
+      data = { status: "returned", currentAssigneeUserId: Number(row.createdById), historyJson: history };
     }
 
     const updated = await prisma.paymentRequest.update({ where: { id }, data });
@@ -916,6 +962,11 @@ export async function POST(req, ctx) {
   if (!data.projectId) return json({ error: "project_required" }, 400);
   if (!data.budgetCode) return json({ error: "budget_code_required" }, 400);
   if (amountBI <= 0n) return json({ error: "amount_must_be_positive" }, 400);
+
+  const targetAssigneeUserId = Number(body?.targetAssigneeUserId ?? body?.target_assignee_user_id);
+  const workflowUsers = await findWorkflowUsersForRole(ROLE_KEYS.PROJECT_CONTROL, userId);
+  const initialAssignee = workflowUsers.find((candidate) => Number(candidate.id) === targetAssigneeUserId);
+  if (!initialAssignee) return json({ error: targetAssigneeUserId ? "target_assignee_invalid" : "target_assignee_required" }, 400);
 
   const enforcedScope = "projects";
   const generatedSerial = await makePaymentSerial({ dateJalali: data.dateJalali });
@@ -964,7 +1015,7 @@ export async function POST(req, ctx) {
       attachments: data.attachments ?? null,
 
       createdById: userId,
-      currentAssigneeUserId: null,
+      currentAssigneeUserId: Number(initialAssignee.id),
 
       status: "pending",
       historyJson: [
@@ -988,6 +1039,7 @@ export async function POST(req, ctx) {
           unitKind: enforcedScope,
           roleKey: ROLE_KEYS.PROJECT_CONTROL,
           index: 1,
+          assignedToUserId: Number(initialAssignee.id),
         },
       ],
     },
@@ -1079,6 +1131,7 @@ export async function DELETE(req, ctx) {
 
   // فقط سازنده
   if (row.createdById !== userId) return json({ error: "forbidden" }, 403);
+  if (["approved", "rejected", "canceled", "cancelled"].includes(row.status)) return json({ error: "delete_not_allowed" }, 400);
 
   await prisma.paymentRequest.delete({ where: { id } });
   return json({ ok: true });
