@@ -28,7 +28,13 @@ async function getUserId(req) {
   const fromHeader = req.headers.get("x-user-id");
   const fromCookie = readCookieValue(cookie, "user_id");
   const direct = fromHeader || fromCookie;
-  if (direct && /^\d+$/.test(String(direct))) return Number(direct);
+  if (direct && /^\d+$/.test(String(direct))) {
+    const directId = Number(direct);
+    try {
+      const user = await prisma.user.findUnique({ where: { id: directId }, select: { id: true } });
+      if (user?.id) return directId;
+    } catch {}
+  }
 
   const sessionId = readCookieValue(cookie, "ipm_session");
   if (sessionId) {
@@ -166,10 +172,10 @@ function serializeStoredAction(row) {
   };
 }
 
-async function actionsByRequestIds(ids) {
+async function actionsByRequestIds(ids, db = prisma) {
   const cleanIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map(Number).filter((n) => Number.isFinite(n) && n > 0)));
   if (!cleanIds.length) return new Map();
-  const rows = await prisma.$queryRawUnsafe(
+  const rows = await db.$queryRawUnsafe(
     `SELECT "id", "request_id", "action_date", "action_time", "description", "status", "files", "created_by", "created_at", "updated_at"
      FROM "supply_action_entries"
      WHERE "request_id" = ANY($1::int[])
@@ -285,16 +291,19 @@ export async function GET(req) {
     const userId = await getUserId(req);
     if (!userId) return json({ error: "unauthorized" }, 401);
 
+    const url = new URL(req.url);
+    const requestId = toPositiveInt(url.searchParams.get("requestId") ?? url.searchParams.get("request_id"));
     const rows = await prisma.paymentRequest.findMany({
       where: {
         docId: REQUEST_DOC_ID,
+        ...(requestId ? { id: requestId } : {}),
         OR: [
           { currentAssigneeUserId: Number(userId) },
           { status: { in: ["approved", "rejected"] } },
         ],
       },
       orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-      take: 300,
+      take: requestId ? 1 : 300,
     });
 
     const actionsMap = await actionsByRequestIds(rows.map((row) => row.id));
@@ -329,15 +338,18 @@ export async function POST(req) {
 
     const history = historyOf(row).slice();
     if (mode === "delete") {
-      await prisma.$executeRawUnsafe(`DELETE FROM "supply_action_entries" WHERE "id" = $1 AND "request_id" = $2`, actionId, requestId);
-      const remainingMap = await actionsByRequestIds([requestId]);
-      const remainingActions = remainingMap.get(Number(requestId)) || [];
-      const nextHistory = history.slice();
-      const nextStatus = latestActionStatus(remainingActions, "pending");
-      const workflowData = statusData(nextStatus, row, nextHistory, userId);
-      const updated = await prisma.paymentRequest.update({
-        where: { id: requestId },
-        data: { ...workflowData, historyJson: nextHistory },
+      const { updated, remainingActions } = await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(`DELETE FROM "supply_action_entries" WHERE "id" = $1 AND "request_id" = $2`, actionId, requestId);
+        const remainingMap = await actionsByRequestIds([requestId], tx);
+        const nextActions = remainingMap.get(Number(requestId)) || [];
+        const nextHistory = history.slice();
+        const nextStatus = latestActionStatus(nextActions, "pending");
+        const workflowData = statusData(nextStatus, row, nextHistory, userId);
+        const nextRequest = await tx.paymentRequest.update({
+          where: { id: requestId },
+          data: { ...workflowData, historyJson: nextHistory },
+        });
+        return { updated: nextRequest, remainingActions: nextActions };
       });
       const [updatedWithProject] = await attachProjects([updated]);
       return json({ ok: true, item: serialize({ ...updatedWithProject, supplyActions: remainingActions }) });
@@ -345,44 +357,48 @@ export async function POST(req) {
 
     // وضعیت فقط هنگام ثبت اولیه تعیین می‌شود؛ ویرایش اقدام قبلی نباید
     // بتواند درخواست را ناگهان «انجام شد» یا «لغو شد» کند.
-    const existingRows = await prisma.$queryRawUnsafe(
-      `SELECT "status" FROM "supply_action_entries" WHERE "id" = $1 AND "request_id" = $2 LIMIT 1`,
-      actionId,
-      requestId
-    );
-    const existingStatus = ACTION_STATUSES.has(existingRows?.[0]?.status) ? existingRows[0].status : null;
-    const nextStatus = existingStatus || (ACTION_STATUSES.has(body.status) ? body.status : "in_progress");
-    await prisma.$executeRawUnsafe(
-      `INSERT INTO "supply_action_entries" ("id", "request_id", "action_date", "action_time", "description", "status", "files", "created_by", "created_at", "updated_at")
-       VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, now(), now())
-       ON CONFLICT ("id") DO UPDATE SET
-         "action_date" = EXCLUDED."action_date",
-         "action_time" = EXCLUDED."action_time",
-         "description" = EXCLUDED."description",
-         "status" = EXCLUDED."status",
-         "files" = EXCLUDED."files",
-         "created_by" = EXCLUDED."created_by",
-         "updated_at" = now()`,
-      actionId,
-      requestId,
-      normalizeDate(body.date ?? body.actionDate ?? body.action_date),
-      normalizeTime(body.time ?? body.actionTime ?? body.action_time),
-      cleanText(body.description ?? body.note ?? body.actionText ?? "", 3000),
-      nextStatus,
-      JSON.stringify(normalizeFiles(body.files)),
-      Number(userId)
-    );
+    const updated = await prisma.$transaction(async (tx) => {
+      const existingRows = await tx.$queryRawUnsafe(
+        `SELECT "request_id", "status" FROM "supply_action_entries" WHERE "id" = $1 LIMIT 1`,
+        actionId
+      );
+      const existing = existingRows?.[0] || null;
+      if (existing && Number(existing.request_id) !== Number(requestId)) throw new Error("action_request_mismatch");
+      const existingStatus = ACTION_STATUSES.has(existing?.status) ? existing.status : null;
+      const nextStatus = existingStatus || (ACTION_STATUSES.has(body.status) ? body.status : "in_progress");
 
-    const workflowData = statusData(nextStatus, row, history, userId);
-    const updated = await prisma.paymentRequest.update({
-      where: { id: requestId },
-      data: { ...workflowData, historyJson: history },
+      await tx.$executeRawUnsafe(
+        `INSERT INTO "supply_action_entries" ("id", "request_id", "action_date", "action_time", "description", "status", "files", "created_by", "created_at", "updated_at")
+         VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb, $8, now(), now())
+         ON CONFLICT ("id") DO UPDATE SET
+           "action_date" = EXCLUDED."action_date",
+           "action_time" = EXCLUDED."action_time",
+           "description" = EXCLUDED."description",
+           "status" = EXCLUDED."status",
+           "files" = EXCLUDED."files",
+           "updated_at" = now()`,
+        actionId,
+        requestId,
+        normalizeDate(body.date ?? body.actionDate ?? body.action_date),
+        normalizeTime(body.time ?? body.actionTime ?? body.action_time),
+        cleanText(body.description ?? body.note ?? body.actionText ?? "", 3000),
+        nextStatus,
+        JSON.stringify(normalizeFiles(body.files)),
+        Number(userId)
+      );
+
+      const workflowData = statusData(nextStatus, row, history, userId);
+      return tx.paymentRequest.update({
+        where: { id: requestId },
+        data: { ...workflowData, historyJson: history },
+      });
     });
     const [updatedWithProject] = await attachProjects([updated]);
     const actionsMap = await actionsByRequestIds([requestId]);
     return json({ ok: true, item: serialize({ ...updatedWithProject, supplyActions: actionsMap.get(Number(requestId)) || [] }) });
   } catch (error) {
     console.error("supply_actions_post_error", error);
+    if (error?.message === "action_request_mismatch") return json({ error: "invalid_action_id" }, 409);
     return json({ error: "internal_error" }, 500);
   }
 }

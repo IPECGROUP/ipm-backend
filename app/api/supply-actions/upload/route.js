@@ -25,7 +25,13 @@ async function getUserId(req) {
   const fromHeader = req.headers.get("x-user-id");
   const fromCookie = readCookieValue(cookie, "user_id");
   const direct = fromHeader || fromCookie;
-  if (direct && /^\d+$/.test(String(direct))) return Number(direct);
+  if (direct && /^\d+$/.test(String(direct))) {
+    const directId = Number(direct);
+    try {
+      const user = await prisma.user.findUnique({ where: { id: directId }, select: { id: true } });
+      if (user?.id) return directId;
+    } catch {}
+  }
 
   const sessionId = readCookieValue(cookie, "ipm_session");
   if (sessionId) {

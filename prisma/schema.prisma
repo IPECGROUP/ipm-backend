@@ -499,6 +499,23 @@ model UploadedFile {
   @@index([createdAt])
 }
 
+model SupplyActionEntry {
+  id          String   @id @db.Text
+  requestId   Int      @map("request_id")
+  actionDate  String?  @map("action_date") @db.VarChar(20)
+  actionTime  String?  @map("action_time") @db.VarChar(8)
+  description String?
+  status      String   @default("in_progress") @db.VarChar(30)
+  files       Json     @default("[]")
+  createdBy   Int?     @map("created_by")
+  createdAt   DateTime @default(now()) @map("created_at")
+  updatedAt   DateTime @updatedAt @map("updated_at")
+
+  @@index([requestId])
+  @@index([createdBy])
+  @@map("supply_action_entries")
+}
+
 model PaymentDoc {
   id           String   @id @default(cuid())
   originalName String

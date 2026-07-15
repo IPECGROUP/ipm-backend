@@ -659,14 +659,20 @@ export async function GET(req) {
     const cartableOnly = url.searchParams.get("cartable") === "1";
     const visibleRows = mainAdmin
       ? rows
-      : rows.filter((row) => {
-          const canAct = canActOnSupplyStep({ row, userId, userCtx, mainAdmin });
-          if (cartableOnly) return canAct && Number(row.currentAssigneeUserId) === Number(userId);
-          return (
-            Number(row.createdById) === Number(userId) ||
-            ccUserIdsOf(row).includes(String(userId)) ||
-            (canAct && Number(row.currentAssigneeUserId) === Number(userId))
-          );
+        : rows.filter((row) => {
+            const canAct = canActOnSupplyStep({ row, userId, userCtx, mainAdmin });
+            const currentStep = getCurrentStep(row.historyJson);
+            const isCompletedCommercialOwner =
+              !currentStep &&
+              Number(row.currentAssigneeUserId) === Number(userId) &&
+              ["approved", "rejected"].includes(row.status);
+            if (cartableOnly) return canAct && Number(row.currentAssigneeUserId) === Number(userId);
+            return (
+              Number(row.createdById) === Number(userId) ||
+              ccUserIdsOf(row).includes(String(userId)) ||
+              isCompletedCommercialOwner ||
+              (canAct && Number(row.currentAssigneeUserId) === Number(userId))
+            );
         });
     const finalRows = cartableOnly
       ? visibleRows.filter((row) => {
