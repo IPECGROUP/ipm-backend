@@ -11,6 +11,7 @@ const SUPPLY_STEP = {
   PROJECT_MANAGER: "project_manager",
   COMMERCIAL: "commercial",
 };
+const SUPPLY_UNIT_ALIASES = ["تامین", "تأمین", "واحد تامین", "واحد تأمین", "تامین و پشتیبانی", "بازرگانی"];
 
 const json = (data, status = 200) =>
   NextResponse.json(data, {
@@ -302,7 +303,7 @@ function inferredUnitNamesFromRoles(roleNames = []) {
     }
 
     if (role.includes("تامین") || role.includes("تأمین") || role.includes("بازرگانی")) {
-      units.add("تامین و پشتیبانی");
+      units.add("تامین");
     }
   }
   return Array.from(units);
@@ -403,7 +404,7 @@ function isProjectManagerContext(ctx) {
 }
 
 function isCommercialContext(ctx) {
-  return includesAny([...(ctx?.unitNames || []), ...(ctx?.roleNames || [])], ["بازرگانی", "تامین", "تأمین", "تامین و پشتیبانی"]);
+  return includesAny([...(ctx?.unitNames || []), ...(ctx?.roleNames || [])], SUPPLY_UNIT_ALIASES);
 }
 
 async function findWorkflowUsers(kind, excludeUserId = null) {
