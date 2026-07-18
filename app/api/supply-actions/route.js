@@ -339,11 +339,7 @@ export async function POST(req) {
     const actionDate = normalizeDate(body.date ?? body.actionDate ?? body.action_date);
     if (mode !== "delete" && actionDate) {
       const requestDate = normalizeDate(row.dateJalali);
-      const todayJalali = normalizeDate(
-        new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date())
-      );
-      if (requestDate && actionDate <= requestDate) return json({ error: "action_date_must_follow_request" }, 400);
-      if (todayJalali && actionDate > todayJalali) return json({ error: "action_date_in_future" }, 400);
+      if (requestDate && actionDate < requestDate) return json({ error: "action_date_before_request" }, 400);
     }
 
     const history = historyOf(row).slice();
