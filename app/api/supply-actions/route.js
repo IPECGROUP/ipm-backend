@@ -336,6 +336,16 @@ export async function POST(req) {
     if (!row) return json({ error: "not_found" }, 404);
     if (!canUseSupplyAction(row, userId)) return json({ error: "forbidden" }, 403);
 
+    const actionDate = normalizeDate(body.date ?? body.actionDate ?? body.action_date);
+    if (mode !== "delete" && actionDate) {
+      const requestDate = normalizeDate(row.dateJalali);
+      const todayJalali = normalizeDate(
+        new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date())
+      );
+      if (requestDate && actionDate <= requestDate) return json({ error: "action_date_must_follow_request" }, 400);
+      if (todayJalali && actionDate > todayJalali) return json({ error: "action_date_in_future" }, 400);
+    }
+
     const history = historyOf(row).slice();
     if (mode === "delete") {
       const { updated, remainingActions } = await prisma.$transaction(async (tx) => {
@@ -355,8 +365,6 @@ export async function POST(req) {
       return json({ ok: true, item: serialize({ ...updatedWithProject, supplyActions: remainingActions }) });
     }
 
-    // وضعیت فقط هنگام ثبت اولیه تعیین می‌شود؛ ویرایش اقدام قبلی نباید
-    // بتواند درخواست را ناگهان «انجام شد» یا «لغو شد» کند.
     const updated = await prisma.$transaction(async (tx) => {
       const existingRows = await tx.$queryRawUnsafe(
         `SELECT "request_id", "status" FROM "supply_action_entries" WHERE "id" = $1 LIMIT 1`,
@@ -365,7 +373,8 @@ export async function POST(req) {
       const existing = existingRows?.[0] || null;
       if (existing && Number(existing.request_id) !== Number(requestId)) throw new Error("action_request_mismatch");
       const existingStatus = ACTION_STATUSES.has(existing?.status) ? existing.status : null;
-      const nextStatus = existingStatus || (ACTION_STATUSES.has(body.status) ? body.status : "in_progress");
+      const requestedStatus = ACTION_STATUSES.has(body.status) ? body.status : "in_progress";
+      const nextStatus = existingStatus === "in_progress" ? requestedStatus : (existingStatus || requestedStatus);
 
       await tx.$executeRawUnsafe(
         `INSERT INTO "supply_action_entries" ("id", "request_id", "action_date", "action_time", "description", "status", "files", "created_by", "created_at", "updated_at")
@@ -379,7 +388,7 @@ export async function POST(req) {
            "updated_at" = now()`,
         actionId,
         requestId,
-        normalizeDate(body.date ?? body.actionDate ?? body.action_date),
+        actionDate,
         normalizeTime(body.time ?? body.actionTime ?? body.action_time),
         cleanText(body.description ?? body.note ?? body.actionText ?? "", 3000),
         nextStatus,
