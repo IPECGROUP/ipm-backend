@@ -586,3 +586,19 @@ model PaymentRequest {
   @@index([createdById])
   @@index([currentAssigneeUserId])
 }
+
+model LiquidityAllocation {
+  id              Int      @id @default(autoincrement())
+  allocationDate  String   @map("allocation_date") @db.VarChar(20)
+  source          String   @db.VarChar(255)
+  availableAmount BigInt   @map("available_amount")
+  description     String?  @default("")
+  projectId       Int?     @map("project_id")
+  amount          BigInt
+  createdById     Int?     @map("created_by")
+  createdAt       DateTime @default(now()) @map("created_at")
+
+  @@index([projectId])
+  @@index([createdAt])
+  @@map("liquidity_allocations")
+}
