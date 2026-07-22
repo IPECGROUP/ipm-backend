@@ -90,10 +90,13 @@ async function ensureLiquidityTable() {
           project_id INTEGER,
           amount BIGINT NOT NULL,
           created_by INTEGER,
+          batch_id VARCHAR(80),
           created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
         )
       `);
+      await prisma.$executeRawUnsafe("ALTER TABLE liquidity_allocations ADD COLUMN IF NOT EXISTS batch_id VARCHAR(80)");
       await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS liquidity_allocations_project_id_idx ON liquidity_allocations(project_id)");
+      await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS liquidity_allocations_batch_id_idx ON liquidity_allocations(batch_id)");
       await prisma.$executeRawUnsafe(`
         CREATE TABLE IF NOT EXISTS financial_dashboard_resets (
           id SERIAL PRIMARY KEY,
@@ -116,7 +119,7 @@ export async function GET(request) {
       ? await prisma.$queryRawUnsafe("SELECT reset_at AS \"resetAt\" FROM financial_dashboard_resets ORDER BY id DESC LIMIT 1")
       : [];
     const resetAt = resets?.[0]?.resetAt ? new Date(resets[0].resetAt) : null;
-    const [allocations, selectedRows, requests] = await Promise.all([
+    const [allocations, selectedRows, requests, historyRows] = await Promise.all([
       resetAt
         ? prisma.$queryRawUnsafe("SELECT project_id AS \"projectId\", COALESCE(SUM(amount), 0)::text AS amount FROM liquidity_allocations WHERE created_at > $1 GROUP BY project_id", resetAt)
         : prisma.$queryRawUnsafe("SELECT project_id AS \"projectId\", COALESCE(SUM(amount), 0)::text AS amount FROM liquidity_allocations GROUP BY project_id"),
@@ -127,13 +130,20 @@ export async function GET(request) {
         where: { projectId: { not: null }, ...(resetAt ? { createdAt: { gt: resetAt } } : {}) },
         select: { projectId: true, amount: true, cashAmount: true, creditAmount: true, status: true, historyJson: true },
       }),
+      prisma.$queryRawUnsafe(`
+        SELECT id, batch_id AS "batchId", allocation_date AS "allocationDate", source,
+          available_amount::text AS "availableAmount", description, project_id AS "projectId",
+          amount::text AS amount, created_at AS "createdAt"
+        FROM liquidity_allocations
+        ORDER BY created_at DESC, id DESC
+      `),
     ]);
 
     const projectIds = selectedRows.map((row) => row.projectId).filter((id) => id != null);
     const projectRecords = projectIds.length
       ? await prisma.project.findMany({ where: { id: { in: projectIds } }, orderBy: { code: "asc" } })
       : [];
-    const result = { allocations: {}, spent: {}, committed: {}, expenseCount: {}, projects: [] };
+    const result = { allocations: {}, spent: {}, committed: {}, expenseCount: {}, projects: [], history: [] };
     for (const row of allocations) result.allocations[mapKey(row.projectId)] = amountText(row.amount);
     for (const request of requests) {
       const key = mapKey(request.projectId);
@@ -159,6 +169,37 @@ export async function GET(request) {
         expenseCount: result.expenseCount[key] || 0,
       };
     });
+    const projectById = new Map(projectRecords.map((project) => [String(project.id), project]));
+    const historyByBatch = new Map();
+    for (const row of historyRows) {
+      const batchId = String(row.batchId || `legacy-${row.id}`);
+      if (!historyByBatch.has(batchId)) {
+        historyByBatch.set(batchId, {
+          id: batchId,
+          allocationDate: row.allocationDate,
+          source: row.source,
+          availableAmount: amountText(row.availableAmount),
+          allocatedAmount: "0",
+          description: row.description || "",
+          createdAt: row.createdAt,
+          details: [],
+        });
+      }
+      const batch = historyByBatch.get(batchId);
+      batch.allocatedAmount = amountText(BigInt(batch.allocatedAmount || 0) + BigInt(row.amount || 0));
+      const detailKey = mapKey(row.projectId);
+      const existingDetail = batch.details.find((detail) => mapKey(detail.projectId) === detailKey);
+      if (existingDetail) existingDetail.amount = amountText(BigInt(existingDetail.amount || 0) + BigInt(row.amount || 0));
+      else {
+        const project = row.projectId == null ? null : projectById.get(String(row.projectId));
+        batch.details.push({
+          projectId: row.projectId,
+          project: project ? { id: project.id, code: project.code, name: project.name } : null,
+          amount: amountText(row.amount),
+        });
+      }
+    }
+    result.history = Array.from(historyByBatch.values());
     return json(result);
   } catch (error) {
     return json({ error: "internal_error", message: String(error?.message || "internal_error") }, 500);
@@ -174,6 +215,7 @@ export async function POST(request) {
     const allocationDate = String(body?.allocationDate || "").trim();
     const source = String(body?.source || "").trim();
     const availableAmount = toBigInt(body?.availableAmount);
+    const batchId = String(body?.batchId || "").trim().slice(0, 80) || null;
     const description = String(body?.description || "").trim();
     const rows = Array.isArray(body?.rows) ? body.rows : [];
     const parsedRows = rows.map((row) => ({ projectId: row?.projectId == null ? null : Number(row.projectId), amount: toBigInt(row?.amount) }))
@@ -182,12 +224,16 @@ export async function POST(request) {
       return json({ error: "invalid_input" }, 400);
     }
     const allocationTotal = parsedRows.reduce((total, row) => total + row.amount, 0n);
-    if (allocationTotal > availableAmount) {
+    const existingBatchRows = batchId
+      ? await prisma.$queryRawUnsafe("SELECT COALESCE(SUM(amount), 0)::text AS amount FROM liquidity_allocations WHERE batch_id = $1", batchId)
+      : [];
+    const existingBatchTotal = BigInt(existingBatchRows?.[0]?.amount || 0);
+    if (existingBatchTotal + allocationTotal > availableAmount) {
       return json({ error: "allocation_total_exceeds_available_amount" }, 400);
     }
     for (const row of parsedRows) {
       await prisma.$executeRawUnsafe(
-        "INSERT INTO liquidity_allocations (allocation_date, source, available_amount, description, project_id, amount, created_by) VALUES ($1, $2, $3::bigint, $4, $5, $6::bigint, $7)",
+        "INSERT INTO liquidity_allocations (allocation_date, source, available_amount, description, project_id, amount, created_by, batch_id) VALUES ($1, $2, $3::bigint, $4, $5, $6::bigint, $7, $8)",
         allocationDate,
         source,
         String(availableAmount),
@@ -195,6 +241,7 @@ export async function POST(request) {
         row.projectId,
         String(row.amount),
         userId,
+        batchId,
       );
     }
     return json({ ok: true });
