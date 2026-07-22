@@ -181,6 +181,10 @@ export async function POST(request) {
     if (!allocationDate || !source || availableAmount == null || availableAmount <= 0n || !parsedRows.length) {
       return json({ error: "invalid_input" }, 400);
     }
+    const allocationTotal = parsedRows.reduce((total, row) => total + row.amount, 0n);
+    if (allocationTotal > availableAmount) {
+      return json({ error: "allocation_total_exceeds_available_amount" }, 400);
+    }
     for (const row of parsedRows) {
       await prisma.$executeRawUnsafe(
         "INSERT INTO liquidity_allocations (allocation_date, source, available_amount, description, project_id, amount, created_by) VALUES ($1, $2, $3::bigint, $4, $5, $6::bigint, $7)",
