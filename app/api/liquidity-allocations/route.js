@@ -127,17 +127,14 @@ export async function POST(request) {
     const body = await request.json().catch(() => ({}));
     const allocationDate = String(body?.allocationDate || "").trim();
     const source = String(body?.source || "").trim();
-    const availableAmount = toBigInt(body?.availableAmount);
+    const availableAmount = toBigInt(body?.availableAmount) ?? 0n;
     const description = String(body?.description || "").trim();
     const rows = Array.isArray(body?.rows) ? body.rows : [];
     const parsedRows = rows.map((row) => ({ projectId: row?.projectId == null ? null : Number(row.projectId), amount: toBigInt(row?.amount) }))
       .filter((row) => (row.projectId == null || Number.isInteger(row.projectId)) && row.amount != null && row.amount !== 0n);
-    if (!allocationDate || !source || availableAmount == null || availableAmount <= 0n || !parsedRows.length) {
+    if (!allocationDate || !source || !parsedRows.length) {
       return json({ error: "invalid_input" }, 400);
     }
-    const total = parsedRows.reduce((sum, row) => sum + row.amount, 0n);
-    if (total > availableAmount) return json({ error: "allocation_exceeds_available" }, 400);
-
     await prisma.liquidityAllocation.createMany({
       data: parsedRows.map((row) => ({ allocationDate, source, availableAmount, description, projectId: row.projectId, amount: row.amount, createdById: userId })),
     });
