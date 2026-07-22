@@ -69,15 +69,35 @@ function finalPaidAmount(request) {
   return saved > 0n ? saved : amountFromFinalNote(request.historyJson);
 }
 
+let liquidityTableReady;
+async function ensureLiquidityTable() {
+  if (!liquidityTableReady) {
+    liquidityTableReady = (async () => {
+      await prisma.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS liquidity_allocations (
+          id SERIAL PRIMARY KEY,
+          allocation_date VARCHAR(20) NOT NULL,
+          source VARCHAR(255) NOT NULL,
+          available_amount BIGINT NOT NULL,
+          description TEXT DEFAULT '',
+          project_id INTEGER,
+          amount BIGINT NOT NULL,
+          created_by INTEGER,
+          created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+        )
+      `);
+      await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS liquidity_allocations_project_id_idx ON liquidity_allocations(project_id)");
+    })();
+  }
+  return liquidityTableReady;
+}
+
 export async function GET() {
   try {
+    await ensureLiquidityTable();
     const [allocations, selectedRows, requests] = await Promise.all([
-      prisma.liquidityAllocation.groupBy({ by: ["projectId"], _sum: { amount: true } }),
-      prisma.liquidityAllocation.findMany({
-        where: { projectId: { not: null } },
-        distinct: ["projectId"],
-        select: { projectId: true },
-      }),
+      prisma.$queryRawUnsafe("SELECT project_id AS \"projectId\", COALESCE(SUM(amount), 0)::text AS amount FROM liquidity_allocations GROUP BY project_id"),
+      prisma.$queryRawUnsafe("SELECT DISTINCT project_id AS \"projectId\" FROM liquidity_allocations WHERE project_id IS NOT NULL"),
       prisma.paymentRequest.findMany({
         where: { projectId: { not: null } },
         select: { projectId: true, amount: true, cashAmount: true, creditAmount: true, status: true, historyJson: true },
@@ -89,7 +109,7 @@ export async function GET() {
       ? await prisma.project.findMany({ where: { id: { in: projectIds } }, orderBy: { code: "asc" } })
       : [];
     const result = { allocations: {}, spent: {}, committed: {}, expenseCount: {}, projects: [] };
-    for (const row of allocations) result.allocations[mapKey(row.projectId)] = amountText(row._sum.amount);
+    for (const row of allocations) result.allocations[mapKey(row.projectId)] = amountText(row.amount);
     for (const request of requests) {
       const key = mapKey(request.projectId);
       const amount = BigInt(request.amount || 0);
@@ -124,20 +144,30 @@ export async function POST(request) {
   const userId = await getUserId(request);
   if (!userId) return json({ error: "unauthorized" }, 401);
   try {
+    await ensureLiquidityTable();
     const body = await request.json().catch(() => ({}));
     const allocationDate = String(body?.allocationDate || "").trim();
     const source = String(body?.source || "").trim();
-    const availableAmount = toBigInt(body?.availableAmount) ?? 0n;
+    const availableAmount = toBigInt(body?.availableAmount);
     const description = String(body?.description || "").trim();
     const rows = Array.isArray(body?.rows) ? body.rows : [];
     const parsedRows = rows.map((row) => ({ projectId: row?.projectId == null ? null : Number(row.projectId), amount: toBigInt(row?.amount) }))
       .filter((row) => (row.projectId == null || Number.isInteger(row.projectId)) && row.amount != null && row.amount !== 0n);
-    if (!allocationDate || !source || !parsedRows.length) {
+    if (!allocationDate || !source || availableAmount == null || availableAmount <= 0n || !parsedRows.length) {
       return json({ error: "invalid_input" }, 400);
     }
-    await prisma.liquidityAllocation.createMany({
-      data: parsedRows.map((row) => ({ allocationDate, source, availableAmount, description, projectId: row.projectId, amount: row.amount, createdById: userId })),
-    });
+    for (const row of parsedRows) {
+      await prisma.$executeRawUnsafe(
+        "INSERT INTO liquidity_allocations (allocation_date, source, available_amount, description, project_id, amount, created_by) VALUES ($1, $2, $3::bigint, $4, $5, $6::bigint, $7)",
+        allocationDate,
+        source,
+        String(availableAmount),
+        description,
+        row.projectId,
+        String(row.amount),
+        userId,
+      );
+    }
     return json({ ok: true });
   } catch (error) {
     return json({ error: "internal_error", message: String(error?.message || "internal_error") }, 500);
