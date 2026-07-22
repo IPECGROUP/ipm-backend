@@ -106,10 +106,15 @@ async function ensureLiquidityTable() {
   return liquidityTableReady;
 }
 
-export async function GET() {
+export async function GET(request) {
   try {
     await ensureLiquidityTable();
-    const resets = await prisma.$queryRawUnsafe("SELECT reset_at AS \"resetAt\" FROM financial_dashboard_resets ORDER BY id DESC LIMIT 1");
+    // A dashboard reset is intentionally view-only.  The liquidity page and
+    // payment-request validation must always use the real, current balances.
+    const dashboardView = new URL(request.url).searchParams.get("dashboard") === "1";
+    const resets = dashboardView
+      ? await prisma.$queryRawUnsafe("SELECT reset_at AS \"resetAt\" FROM financial_dashboard_resets ORDER BY id DESC LIMIT 1")
+      : [];
     const resetAt = resets?.[0]?.resetAt ? new Date(resets[0].resetAt) : null;
     const [allocations, selectedRows, requests] = await Promise.all([
       resetAt

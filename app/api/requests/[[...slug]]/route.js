@@ -107,6 +107,50 @@ function toBigIntSafe(v) {
   }
 }
 
+function approvedByProjectManager(history) {
+  return Array.isArray(history) && history.some(
+    (entry) => entry?.type === "approved" && entry?.roleKey === "project_manager" && Number(entry?.index) === 2
+  );
+}
+
+async function getProjectLiquidityRemaining(projectId) {
+  // Keep this table available even when the liquidity screen has not been
+  // opened yet. It is deliberately the same source used by the financial
+  // dashboard: allocated budget minus project-manager-approved commitments.
+  await prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS liquidity_allocations (
+      id SERIAL PRIMARY KEY,
+      allocation_date VARCHAR(20) NOT NULL,
+      source VARCHAR(255) NOT NULL,
+      available_amount BIGINT NOT NULL,
+      description TEXT DEFAULT '',
+      project_id INTEGER,
+      amount BIGINT NOT NULL,
+      created_by INTEGER,
+      created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `);
+
+  const [allocatedRows, requests] = await Promise.all([
+    prisma.$queryRawUnsafe(
+      "SELECT COALESCE(SUM(amount), 0)::text AS amount FROM liquidity_allocations WHERE project_id = $1",
+      Number(projectId)
+    ),
+    prisma.paymentRequest.findMany({
+      where: { projectId: Number(projectId) },
+      select: { amount: true, historyJson: true },
+    }),
+  ]);
+  const allocated = toBigIntSafe(allocatedRows?.[0]?.amount) ?? 0n;
+  const committed = requests.reduce(
+    (sum, request) => approvedByProjectManager(request.historyJson)
+      ? sum + (toBigIntSafe(request.amount) ?? 0n)
+      : sum,
+    0n
+  );
+  return allocated - committed;
+}
+
 function normalizeDigits(value = "") {
   return String(value ?? "")
     .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06F0))
@@ -989,6 +1033,11 @@ export async function POST(req, ctx) {
   if (!data.projectId) return json({ error: "project_required" }, 400);
   if (!data.budgetCode) return json({ error: "budget_code_required" }, 400);
   if (amountBI <= 0n) return json({ error: "amount_must_be_positive" }, 400);
+
+  const liquidityRemaining = await getProjectLiquidityRemaining(data.projectId);
+  if (amountBI > liquidityRemaining) {
+    return json({ error: "amount_exceeds_project_liquidity", liquidityRemaining: liquidityRemaining.toString() }, 400);
+  }
 
   const targetAssigneeUserId = Number(body?.targetAssigneeUserId ?? body?.target_assignee_user_id);
   const workflowUsers = await findWorkflowUsersForRole(ROLE_KEYS.PROJECT_CONTROL, userId);
