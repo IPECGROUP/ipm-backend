@@ -898,12 +898,17 @@ export async function POST(req, ctx) {
       if (nextIndex >= chain.length) {
         history.push({ type: "step_clear", at: new Date().toISOString() });
 
+        const finalCashAmount = toBigIntSafe(body?.cashAmount);
+        const finalCreditAmount = toBigIntSafe(body?.creditAmount);
+
         const updated = await prisma.paymentRequest.update({
           where: { id },
           data: {
             status: "approved",
             currentAssigneeUserId: null,
             historyJson: history,
+            cashAmount: finalCashAmount ?? row.cashAmount,
+            creditAmount: finalCreditAmount ?? row.creditAmount,
           },
         });
         return json({ ok: true, item: normalizeOut(updated) });
