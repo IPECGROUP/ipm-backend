@@ -69,6 +69,13 @@ function finalPaidAmount(request) {
   return saved > 0n ? saved : amountFromFinalNote(request.historyJson);
 }
 
+async function isAdmin(userId) {
+  const user = await prisma.user.findUnique({ where: { id: userId }, select: { username: true, email: true, role: true } });
+  const username = String(user?.username || "").toLowerCase();
+  const email = String(user?.email || "").toLowerCase();
+  return user?.role === "admin" || username === "marandi" || email === "marandi@ipecgroup.net";
+}
+
 let liquidityTableReady;
 async function ensureLiquidityTable() {
   if (!liquidityTableReady) {
@@ -87,6 +94,13 @@ async function ensureLiquidityTable() {
         )
       `);
       await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS liquidity_allocations_project_id_idx ON liquidity_allocations(project_id)");
+      await prisma.$executeRawUnsafe(`
+        CREATE TABLE IF NOT EXISTS financial_dashboard_resets (
+          id SERIAL PRIMARY KEY,
+          reset_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+          reset_by INTEGER
+        )
+      `);
     })();
   }
   return liquidityTableReady;
@@ -95,11 +109,17 @@ async function ensureLiquidityTable() {
 export async function GET() {
   try {
     await ensureLiquidityTable();
+    const resets = await prisma.$queryRawUnsafe("SELECT reset_at AS \"resetAt\" FROM financial_dashboard_resets ORDER BY id DESC LIMIT 1");
+    const resetAt = resets?.[0]?.resetAt ? new Date(resets[0].resetAt) : null;
     const [allocations, selectedRows, requests] = await Promise.all([
-      prisma.$queryRawUnsafe("SELECT project_id AS \"projectId\", COALESCE(SUM(amount), 0)::text AS amount FROM liquidity_allocations GROUP BY project_id"),
-      prisma.$queryRawUnsafe("SELECT DISTINCT project_id AS \"projectId\" FROM liquidity_allocations WHERE project_id IS NOT NULL"),
+      resetAt
+        ? prisma.$queryRawUnsafe("SELECT project_id AS \"projectId\", COALESCE(SUM(amount), 0)::text AS amount FROM liquidity_allocations WHERE created_at > $1 GROUP BY project_id", resetAt)
+        : prisma.$queryRawUnsafe("SELECT project_id AS \"projectId\", COALESCE(SUM(amount), 0)::text AS amount FROM liquidity_allocations GROUP BY project_id"),
+      resetAt
+        ? prisma.$queryRawUnsafe("SELECT DISTINCT project_id AS \"projectId\" FROM liquidity_allocations WHERE project_id IS NOT NULL AND created_at > $1", resetAt)
+        : prisma.$queryRawUnsafe("SELECT DISTINCT project_id AS \"projectId\" FROM liquidity_allocations WHERE project_id IS NOT NULL"),
       prisma.paymentRequest.findMany({
-        where: { projectId: { not: null } },
+        where: { projectId: { not: null }, ...(resetAt ? { createdAt: { gt: resetAt } } : {}) },
         select: { projectId: true, amount: true, cashAmount: true, creditAmount: true, status: true, historyJson: true },
       }),
     ]);
@@ -169,6 +189,19 @@ export async function POST(request) {
       );
     }
     return json({ ok: true });
+  } catch (error) {
+    return json({ error: "internal_error", message: String(error?.message || "internal_error") }, 500);
+  }
+}
+
+export async function DELETE(request) {
+  const userId = await getUserId(request);
+  if (!userId) return json({ error: "unauthorized" }, 401);
+  if (!(await isAdmin(userId))) return json({ error: "forbidden" }, 403);
+  try {
+    await ensureLiquidityTable();
+    const result = await prisma.$executeRawUnsafe("DELETE FROM liquidity_allocations");
+    return json({ ok: true, deleted: Number(result || 0) });
   } catch (error) {
     return json({ error: "internal_error", message: String(error?.message || "internal_error") }, 500);
   }

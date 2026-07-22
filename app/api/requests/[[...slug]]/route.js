@@ -1,6 +1,8 @@
 // app/api/requests/[[...slug]]/route.js
 import { PrismaClient } from "@prisma/client";
 import { fallbackUnitsForRoleNames } from "../../../../lib/orgStructureFallback";
+import { unlink } from "node:fs/promises";
+import path from "node:path";
 
 export const runtime = "nodejs";
 
@@ -1146,6 +1148,15 @@ export async function DELETE(req, ctx) {
   if (!userId) return json({ error: "unauthorized" }, 401);
 
   const slug = await getSlug(ctx);
+  if (slug.length === 1 && slug[0] === "reset") {
+    const uctx = await getUserContext(req, userId);
+    if (!uctx.isMainAdmin) return json({ error: "forbidden" }, 403);
+    const docs = await prisma.paymentDoc.findMany({ select: { storedName: true } });
+    const deleted = await prisma.paymentRequest.deleteMany({});
+    await prisma.paymentDoc.deleteMany({});
+    await Promise.all(docs.map((doc) => unlink(path.join(process.cwd(), "public", "uploads", "payment-doc", doc.storedName)).catch(() => {})));
+    return json({ ok: true, deleted: deleted.count });
+  }
   if (slug.length !== 1) return json({ error: "invalid_path" }, 400);
 
   const id = Number(slug[0]);
