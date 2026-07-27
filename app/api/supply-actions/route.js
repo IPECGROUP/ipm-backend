@@ -262,9 +262,20 @@ function canUseSupplyAction(row, userId) {
   );
 }
 
-function statusData(nextStatus, row, history, userId) {
+function statusData(nextStatus, row, history, userId, actorName = "") {
   if (nextStatus === "done") {
-    history.push({ type: "step_clear", at: new Date().toISOString(), reason: "supply_action_done" });
+    const at = new Date().toISOString();
+    history.push({
+      type: "approved",
+      status: "approved",
+      at,
+      roleKey: COMMERCIAL_STEP,
+      index: 3,
+      byUserId: Number(userId),
+      ...(actorName ? { actorName } : {}),
+      note: "تکمیل اقدامات تامین",
+    });
+    history.push({ type: "step_clear", at, reason: "supply_action_done" });
     return { status: "approved", currentAssigneeUserId: Number(row.currentAssigneeUserId) || null };
   }
   if (nextStatus === "canceled") {
@@ -299,6 +310,7 @@ export async function GET(req) {
         ...(requestId ? { id: requestId } : {}),
         OR: [
           { currentAssigneeUserId: Number(userId) },
+          { createdById: Number(userId) },
           { status: { in: ["approved", "rejected"] } },
         ],
       },
@@ -311,7 +323,9 @@ export async function GET(req) {
       ...row,
       supplyActions: actionsMap.get(Number(row.id)) || [],
     }));
-    const items = rowsWithProjects.filter((row) => canUseSupplyAction(row, userId)).map(serialize);
+    const items = rowsWithProjects
+      .filter((row) => canUseSupplyAction(row, userId) || Number(row.createdById) === Number(userId))
+      .map(serialize);
     return json({ ok: true, items });
   } catch (error) {
     console.error("supply_actions_get_error", error);
@@ -325,6 +339,8 @@ export async function POST(req) {
     const userId = await getUserId(req);
     if (!userId) return json({ error: "unauthorized" }, 401);
     const body = await readJson(req);
+    const actor = await prisma.user.findUnique({ where: { id: Number(userId) }, select: { name: true, username: true, email: true } });
+    const actorName = actor?.name || actor?.username || actor?.email || `کاربر #${userId}`;
     const requestId = toPositiveInt(body.requestId ?? body.request_id ?? body.id);
     const mode = cleanText(body.mode || "upsert", 20);
     const actionId = cleanText(body.actionId ?? body.action_id, 80) || `sa_${Date.now()}_${Math.random().toString(16).slice(2)}`;
@@ -350,7 +366,7 @@ export async function POST(req) {
         const nextActions = remainingMap.get(Number(requestId)) || [];
         const nextHistory = history.slice();
         const nextStatus = latestActionStatus(nextActions, "pending");
-        const workflowData = statusData(nextStatus, row, nextHistory, userId);
+        const workflowData = statusData(nextStatus, row, nextHistory, userId, actorName);
         const nextRequest = await tx.paymentRequest.update({
           where: { id: requestId },
           data: { ...workflowData, historyJson: nextHistory },
@@ -392,7 +408,7 @@ export async function POST(req) {
         Number(userId)
       );
 
-      const workflowData = statusData(nextStatus, row, history, userId);
+      const workflowData = statusData(nextStatus, row, history, userId, actorName);
       return tx.paymentRequest.update({
         where: { id: requestId },
         data: { ...workflowData, historyJson: history },

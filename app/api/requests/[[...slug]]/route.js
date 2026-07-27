@@ -174,7 +174,7 @@ function normalizeProjectCode(value = "") {
   return raw.match(/^(\d{3})/)?.[1] || "";
 }
 
-async function makePaymentSerial({ dateJalali }) {
+async function makePaymentSerial({ dateJalali, projectCode = "" }) {
   const yy = jalaliYY(dateJalali);
   const prefix = `${yy}/`;
   const rows = await prisma.paymentRequest.findMany({
@@ -193,7 +193,9 @@ async function makePaymentSerial({ dateJalali }) {
     if (m) maxSeq = Math.max(maxSeq, Number(m[1]) || 0);
   }
 
-  return `${prefix}${String(maxSeq + 1).padStart(4, "0")}`;
+  const sequence = String(maxSeq + 1).padStart(4, "0");
+  const normalizedProjectCode = normalizeProjectCode(projectCode);
+  return normalizedProjectCode ? `${prefix}${normalizedProjectCode}/${sequence}` : `${prefix}${sequence}`;
 }
 
 function bigintToJson(v) {
@@ -1045,7 +1047,8 @@ export async function POST(req, ctx) {
   if (!initialAssignee) return json({ error: targetAssigneeUserId ? "target_assignee_invalid" : "target_assignee_required" }, 400);
 
   const enforcedScope = "projects";
-  const generatedSerial = await makePaymentSerial({ dateJalali: data.dateJalali });
+  const projectForSerial = await prisma.project.findUnique({ where: { id: data.projectId }, select: { code: true } });
+  const generatedSerial = await makePaymentSerial({ dateJalali: data.dateJalali, projectCode: projectForSerial?.code });
   if (!generatedSerial) return json({ error: "serial_generation_failed" }, 400);
 
   const now = new Date();
