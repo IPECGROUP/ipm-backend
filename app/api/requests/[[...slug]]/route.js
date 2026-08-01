@@ -873,6 +873,7 @@ export async function GET(req, ctx) {
     items: filtered.map((x) => ({
       ...normalizeOut(x.row),
       canAct: x.canAct,
+      canEdit: x.isMine,
       canDelete: x.isMine && !["approved", "rejected", "canceled", "cancelled"].includes(x.row.status),
     })),
   });
