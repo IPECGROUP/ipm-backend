@@ -66,6 +66,7 @@ async function mapUser(u) {
     username: u.username,
     department: u.department,
     role: u.role,
+    isActive: u.isActive !== false,
     expiresAt: u.expiresAt ? new Date(u.expiresAt).toISOString() : null,
     access: u.access || [],
     access_labels: u.access || [],
@@ -98,6 +99,7 @@ function mapFallbackUser(u, data) {
     username: u.username || null,
     department: u.department || null,
     role: u.role || "user",
+    isActive: u.isActive !== false,
     expiresAt: u.expiresAt || null,
     access: Array.isArray(u.access) ? u.access : [],
     access_labels: Array.isArray(u.access) ? u.access : [],
@@ -333,6 +335,7 @@ export async function POST(request) {
     const email = body.email ? String(body.email).trim() : null;
     const department = body.department ? String(body.department).trim() : null;
     const role = body.role ? String(body.role).trim() : "user";
+    const isActive = body.isActive !== false;
     const expiresAt = parseExpiresAtInput(readExpiresAtInput(body));
 
     const access = Array.isArray(body.access) ? body.access.map((v) => String(v || "")) : [];
@@ -351,6 +354,7 @@ export async function POST(request) {
     setUserScalarData(userData, "username", username);
     setUserScalarData(userData, "department", department);
     setUserScalarData(userData, "role", role);
+    setUserScalarData(userData, "isActive", isActive);
     setUserScalarData(userData, "access", access);
     if (expiresAt !== undefined) setUserScalarData(userData, "expiresAt", expiresAt);
     if (hasUserField("roles")) {
@@ -385,6 +389,7 @@ export async function POST(request) {
         username,
         department: body.department ? String(body.department).trim() : null,
         role: body.role ? String(body.role).trim() : "user",
+        isActive: body.isActive !== false,
         expiresAt: parseExpiresAtInput(readExpiresAtInput(body))?.toISOString?.() || null,
         access: Array.isArray(body.access) ? body.access.map((v) => String(v || "")) : [],
         label: body.name || username,
@@ -419,6 +424,7 @@ export async function PATCH(request) {
     if (body.username !== undefined) setUserScalarData(data, "username", String(body.username || "").trim());
     if (body.department !== undefined) setUserScalarData(data, "department", body.department === null ? null : (String(body.department || "").trim() || null));
     if (body.role !== undefined) setUserScalarData(data, "role", String(body.role || "user").trim());
+    if (body.isActive !== undefined) setUserScalarData(data, "isActive", body.isActive !== false);
     const expiresAt = parseExpiresAtInput(readExpiresAtInput(body));
     if (expiresAt !== undefined) setUserScalarData(data, "expiresAt", expiresAt);
 
@@ -467,6 +473,7 @@ export async function PATCH(request) {
       if (body.username !== undefined) user.username = String(body.username || "").trim();
       if (body.department !== undefined) user.department = body.department === null ? null : (String(body.department || "").trim() || null);
       if (body.role !== undefined) user.role = String(body.role || "user").trim();
+      if (body.isActive !== undefined) user.isActive = body.isActive !== false;
       const expiresAt = parseExpiresAtInput(readExpiresAtInput(body));
       if (expiresAt !== undefined) user.expiresAt = expiresAt ? expiresAt.toISOString() : null;
       if (Array.isArray(body.access)) user.access = body.access.map((v) => String(v || ""));

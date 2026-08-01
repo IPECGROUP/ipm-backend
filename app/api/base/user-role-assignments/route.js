@@ -57,6 +57,7 @@ function mapRows(rows) {
         name: row.user_name,
         username: row.username,
         email: row.email,
+        isActive: row.is_active !== false,
       };
       byUserId.set(userId, {
         ...user,
@@ -86,12 +87,13 @@ async function getAssignmentItems(userId = null) {
           u."name" AS user_name,
           u."username" AS username,
           u."email" AS email,
+          u."is_active" AS is_active,
           r."id" AS role_id,
           r."name" AS role_name
         FROM "User" u
         LEFT JOIN "UserRoleMap" urm ON urm."userId" = u."id"
         LEFT JOIN "UserRole" r ON r."id" = urm."roleId"
-        WHERE u."id" = ${Number(userId)}
+        WHERE u."id" = ${Number(userId)} AND u."is_active" = true
         ORDER BY u."id" ASC, r."name" ASC
       `
     : await prisma.$queryRaw`
@@ -100,11 +102,13 @@ async function getAssignmentItems(userId = null) {
           u."name" AS user_name,
           u."username" AS username,
           u."email" AS email,
+          u."is_active" AS is_active,
           r."id" AS role_id,
           r."name" AS role_name
         FROM "User" u
         LEFT JOIN "UserRoleMap" urm ON urm."userId" = u."id"
         LEFT JOIN "UserRole" r ON r."id" = urm."roleId"
+        WHERE u."is_active" = true
         ORDER BY u."id" ASC, r."name" ASC
       `;
 
@@ -132,6 +136,7 @@ export async function GET() {
         name: u.name,
         username: u.username,
         email: u.email,
+        isActive: u.isActive,
         label: u.label,
       })),
       roles,
@@ -145,7 +150,7 @@ export async function GET() {
         ok: true,
         fallback: true,
         items,
-        users: items.map((u) => ({ id: u.id, name: u.name, username: u.username, email: u.email, label: u.label })),
+      users: items.map((u) => ({ id: u.id, name: u.name, username: u.username, email: u.email, label: u.label, isActive: u.isActive })),
         roles: data.roles,
       });
     }

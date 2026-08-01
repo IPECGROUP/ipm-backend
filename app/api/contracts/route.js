@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
+import { hasPagePermission } from "@/lib/pagePermissions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,6 +16,23 @@ function json(data, status = 200) {
 
 function bad(error, status = 400) {
   return json({ error }, status);
+}
+
+async function requireContractPermission(request, permission) {
+  return (await hasPagePermission(request, "قراردادها", permission))
+    ? null
+    : bad("forbidden", 403);
+}
+
+function sectionPermission(body) {
+  const section = trimString(body?.lastSavedSection ?? body?.last_saved_section);
+  return {
+    general: "عمومی",
+    calendar: "تقویم قرارداد",
+    technical: "دامنه کار",
+    financial: "مالی و تضامین",
+    insurance: "تأمین اجتماعی",
+  }[section] || "ویرایش";
 }
 
 async function readJsonSafely(request) {
@@ -608,6 +626,8 @@ async function buildContractData(body, existingId = "") {
 
 export async function GET(request) {
   try {
+    const denied = await requireContractPermission(request, "نمایش منو");
+    if (denied) return denied;
     await ensureContractSchema();
 
     const url = new URL(request.url);
@@ -645,6 +665,8 @@ export async function GET(request) {
 
 export async function POST(request) {
   try {
+    const denied = await requireContractPermission(request, "افزودن");
+    if (denied) return denied;
     await ensureContractSchema();
 
     const body = await readJsonSafely(request);
@@ -665,9 +687,10 @@ export async function POST(request) {
 
 export async function PATCH(request) {
   try {
-    await ensureContractSchema();
-
     const body = await readJsonSafely(request);
+    const denied = await requireContractPermission(request, sectionPermission(body));
+    if (denied) return denied;
+    await ensureContractSchema();
     const id = trimString(body.id);
     if (!id) return bad("invalid_id");
 
@@ -691,6 +714,8 @@ export async function PATCH(request) {
 
 export async function DELETE(request) {
   try {
+    const denied = await requireContractPermission(request, "حذف");
+    if (denied) return denied;
     await ensureContractSchema();
 
     const url = new URL(request.url);
