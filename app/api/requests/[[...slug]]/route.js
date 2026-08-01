@@ -1146,7 +1146,9 @@ export async function PATCH(req, ctx) {
   const body = (await readJson(req)) || {};
   const data = pickUpdatable(body);
 
-  if (data.amount == null) delete data.amount;
+  // A requester may edit their own request, but its approved/requested amount
+  // is immutable after creation. Enforce this server-side as well as in the UI.
+  delete data.amount;
   if (data.cashAmount == null) delete data.cashAmount;
   if (data.creditAmount == null) delete data.creditAmount;
 
