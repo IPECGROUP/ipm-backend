@@ -979,6 +979,65 @@ export async function POST(req) {
   }
 }
 
+export async function PATCH(req) {
+  try {
+    const userId = await getUserId(req);
+    if (!userId) return json({ error: "unauthorized" }, 401);
+
+    const body = await readJson(req);
+    const url = new URL(req.url);
+    const id = toPositiveInt(body.id ?? url.searchParams.get("id"));
+    if (!id) return json({ error: "invalid_id" }, 400);
+
+    const row = await prisma.paymentRequest.findFirst({
+      where: { id, docId: REQUEST_DOC_ID },
+      select: { id: true, createdById: true },
+    });
+    if (!row) return json({ error: "not_found" }, 404);
+    if (Number(row.createdById) !== Number(userId)) return json({ error: "forbidden" }, 403);
+
+    const projectId = toPositiveInt(body.projectId ?? body.project_id);
+    const project = await resolveProject(projectId);
+    if (!project) return json({ error: "active_project_not_found" }, 404);
+    const title = cleanText(body.title, 255);
+    const budgetCode = cleanText(body.budgetCode ?? body.budget_code, 80);
+    const amount = toBigIntAmount(body.amount);
+    if (!title) return json({ error: "title_required" }, 400);
+    if (!budgetCode) return json({ error: "budget_code_required" }, 400);
+    if (amount <= 0n) return json({ error: "amount_must_be_positive" }, 400);
+
+    const updated = await prisma.paymentRequest.update({
+      where: { id },
+      data: {
+        projectId,
+        budgetCode,
+        title,
+        description: cleanText(body.description, 2000) || null,
+        amount,
+        docDateJalali: cleanText(body.needDateJalali ?? body.need_date_jalali, 20).replaceAll("-", "/") || null,
+        ...(Array.isArray(body.attachments) ? { attachments: body.attachments } : {}),
+      },
+      include: {
+        createdBy: { select: { name: true, username: true, email: true } },
+        currentAssigneeUser: { select: { name: true, username: true, email: true } },
+      },
+    });
+    const { mainAdmin } = await userContext(userId);
+    const userCtx = await userRoleAndUnitContext(userId);
+    return json({ ok: true, item: serializeItem({
+      ...updated,
+      project,
+      canAct: canActOnSupplyStep({ row: updated, userId, userCtx, mainAdmin }),
+      canDelete: true,
+    }) });
+  } catch (e) {
+    console.error("supply_requests_patch_error", e);
+    const mapped = mapDbError(e);
+    if (mapped) return json({ error: mapped.error }, mapped.status);
+    return json(internalErrorPayload(e), 500);
+  }
+}
+
 export async function DELETE(req) {
   try {
     const userId = await getUserId(req);
