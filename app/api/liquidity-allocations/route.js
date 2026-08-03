@@ -1,4 +1,5 @@
 import { prisma } from "../../../lib/prisma";
+import { requirePagePermission } from "../../../lib/pagePermissions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -111,6 +112,8 @@ async function ensureLiquidityTable() {
 
 export async function GET(request) {
   try {
+    const denied = await requirePagePermission(request, "تخصیص نقدینگی", "نمایش منو");
+    if (denied) return denied;
     await ensureLiquidityTable();
     // A dashboard reset is intentionally view-only.  The liquidity page and
     // payment-request validation must always use the real, current balances.
@@ -207,6 +210,8 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
+  const denied = await requirePagePermission(request, "تخصیص نقدینگی", "افزودن");
+  if (denied) return denied;
   const userId = await getUserId(request);
   if (!userId) return json({ error: "unauthorized" }, 401);
   try {
@@ -251,6 +256,8 @@ export async function POST(request) {
 }
 
 export async function DELETE(request) {
+  const denied = await requirePagePermission(request, "تخصیص نقدینگی", "افزودن");
+  if (denied) return denied;
   const userId = await getUserId(request);
   if (!userId) return json({ error: "unauthorized" }, 401);
   if (!(await isAdmin(userId))) return json({ error: "forbidden" }, 403);

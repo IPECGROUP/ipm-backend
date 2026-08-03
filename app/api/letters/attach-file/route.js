@@ -1,4 +1,5 @@
-    import { prisma } from "@/lib/prisma";
+import { prisma } from "@/lib/prisma";
+import { requirePagePermission } from "@/lib/pagePermissions";
 import { NextResponse } from "next/server";
 
 export const runtime = "nodejs";
@@ -12,6 +13,8 @@ function bad(message, status = 400) {
 }
 
 export async function POST(req, ctx) {
+  const denied = await requirePagePermission(req, "مدیریت اسناد", "بارگذاری سند پیوست");
+  if (denied) return denied;
   const idRaw = ctx?.params?.id;
   const letterId = Number(idRaw);
   if (!Number.isFinite(letterId) || letterId <= 0) return bad("invalid_letter_id");

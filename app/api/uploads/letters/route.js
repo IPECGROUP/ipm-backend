@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { requirePagePermission } from "@/lib/pagePermissions";
 import { NextResponse } from "next/server";
 import fs from "fs/promises";
 import { createWriteStream } from "fs";
@@ -173,6 +174,8 @@ function parseMultipartUpload(req, uploadDir) {
 }
 
 export async function POST(req) {
+  const denied = await requirePagePermission(req, "مدیریت اسناد", "بارگذاری سند پیوست");
+  if (denied) return denied;
   let tempPathToClean = "";
   try {
     const uploadDir = path.join(uploadRootDir(), "letters");

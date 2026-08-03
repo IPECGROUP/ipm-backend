@@ -1,4 +1,5 @@
 import { prisma } from "../../../../lib/prisma";
+import { requirePagePermission } from "../../../../lib/pagePermissions";
 
 export const runtime = "nodejs";
 
@@ -23,6 +24,8 @@ async function ensureLiquidityTable() {
 }
 
 export async function POST(request) {
+  const denied = await requirePagePermission(request, "تخصیص نقدینگی", "نمایش منو");
+  if (denied) return denied;
   try {
     await ensureLiquidityTable();
     const body = await request.json().catch(() => ({}));

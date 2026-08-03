@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "../../../lib/prisma";
 import { fallbackUnitsForRoleNames } from "../../../lib/orgStructureFallback";
+import { requirePagePermission } from "../../../lib/pagePermissions";
 
 export const runtime = "nodejs";
 
@@ -594,6 +595,8 @@ async function userContext(userId) {
 }
 
 export async function GET(req) {
+  const denied = await requirePagePermission(req, "درخواست تأمین", "نمایش منو");
+  if (denied) return denied;
   try {
     const userId = await getUserId(req);
     if (!userId) return json({ error: "unauthorized" }, 401);
@@ -698,6 +701,8 @@ export async function GET(req) {
 }
 
 export async function POST(req) {
+  const denied = await requirePagePermission(req, "درخواست تأمین", "افزودن");
+  if (denied) return denied;
   try {
     const userId = await getUserId(req);
     if (!userId) return json({ error: "unauthorized" }, 401);

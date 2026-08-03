@@ -1,4 +1,5 @@
 import { prisma } from "@/lib/prisma";
+import { hasPagePermission, requirePagePermission } from "@/lib/pagePermissions";
 import { NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
@@ -486,15 +487,17 @@ async function getViewerAccessInfo(req) {
 
   const user = await prisma.user.findUnique({
     where: { id: Number(userId) },
-    select: { username: true, name: true },
+    select: { username: true, name: true, role: true, access: true },
   });
 
   const username = normalizeViewerName(user?.username || user?.name || "");
-  const isMainAdmin = username === "marandi";
+  const isMainAdmin = String(user?.role || "").toLowerCase() === "admin";
+  const permissions = Array.isArray(user?.access) ? user.access.map(String) : [];
+  const canSeeConfidential = isMainAdmin || permissions.includes("page-access:1:همه") || permissions.includes("page-access:1:اسناد محرمانه");
 
   return {
     userId,
-    canSeeConfidential: isAllowedConfidentialViewerName(username),
+    canSeeConfidential,
     isMainAdmin,
   };
 }
@@ -1059,6 +1062,8 @@ async function tryDeleteAttachmentFiles(letters) {
 
 export async function GET(req, ctx) {
   try {
+    const denied = await requirePagePermission(req, "مدیریت اسناد", "نمایش منو");
+    if (denied) return denied;
     const slug = ctx?.params?.slug || [];
     const p0 = slug[0] || "";
 
@@ -1181,6 +1186,8 @@ export async function POST(req, ctx) {
 
     // ✅ allow POST /api/letters/prefs as well
     if (p0 === "prefs") {
+      const denied = await requirePagePermission(req, "مدیریت اسناد", "نمایش منو");
+      if (denied) return denied;
       const userId = await getUserIdFromReq(req);
       if (!userId) return bad("unauthorized", 401);
 
@@ -1205,6 +1212,8 @@ export async function POST(req, ctx) {
       return json({ prefs: toSnakePrefs(updated) }, 201);
     }
 
+    const denied = await requirePagePermission(req, "مدیریت اسناد", "افزودن");
+    if (denied) return denied;
     const ct = req.headers.get("content-type") || "";
     let payload = {};
 
@@ -1234,6 +1243,9 @@ export async function POST(req, ctx) {
       classificationText: payload.classificationText,
       keepUndefined: false,
     });
+    if (isConfidentialLabel(resolvedClassification.classificationLabel) && !(await hasPagePermission(req, "مدیریت اسناد", "اسناد محرمانه"))) {
+      return bad("forbidden", 403);
+    }
     const resolvedSecretariatNo = await resolveSecretariatNoForCreate(payload);
     const resolvedLetterNo = String(resolvedSecretariatNo || payload.letterNo || "").trim();
 
@@ -1305,6 +1317,9 @@ export async function PATCH(req, ctx) {
       return json({ prefs: toSnakePrefs(updated) });
     }
 
+    const denied = await requirePagePermission(req, "مدیریت اسناد", "ویرایش");
+    if (denied) return denied;
+
     // ✅ یک بار body رو بخون
     const raw = await readJsonSafely(req);
 
@@ -1341,12 +1356,18 @@ export async function PATCH(req, ctx) {
       where: { id },
     });
     if (!existing) return bad("not_found", 404);
+    const viewer = await getViewerAccessInfo(req);
+    if (!canViewConfidentialLetter(toSnakeLetter(existing), viewer.canSeeConfidential)) return bad("not_found", 404);
 
     const resolvedClassification = await resolveClassificationState({
       classificationId: hasOwn(body, "classificationId") ? body.classificationId : undefined,
       classificationText: hasOwn(body, "classificationText") ? body.classificationText : undefined,
       keepUndefined: true,
     });
+    const nextClassification = resolvedClassification.classificationLabel === undefined
+      ? (existing.classificationLabel ?? existing.classification?.label ?? "")
+      : resolvedClassification.classificationLabel;
+    if (isConfidentialLabel(nextClassification) && !viewer.canSeeConfidential) return bad("forbidden", 403);
 
     const data = {};
 

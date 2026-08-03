@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "../../../lib/prisma";
+import { requirePagePermission } from "../../../lib/pagePermissions";
 
 export const runtime = "nodejs";
 
@@ -189,7 +190,9 @@ async function ensureActiveProject(projectId) {
   return !!project;
 }
 
-export async function GET() {
+export async function GET(request) {
+  const denied = await requirePagePermission(request, "پیش‌بینی جریان نقدی", "پیش‌بینی درآمدها");
+  if (denied) return denied;
   try {
     await ensureRevenueForecastTables();
 
@@ -241,6 +244,8 @@ export async function GET() {
 }
 
 export async function POST(req) {
+  const denied = await requirePagePermission(req, "پیش‌بینی جریان نقدی", "پیش‌بینی درآمدها");
+  if (denied) return denied;
   try {
     await ensureRevenueForecastTables();
 
@@ -318,6 +323,8 @@ export async function POST(req) {
 }
 
 export async function PATCH(req) {
+  const denied = await requirePagePermission(req, "پیش‌بینی جریان نقدی", "پیش‌بینی درآمدها");
+  if (denied) return denied;
   try {
     await ensureRevenueForecastTables();
 
@@ -354,6 +361,8 @@ export async function PATCH(req) {
 }
 
 export async function DELETE(req) {
+  const denied = await requirePagePermission(req, "پیش‌بینی جریان نقدی", "پیش‌بینی درآمدها");
+  if (denied) return denied;
   try {
     await ensureRevenueForecastTables();
 

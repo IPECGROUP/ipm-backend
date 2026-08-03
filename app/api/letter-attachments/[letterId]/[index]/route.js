@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { hasPagePermission, requirePagePermission } from "@/lib/pagePermissions";
 import fs from "fs/promises";
 import path from "path";
 
@@ -224,16 +225,7 @@ async function canReadLetter(req, letter) {
     String(typeof letter?.classification === "object" ? letter?.classification?.label || "" : "").trim() ||
     String(letter?.docClass || "").trim();
   if (!isConfidentialLabel(label)) return true;
-
-  const userId = await getUserIdFromReq(req);
-  if (!userId) return false;
-
-  const user = await prisma.user.findUnique({
-    where: { id: Number(userId) },
-    select: { username: true, name: true },
-  });
-  const username = normalizeViewerName(user?.username || user?.name || "");
-  return username === "marandi" || username === "rastegar";
+  return hasPagePermission(req, "مدیریت اسناد", "اسناد محرمانه");
 }
 
 async function findLetterForAttachment(letterId) {
@@ -289,6 +281,8 @@ async function findLetterForAttachment(letterId) {
 }
 
 export async function GET(req, ctx) {
+  const denied = await requirePagePermission(req, "مدیریت اسناد", "نمایش سند پیوست");
+  if (denied) return denied;
   const params = await ctx?.params;
   const letterId = Number(params?.letterId);
   const index = Number(params?.index);

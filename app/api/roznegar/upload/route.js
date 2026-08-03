@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { requirePagePermission } from "@/lib/pagePermissions";
 import fs from "fs/promises";
 import path from "path";
 import crypto from "crypto";
@@ -120,6 +121,8 @@ async function ensureUploadedFileSchema() {
 
 export async function POST(req) {
   try {
+    const denied = await requirePagePermission(req, "روزنگار پروژه", "افزودن");
+    if (denied) return denied;
     const userId = await getUserIdFromReq(req);
     if (!userId) return bad("unauthorized", 401);
 

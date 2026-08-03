@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { Prisma } from "@prisma/client";
 import { NextResponse } from "next/server";
+import { requirePagePermission } from "@/lib/pagePermissions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -286,6 +287,8 @@ function mapEntry(row) {
 
 export async function GET(req) {
   try {
+    const denied = await requirePagePermission(req, "روزنگار پروژه", "نمایش منو");
+    if (denied) return denied;
     const userId = await getUserIdFromReq(req);
     if (!userId) return bad("unauthorized", 401);
 
@@ -319,6 +322,8 @@ export async function GET(req) {
 
 export async function POST(req) {
   try {
+    const denied = await requirePagePermission(req, "روزنگار پروژه", "افزودن");
+    if (denied) return denied;
     const userId = await getUserIdFromReq(req);
     if (!userId) return bad("unauthorized", 401);
 
@@ -372,6 +377,8 @@ export async function POST(req) {
 
 export async function PATCH(req) {
   try {
+    const denied = await requirePagePermission(req, "روزنگار پروژه", "افزودن");
+    if (denied) return denied;
     const userId = await getUserIdFromReq(req);
     if (!userId) return bad("unauthorized", 401);
 
@@ -410,6 +417,8 @@ export async function PATCH(req) {
 
 export async function DELETE(req) {
   try {
+    const denied = await requirePagePermission(req, "روزنگار پروژه", "افزودن");
+    if (denied) return denied;
     const userId = await getUserIdFromReq(req);
     if (!userId) return bad("unauthorized", 401);
 

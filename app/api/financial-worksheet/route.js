@@ -1,6 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import { randomUUID } from "crypto";
+import { requirePagePermission } from "@/lib/pagePermissions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -94,6 +95,10 @@ async function ensureSchema() {
 
 export async function GET(request) {
   try {
+    const kindParam = new URL(request.url).searchParams.get("kind");
+    const permission = kindParam === "receipts" ? "دریافتی‌ها" : "صورت وضعیت‌ها";
+    const denied = await requirePagePermission(request, "کاربرگ مالی", permission);
+    if (denied) return denied;
     await ensureSchema();
     const { searchParams } = new URL(request.url);
     const projectId = normalizeProjectId(searchParams.get("project_id"));
@@ -134,7 +139,12 @@ export async function GET(request) {
 
 export async function POST(request) {
   try {
+    const peekBody = await request.clone().json().catch(() => null);
+    const permission = peekBody?.kind === "receipts" ? "دریافتی‌ها" : "صورت وضعیت‌ها";
+    const denied = await requirePagePermission(request, "کاربرگ مالی", permission);
+    if (denied) return denied;
     await ensureSchema();
+    // request body was cloned above so it remains available here.
     const body = await request.json().catch(() => null);
     if (!body || typeof body !== "object") return json({ error: "invalid_payload" }, 400);
 
@@ -187,6 +197,8 @@ export async function POST(request) {
 
 export async function DELETE(request) {
   try {
+    const denied = await requirePagePermission(request, "کاربرگ مالی", "صورت وضعیت‌ها");
+    if (denied) return denied;
     await ensureSchema();
     const { searchParams } = new URL(request.url);
     const id = trimString(searchParams.get("id"));

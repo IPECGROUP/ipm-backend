@@ -3,6 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import { requirePagePermission } from "../../../../lib/pagePermissions";
 
 export const runtime = "nodejs";
 
@@ -39,6 +40,8 @@ function safeExtFromName(name = "") {
 }
 
 export async function POST(req) {
+  const denied = await requirePagePermission(req, "درخواست پرداخت", "افزودن");
+  if (denied) return denied;
   const userId = getUserId(req);
   if (!userId) return json({ error: "unauthorized" }, 401);
 

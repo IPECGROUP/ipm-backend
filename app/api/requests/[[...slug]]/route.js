@@ -3,6 +3,7 @@ import { PrismaClient } from "@prisma/client";
 import { fallbackUnitsForRoleNames } from "../../../../lib/orgStructureFallback";
 import { unlink } from "node:fs/promises";
 import path from "node:path";
+import { requirePagePermission } from "../../../../lib/pagePermissions";
 
 export const runtime = "nodejs";
 
@@ -765,6 +766,8 @@ async function getUserContext(req, userId) {
 
 // --- handlers
 export async function GET(req, ctx) {
+  const denied = await requirePagePermission(req, "درخواست پرداخت", "نمایش منو");
+  if (denied) return denied;
   const userId = await getUserId(req);
   if (!userId) return json({ error: "unauthorized" }, 401);
   const uctx = await getUserContext(req, userId);
@@ -880,6 +883,8 @@ export async function GET(req, ctx) {
 }
 
 export async function POST(req, ctx) {
+  const denied = await requirePagePermission(req, "درخواست پرداخت", "افزودن");
+  if (denied) return denied;
   const userId = await getUserId(req);
   if (!userId) return json({ error: "unauthorized" }, 401);
 
