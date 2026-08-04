@@ -431,6 +431,7 @@ model Letter {
   @@index([kind])
   @@index([projectId])
   @@index([createdAt])
+  @@index([createdBy, id(sort: Desc)])
   @@index([classificationId])
   @@index([internalUnitId])
 }

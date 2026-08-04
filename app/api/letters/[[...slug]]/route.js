@@ -33,7 +33,7 @@ function decodeClassificationDocClassFallback(raw) {
   return normalized || "";
 }
 
-function toSnakeLetter(l) {
+function toSnakeLetter(l, { includeAttachments = true } = {}) {
   const docClassRaw = String(l?.docClass ?? "").trim();
   const classificationFromDocClass = decodeClassificationDocClassFallback(docClassRaw);
   if (!l) return null;
@@ -43,7 +43,9 @@ function toSnakeLetter(l) {
     classificationFromDocClass ??
     "";
   const cls = String(classificationLabel || "").trim();
-  const attachments = Array.isArray(l?.attachments) ? l.attachments : [];
+  // Attachments can be a large JSON payload.  The table only needs the
+  // hasAttachment flag; the complete list is fetched when a letter is opened.
+  const attachments = includeAttachments && Array.isArray(l?.attachments) ? l.attachments : [];
   return {
     id: l.id,
     kind: l.kind,
@@ -76,6 +78,7 @@ function toSnakeLetter(l) {
     secretariat_note: l.secretariatNote ?? "",
     receiver_name: l.receiverName ?? "",
     attachments,
+    attachments_loaded: includeAttachments,
     created_by: l.createdBy ?? null,
     created_at: l.createdAt,
     updated_at: l.updatedAt,
@@ -263,8 +266,48 @@ const LETTER_CLASSIFICATION_INCLUDE = {
   classification: { select: { id: true, label: true } },
 };
 
+// Keep the initial list response small.  In particular, do not pull every
+// attachment JSON blob just to render the table.
+const LETTER_LIST_SELECT = {
+  id: true,
+  kind: true,
+  docClass: true,
+  classificationLabel: true,
+  classificationId: true,
+  category: true,
+  projectId: true,
+  internalUnitId: true,
+  letterNo: true,
+  letterDate: true,
+  fromName: true,
+  toName: true,
+  orgName: true,
+  subject: true,
+  hasAttachment: true,
+  attachmentTitle: true,
+  returnToIds: true,
+  piroIds: true,
+  tagIds: true,
+  secretariatDate: true,
+  secretariatNo: true,
+  receiverName: true,
+  secretariatNote: true,
+  createdBy: true,
+  createdAt: true,
+  updatedAt: true,
+};
+
 async function safeLetterFindMany(args = {}) {
   try {
+    if (args?.select) {
+      return await prisma.letter.findMany({
+        ...args,
+        select: {
+          ...args.select,
+          ...LETTER_CLASSIFICATION_INCLUDE,
+        },
+      });
+    }
     return await prisma.letter.findMany({
       ...args,
       include: {
@@ -274,6 +317,13 @@ async function safeLetterFindMany(args = {}) {
     });
   } catch (err) {
     if (!isLettersClassificationCompatError(err)) throw err;
+    if (args?.select) {
+      const { classification: _classification, ...selectWithoutRelation } = args.select;
+      return await prisma.letter.findMany({
+        ...args,
+        select: selectWithoutRelation,
+      });
+    }
     const { include: _include, ...rest } = args || {};
     return await prisma.letter.findMany(rest);
   }
@@ -983,8 +1033,9 @@ async function listLetters({ createdBy = null, includePublic = false } = {}) {
   const items = await safeLetterFindMany({
     where,
     orderBy: { id: "desc" },
+    select: LETTER_LIST_SELECT,
   });
-  return items.map(toSnakeLetter);
+  return items.map((item) => toSnakeLetter(item, { includeAttachments: false }));
 }
 
 function getIdFromReq(req, ctx) {
@@ -1126,28 +1177,30 @@ export async function GET(req, ctx) {
       if (viewer.isMainAdmin) {
         itemsRaw = await listLetters({ createdBy: null });
       } else {
-        const mineAndPublic = await listLetters({
-          createdBy: String(viewer.userId),
-          includePublic: true,
-        });
-
         if (viewer.canSeeConfidential) {
+          // A confidential-capable user needs their own/public letters plus
+          // confidential letters from others. One complete read is faster
+          // than the former pair of overlapping full-table reads.
           const allItems = await listLetters({ createdBy: null });
-          const merged = new Map(
-            mineAndPublic.map((it) => [String(it?.id ?? ""), it])
-          );
-          allItems
-            .filter((it) => isConfidentialLabel(
+          itemsRaw = allItems.filter((it) => {
+            const isMineOrPublic =
+              String(it?.created_by ?? "") === String(viewer.userId) ||
+              it?.created_by == null ||
+              it?.created_by === "";
+            const isConfidential = isConfidentialLabel(
               it?.classification ??
               it?.classification_label ??
               it?.confidentiality ??
               it?.doc_classification ??
               ""
-            ))
-            .forEach((it) => merged.set(String(it?.id ?? ""), it));
-          itemsRaw = Array.from(merged.values());
+            );
+            return isMineOrPublic || isConfidential;
+          });
         } else {
-          itemsRaw = mineAndPublic;
+          itemsRaw = await listLetters({
+            createdBy: String(viewer.userId),
+            includePublic: true,
+          });
         }
       }
 
