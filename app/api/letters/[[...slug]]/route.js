@@ -1033,9 +1033,8 @@ async function listLetters({ createdBy = null, includePublic = false } = {}) {
   const items = await safeLetterFindMany({
     where,
     orderBy: { id: "desc" },
-    select: LETTER_LIST_SELECT,
   });
-  return items.map((item) => toSnakeLetter(item, { includeAttachments: false }));
+  return items.map(toSnakeLetter);
 }
 
 function getIdFromReq(req, ctx) {
