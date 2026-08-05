@@ -487,6 +487,9 @@ async function requireWorkflowAssignee(kind, selectedUserId, excludeUserId, erro
 }
 
 function nextRoleKeyForCreatorContext(ctx) {
+  // Requests created by Supply must always enter the full approval flow,
+  // even when the creator also has a project-management/control role.
+  if (isCommercialContext(ctx)) return SUPPLY_STEP.PROJECT_CONTROL;
   if (isProjectManagerContext(ctx)) return SUPPLY_STEP.COMMERCIAL;
   if (isProjectControlContext(ctx)) return SUPPLY_STEP.PROJECT_MANAGER;
   return SUPPLY_STEP.PROJECT_CONTROL;

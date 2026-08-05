@@ -296,11 +296,17 @@ function inferredUnitNamesFromRoles(roleNames = []) {
   return Array.from(units);
 }
 
-function normalizeOut(row) {
+function normalizeOut(row, userNamesById = null) {
   if (!row) return row;
   const history = Array.isArray(row.historyJson) ? row.historyJson : [];
   const createdMeta = history.find((entry) => entry?.type === "created") || {};
   const currentStep = getCurrentStep(history);
+  const resolvedHistory = userNamesById
+    ? history.map((entry) => {
+        const name = userNamesById.get(Number(entry?.byUserId));
+        return name ? { ...entry, actorName: name } : entry;
+      })
+    : history;
   return {
     id: row.id,
     serial: row.serial,
@@ -331,8 +337,8 @@ function normalizeOut(row) {
     budgetCode: row.budgetCode,
 
     status: row.status,
-    history_json: row.historyJson,
-    historyJson: row.historyJson,
+    history_json: resolvedHistory,
+    historyJson: resolvedHistory,
     attachments: row.attachments,
     hasSupplyRequest: createdMeta.hasSupplyRequest || "no",
     supplyRequestId: createdMeta.supplyRequestId || null,
@@ -751,6 +757,7 @@ async function getUserContext(req, userId) {
 
   return {
     isMainAdmin: isMainAdminObserver(user),
+    actorName: user?.name || user?.username || user?.email || `User #${userId}`,
     userName: user?.username || user?.name || user?.email || `کاربر #${userId}`,
     unitName: unitNames.join("، ") || "نامشخص",
     roleName: Array.from(new Set(roleNames)).join("، ") || "نامشخص",
@@ -762,6 +769,27 @@ async function getUserContext(req, userId) {
     roleNames,
     roleKeys: detectUserRoleKeys(roleNames),
   };
+}
+
+async function userNameMapForRows(rows = []) {
+  const ids = new Set();
+  for (const row of rows) {
+    if (row?.createdById) ids.add(Number(row.createdById));
+    for (const entry of Array.isArray(row?.historyJson) ? row.historyJson : []) {
+      if (entry?.byUserId) ids.add(Number(entry.byUserId));
+    }
+  }
+  if (!ids.size) return new Map();
+
+  const users = await prisma.user.findMany({
+    where: { id: { in: Array.from(ids) } },
+    select: { id: true, name: true },
+  });
+  return new Map(
+    users
+      .filter((user) => String(user?.name || "").trim())
+      .map((user) => [Number(user.id), String(user.name).trim()])
+  );
 }
 
 // --- handlers
@@ -817,7 +845,8 @@ export async function GET(req, ctx) {
     const canView = uctx.isMainAdmin || row.createdById === userId || canAct;
     if (!canView) return json({ error: "forbidden" }, 403);
 
-    return json({ item: { ...normalizeOut(row), canAct, canDelete: row.createdById === userId && !["approved", "rejected", "canceled", "cancelled"].includes(row.status) } });
+    const userNamesById = await userNameMapForRows([row]);
+    return json({ item: { ...normalizeOut(row, userNamesById), canAct, canDelete: row.createdById === userId && !["approved", "rejected", "canceled", "cancelled"].includes(row.status) } });
   }
 
   // GET /api/requests (list)
@@ -872,9 +901,10 @@ export async function GET(req, ctx) {
     filtered = rowsWithFlags.filter((x) => x.canView);
   }
 
+  const userNamesById = await userNameMapForRows(filtered.map((x) => x.row));
   return json({
     items: filtered.map((x) => ({
-      ...normalizeOut(x.row),
+      ...normalizeOut(x.row, userNamesById),
       canAct: x.canAct,
       canEdit: x.isMine,
       canDelete: x.isMine && !["approved", "rejected", "canceled", "cancelled"].includes(x.row.status),
@@ -941,6 +971,7 @@ export async function POST(req, ctx) {
 
       history.push({
         byUserId: userId,
+        actorName: uctx.actorName,
         type: "approved",
         status: "pending",
         note,
@@ -996,6 +1027,7 @@ export async function POST(req, ctx) {
     // returned/rejected
     history.push({
       byUserId: userId,
+      actorName: uctx.actorName,
       type: nextStatus,
       status: nextStatus,
       note,
