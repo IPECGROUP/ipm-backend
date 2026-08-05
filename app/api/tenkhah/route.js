@@ -28,13 +28,9 @@ const norm = (value = "") => String(value).toLowerCase().replace(/ي/g, "ی").re
 async function settlementRecipients(stage, excludeId) {
   const users = await prisma.user.findMany({ include: { units: { include: { unit: true } }, roles: { include: { role: true } } }, orderBy: { id: "asc" } });
   const terms = stage === "control_project" ? ["کنترل پروژه", "برنامه ریزی", "برنامه‌ریزی", "project control"] : stage === "finance" ? ["مالی", "حسابداری", "حسابدار", "finance", "account"] : ["مدیر پروژه", "project manager"];
-  const unitRoleMaps = await prisma.unitRoleMap.findMany({ include: { unit: true } });
-  const unitRoleIds = unitRoleMaps.filter(link => terms.some(term => norm(link.unit?.name).includes(norm(term)))).map(link => link.roleId);
-  const roleUsers = unitRoleIds.length ? await prisma.userRoleMap.findMany({ where: { roleId: { in: unitRoleIds } }, select: { userId: true } }) : [];
-  const memberIdsByUnitRole = new Set(roleUsers.map(link => +link.userId));
   return users.filter(u => u.isActive !== false && +u.id !== +excludeId).filter(u => {
     const text = norm([u.department, u.role, ...(u.access || []), ...(u.units || []).map(x => x.unit?.name), ...(u.roles || []).map(x => x.role?.name)].filter(Boolean).join(" "));
-    return memberIdsByUnitRole.has(+u.id) || terms.some(t => text.includes(norm(t)));
+    return terms.some(t => text.includes(norm(t)));
   }).map(u => ({ id: u.id, name: u.name, username: u.username, email: u.email }));
 }
 
