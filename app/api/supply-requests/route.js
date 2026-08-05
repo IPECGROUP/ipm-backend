@@ -506,17 +506,16 @@ async function nextApproveRoleKeyForRow(row, step) {
   return null;
 }
 
-function canActOnSupplyStep({ row, userId, userCtx, mainAdmin }) {
+function canActOnSupplyStep({ row, userId }) {
   const step = getCurrentStep(row?.historyJson);
   if (!step) return false;
   const isCreator = Number(row.createdById) === Number(userId);
   if (step.roleKey === SUPPLY_STEP.REQUESTER) {
     const latestAction = latestWorkflowAction(row?.historyJson);
     if (isCreator) return Number(row.currentAssigneeUserId) === Number(userId) && latestAction?.type === "returned";
-    return mainAdmin || Number(row.currentAssigneeUserId) === Number(userId);
+    return Number(row.currentAssigneeUserId) === Number(userId);
   }
   if (isCreator) return false;
-  if (mainAdmin) return true;
   if (Number(row.currentAssigneeUserId) === Number(userId)) return true;
   return false;
 }
@@ -664,23 +663,21 @@ export async function GET(req) {
 
     const userCtx = await userRoleAndUnitContext(userId);
     const cartableOnly = url.searchParams.get("cartable") === "1";
-    const visibleRows = mainAdmin
-      ? rows
-        : rows.filter((row) => {
-            const canAct = canActOnSupplyStep({ row, userId, userCtx, mainAdmin });
-            const currentStep = getCurrentStep(row.historyJson);
-            const isCompletedCommercialOwner =
-              !currentStep &&
-              Number(row.currentAssigneeUserId) === Number(userId) &&
-              ["approved", "rejected"].includes(row.status);
-            if (cartableOnly) return canAct && Number(row.currentAssigneeUserId) === Number(userId);
-            return (
-              Number(row.createdById) === Number(userId) ||
-              ccUserIdsOf(row).includes(String(userId)) ||
-              isCompletedCommercialOwner ||
-              (canAct && Number(row.currentAssigneeUserId) === Number(userId))
-            );
-        });
+    const visibleRows = rows.filter((row) => {
+      const canAct = canActOnSupplyStep({ row, userId, userCtx, mainAdmin });
+      const currentStep = getCurrentStep(row.historyJson);
+      const isCompletedCommercialOwner =
+        !currentStep &&
+        Number(row.currentAssigneeUserId) === Number(userId) &&
+        ["approved", "rejected"].includes(row.status);
+      if (cartableOnly) return canAct && Number(row.currentAssigneeUserId) === Number(userId);
+      return (
+        Number(row.createdById) === Number(userId) ||
+        ccUserIdsOf(row).includes(String(userId)) ||
+        isCompletedCommercialOwner ||
+        (canAct && Number(row.currentAssigneeUserId) === Number(userId))
+      );
+    });
     const finalRows = cartableOnly
       ? visibleRows.filter((row) => {
           const step = getCurrentStep(row.historyJson);
