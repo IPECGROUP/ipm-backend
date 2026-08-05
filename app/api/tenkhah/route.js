@@ -26,11 +26,15 @@ async function requests(where = "", params = []) {
 async function settlements(ids) { if (!ids.length) return []; const data = await prisma.$queryRawUnsafe(`SELECT s.id,s.tenkhah_request_id AS "tenkhahRequestId",s.created_by_id AS "createdById",s.current_assignee_user_id AS "currentAssigneeUserId",s.stage,s.status,u.name AS "currentAssigneeName",u.username AS "currentAssigneeUsername" FROM tenkhah_settlements s LEFT JOIN "User" u ON u.id=s.current_assignee_user_id WHERE s.tenkhah_request_id=ANY($1::int[]) ORDER BY s.created_at DESC`, ids); const es = await prisma.$queryRawUnsafe(`SELECT id,settlement_id AS "settlementId",expense_date AS "expenseDate",description,budget_code AS "budgetCode",amount::text AS amount,file_name AS "fileName",file_url AS "fileUrl" FROM tenkhah_settlement_entries WHERE settlement_id=ANY($1::int[]) ORDER BY id`, data.map(x => x.id)); return data.map(s => ({ ...s, entries: es.filter(e => +e.settlementId === +s.id) })); }
 const norm = (value = "") => String(value).toLowerCase().replace(/ي/g, "ی").replace(/ك/g, "ک").replace(/\s+/g, " ");
 async function settlementRecipients(stage, excludeId) {
-  const users = await prisma.user.findMany({ include: { units: { include: { unit: true } }, roles: { include: { role: { include: { units: { include: { unit: true } } } } } } }, orderBy: { id: "asc" } });
+  const users = await prisma.user.findMany({ include: { units: { include: { unit: true } }, roles: { include: { role: true } } }, orderBy: { id: "asc" } });
   const terms = stage === "control_project" ? ["کنترل پروژه", "برنامه ریزی", "برنامه‌ریزی", "project control"] : stage === "finance" ? ["مالی", "حسابداری", "حسابدار", "finance", "account"] : ["مدیر پروژه", "project manager"];
+  const unitRoleMaps = await prisma.unitRoleMap.findMany({ include: { unit: true } });
+  const unitRoleIds = unitRoleMaps.filter(link => terms.some(term => norm(link.unit?.name).includes(norm(term)))).map(link => link.roleId);
+  const roleUsers = unitRoleIds.length ? await prisma.userRoleMap.findMany({ where: { roleId: { in: unitRoleIds } }, select: { userId: true } }) : [];
+  const memberIdsByUnitRole = new Set(roleUsers.map(link => +link.userId));
   return users.filter(u => u.isActive !== false && +u.id !== +excludeId).filter(u => {
-    const text = norm([u.department, u.role, ...(u.access || []), ...(u.units || []).map(x => x.unit?.name), ...(u.roles || []).flatMap(x => [x.role?.name, ...(x.role?.units || []).map(link => link.unit?.name)])].filter(Boolean).join(" "));
-    return terms.some(t => text.includes(norm(t)));
+    const text = norm([u.department, u.role, ...(u.access || []), ...(u.units || []).map(x => x.unit?.name), ...(u.roles || []).map(x => x.role?.name)].filter(Boolean).join(" "));
+    return memberIdsByUnitRole.has(+u.id) || terms.some(t => text.includes(norm(t)));
   }).map(u => ({ id: u.id, name: u.name, username: u.username, email: u.email }));
 }
 
