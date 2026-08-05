@@ -236,6 +236,17 @@ function ccUserIdsOf(row) {
   return Array.from(ids);
 }
 
+function hasBeenAssignedToUser(row, userId) {
+  const targetUserId = Number(userId);
+  if (!targetUserId) return false;
+  const history = Array.isArray(row?.historyJson) ? row.historyJson : [];
+  return history.some(
+    (entry) =>
+      entry?.type === "step_set" &&
+      Number(entry?.assignedToUserId) === targetUserId
+  );
+}
+
 function latestWorkflowMeta(row) {
   const history = Array.isArray(row?.historyJson) ? row.historyJson : [];
   const meta = {};
@@ -674,6 +685,7 @@ export async function GET(req) {
       return (
         Number(row.createdById) === Number(userId) ||
         ccUserIdsOf(row).includes(String(userId)) ||
+        hasBeenAssignedToUser(row, userId) ||
         isCompletedCommercialOwner ||
         (canAct && Number(row.currentAssigneeUserId) === Number(userId))
       );
