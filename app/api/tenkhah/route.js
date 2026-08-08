@@ -28,10 +28,9 @@ const norm = (value = "") => String(value).toLowerCase().replace(/ي/g, "ی").re
 async function settlementRecipients(stage, excludeId) {
   const users = await prisma.user.findMany({ include: { units: { include: { unit: true } }, roles: { include: { role: true } } }, orderBy: { id: "asc" } });
   const terms = stage === "control_project" ? ["کنترل پروژه", "برنامه ریزی", "برنامه‌ریزی", "project control"] : stage === "finance" ? ["مالی", "حسابداری", "حسابدار", "finance", "account"] : ["مدیر پروژه", "project manager"];
-  return users.filter(u => u.isActive !== false && +u.id !== +excludeId).filter(u => {
-    const text = norm([u.department, u.role, ...(u.access || []), ...(u.units || []).map(x => x.unit?.name), ...(u.roles || []).map(x => x.role?.name)].filter(Boolean).join(" "));
-    return terms.some(t => text.includes(norm(t)));
-  }).map(u => ({ id: u.id, name: u.name, username: u.username, email: u.email }));
+  return users.filter(u => u.isActive !== false && +u.id !== +excludeId).filter(u =>
+    (u.units || []).some(link => terms.some(term => norm(link.unit?.name).includes(norm(term))))
+  ).map(u => ({ id: u.id, name: u.name, username: u.username, email: u.email }));
 }
 
 export async function GET(r) {
