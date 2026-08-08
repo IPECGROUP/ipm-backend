@@ -28,8 +28,13 @@ const norm = (value = "") => String(value).toLowerCase().replace(/ي/g, "ی").re
 async function settlementRecipients(stage, excludeId) {
   const users = await prisma.user.findMany({ include: { units: { include: { unit: true } }, roles: { include: { role: true } } }, orderBy: { id: "asc" } });
   const terms = stage === "control_project" ? ["برنامه ریزی", "برنامه‌ریزی", "برنامه ريزي", "برنامه‌ريزی", "planning"] : stage === "finance" ? ["مالی", "حسابداری", "حسابدار", "finance", "account"] : ["مدیر پروژه", "project manager"];
+  let roleUnitMembers = new Set();
+  try {
+    const rows = await prisma.$queryRawUnsafe(`SELECT DISTINCT urm."userId" AS "userId", un.name AS "unitName" FROM "UserRoleMap" urm INNER JOIN "UnitRoleMap" urm2 ON urm2."roleId"=urm."roleId" INNER JOIN "Unit" un ON un.id=urm2."unitId"`);
+    roleUnitMembers = new Set(rows.filter(row => terms.some(term => norm(row.unitName).includes(norm(term)))).map(row => +row.userId));
+  } catch {}
   return users.filter(u => u.isActive !== false && +u.id !== +excludeId).filter(u =>
-    (u.units || []).some(link => terms.some(term => norm(link.unit?.name).includes(norm(term))))
+    roleUnitMembers.has(+u.id) || (u.units || []).some(link => terms.some(term => norm(link.unit?.name).includes(norm(term))))
   ).map(u => ({ id: u.id, name: u.name, username: u.username, email: u.email }));
 }
 
