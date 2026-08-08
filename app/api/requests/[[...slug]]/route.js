@@ -10,6 +10,29 @@ export const runtime = "nodejs";
 const prisma = globalThis.__prisma_requests || new PrismaClient();
 if (process.env.NODE_ENV !== "production") globalThis.__prisma_requests = prisma;
 
+// Supply requests deliberately share the underlying table with payment
+// requests, but belong exclusively to /api/supply-requests. Keep this
+// boundary at every entry point of the payment-request API.
+const SUPPLY_REQUEST_DOC_ID = "supply_request";
+const paymentRequestOnlyWhere = {
+  OR: [{ docId: null }, { docId: { not: SUPPLY_REQUEST_DOC_ID } }],
+};
+
+function isSupplyRequest(row) {
+  return row?.docId === SUPPLY_REQUEST_DOC_ID;
+}
+
+function attachmentServerIds(rows = []) {
+  const ids = new Set();
+  for (const row of rows) {
+    for (const attachment of Array.isArray(row?.attachments) ? row.attachments : []) {
+      const id = String(attachment?.serverId || "").trim();
+      if (id) ids.add(id);
+    }
+  }
+  return Array.from(ids);
+}
+
 // --- helpers
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -181,7 +204,7 @@ async function makePaymentSerial({ dateJalali, projectCode = "" }) {
   const rows = await prisma.paymentRequest.findMany({
     where: {
       serial: { startsWith: prefix },
-      OR: [{ docId: null }, { NOT: { docId: "supply_request" } }],
+      ...paymentRequestOnlyWhere,
     },
     select: { serial: true },
     take: 1000,
@@ -830,7 +853,7 @@ export async function GET(req, ctx) {
   const nextRecipientsForItem = Number(url.searchParams.get("nextRecipientsForItem"));
   if (slug.length === 0 && Number.isFinite(nextRecipientsForItem) && nextRecipientsForItem > 0) {
     const row = await prisma.paymentRequest.findUnique({ where: { id: nextRecipientsForItem } });
-    if (!row) return json({ error: "not_found" }, 404);
+    if (!row || isSupplyRequest(row)) return json({ error: "not_found" }, 404);
     const canAct = canActOnStep({ row, userId, userRoleKeys: uctx.roleKeys, userUnitNames: uctx.userUnitNames, roleUnitNames: uctx.roleUnitNames, roleNames: uctx.roleNames });
     if (!canAct) return json({ error: "forbidden" }, 403);
     const step = getCurrentStep(row.historyJson);
@@ -851,7 +874,7 @@ export async function GET(req, ctx) {
       where: { id },
       include: { createdBy: { select: { name: true, username: true, email: true } } },
     });
-    if (!row) return json({ error: "not_found" }, 404);
+    if (!row || isSupplyRequest(row)) return json({ error: "not_found" }, 404);
     const canAct = canActOnStep({
       row,
       userId,
@@ -874,6 +897,7 @@ export async function GET(req, ctx) {
   const view = url.searchParams.get("view") || ""; // mine | inbox
 
   const where = {
+    ...paymentRequestOnlyWhere,
     ...(scope ? { scope } : {}),
     ...(status ? { status } : {}),
     ...(q
@@ -951,7 +975,7 @@ export async function POST(req, ctx) {
       return json({ error: "invalid_status" }, 400);
 
     const row = await prisma.paymentRequest.findUnique({ where: { id } });
-    if (!row) return json({ error: "not_found" }, 404);
+    if (!row || isSupplyRequest(row)) return json({ error: "not_found" }, 404);
 
     const uctx = await getUserContext(req, userId);
     const history = Array.isArray(row.historyJson) ? row.historyJson : [];
@@ -1087,6 +1111,7 @@ export async function POST(req, ctx) {
   const title = data.title;
   const amountBI = data.amount ?? toBigIntSafe(body?.amountStr) ?? BigInt(0);
 
+  if (data.docId === SUPPLY_REQUEST_DOC_ID) return json({ error: "invalid_doc_type" }, 400);
   if (!title) return json({ error: "title_required" }, 400);
   if (!data.projectId) return json({ error: "project_required" }, 400);
   if (!data.budgetCode) return json({ error: "budget_code_required" }, 400);
@@ -1194,13 +1219,14 @@ export async function PATCH(req, ctx) {
   if (!Number.isFinite(id)) return json({ error: "invalid_id" }, 400);
 
   const row = await prisma.paymentRequest.findUnique({ where: { id } });
-  if (!row) return json({ error: "not_found" }, 404);
+  if (!row || isSupplyRequest(row)) return json({ error: "not_found" }, 404);
 
   // فقط سازنده (فعلاً)
   if (row.createdById !== userId) return json({ error: "forbidden" }, 403);
 
   const body = (await readJson(req)) || {};
   const data = pickUpdatable(body);
+  if (data.docId === SUPPLY_REQUEST_DOC_ID) return json({ error: "invalid_doc_type" }, 400);
 
   // A requester may edit their own request, but its approved/requested amount
   // is immutable after creation. Enforce this server-side as well as in the UI.
@@ -1261,9 +1287,16 @@ export async function DELETE(req, ctx) {
   if (slug.length === 1 && slug[0] === "reset") {
     const uctx = await getUserContext(req, userId);
     if (!uctx.isMainAdmin) return json({ error: "forbidden" }, 403);
-    const docs = await prisma.paymentDoc.findMany({ select: { storedName: true } });
-    const deleted = await prisma.paymentRequest.deleteMany({});
-    await prisma.paymentDoc.deleteMany({});
+    const paymentRows = await prisma.paymentRequest.findMany({
+      where: paymentRequestOnlyWhere,
+      select: { attachments: true },
+    });
+    const attachmentIds = attachmentServerIds(paymentRows);
+    const docs = attachmentIds.length
+      ? await prisma.paymentDoc.findMany({ where: { id: { in: attachmentIds } }, select: { id: true, storedName: true } })
+      : [];
+    const deleted = await prisma.paymentRequest.deleteMany({ where: paymentRequestOnlyWhere });
+    if (attachmentIds.length) await prisma.paymentDoc.deleteMany({ where: { id: { in: attachmentIds } } });
     await Promise.all(docs.map((doc) => unlink(path.join(process.cwd(), "public", "uploads", "payment-doc", doc.storedName)).catch(() => {})));
     return json({ ok: true, deleted: deleted.count });
   }
@@ -1273,7 +1306,7 @@ export async function DELETE(req, ctx) {
   if (!Number.isFinite(id)) return json({ error: "invalid_id" }, 400);
 
   const row = await prisma.paymentRequest.findUnique({ where: { id } });
-  if (!row) return json({ error: "not_found" }, 404);
+  if (!row || isSupplyRequest(row)) return json({ error: "not_found" }, 404);
 
   // فقط سازنده
   if (row.createdById !== userId) return json({ error: "forbidden" }, 403);
