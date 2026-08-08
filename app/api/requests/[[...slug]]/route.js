@@ -618,6 +618,24 @@ async function findWorkflowUsersForRole(roleKey, excludeUserId = null) {
   });
 }
 
+function isGeneralProject(project) {
+  return normalizeDigits(project?.code).trim() === "100" && normalizeFaText(project?.name).includes("عمومی");
+}
+
+async function findInitialWorkflowUsers(projectId, excludeUserId = null) {
+  const projectControlUsers = await findWorkflowUsersForRole(ROLE_KEYS.PROJECT_CONTROL, excludeUserId);
+  const project = await prisma.project.findUnique({
+    where: { id: Number(projectId) },
+    select: { code: true, name: true },
+  });
+  if (!isGeneralProject(project)) return projectControlUsers;
+
+  const managementUsers = await findWorkflowUsersForRole(ROLE_KEYS.MANAGEMENT, excludeUserId);
+  return [...projectControlUsers, ...managementUsers].filter(
+    (user, index, users) => users.findIndex((candidate) => Number(candidate.id) === Number(user.id)) === index
+  );
+}
+
 function serializeWorkflowUsers(users = []) {
   return users.map((candidate) => ({
     id: candidate.id,
@@ -805,7 +823,7 @@ export async function GET(req, ctx) {
 
   if (slug.length === 0 && url.searchParams.get("nextRecipientsForCreate") === "1") {
     const targetRoleKey = ROLE_KEYS.PROJECT_CONTROL;
-    const users = await findWorkflowUsersForRole(targetRoleKey, userId);
+    const users = await findInitialWorkflowUsers(url.searchParams.get("projectId"), userId);
     return json({ targetRoleKey, users: serializeWorkflowUsers(users) });
   }
 
@@ -1080,7 +1098,7 @@ export async function POST(req, ctx) {
   }
 
   const targetAssigneeUserId = Number(body?.targetAssigneeUserId ?? body?.target_assignee_user_id);
-  const workflowUsers = await findWorkflowUsersForRole(ROLE_KEYS.PROJECT_CONTROL, userId);
+  const workflowUsers = await findInitialWorkflowUsers(data.projectId, userId);
   const initialAssignee = workflowUsers.find((candidate) => Number(candidate.id) === targetAssigneeUserId);
   if (!initialAssignee) return json({ error: targetAssigneeUserId ? "target_assignee_invalid" : "target_assignee_required" }, 400);
 

@@ -419,6 +419,10 @@ function isCommercialContext(ctx) {
   return includesAny([...(ctx?.unitNames || []), ...(ctx?.roleNames || [])], SUPPLY_UNIT_ALIASES);
 }
 
+function isManagementContext(ctx) {
+  return includesAny([...(ctx?.unitNames || []), ...(ctx?.roleNames || [])], ["مدیریت", "مدیرعامل", "هیئت مدیره"]);
+}
+
 async function findWorkflowUsers(kind, excludeUserId = null) {
   let users = [];
   try {
@@ -471,12 +475,26 @@ async function findWorkflowUsers(kind, excludeUserId = null) {
       if (kind === SUPPLY_STEP.PROJECT_CONTROL) return isProjectControlContext(ctx);
       if (kind === SUPPLY_STEP.PROJECT_MANAGER) return isProjectManagerContext(ctx);
       if (kind === SUPPLY_STEP.COMMERCIAL) return isCommercialContext(ctx);
+      if (kind === "management") return isManagementContext(ctx);
       return false;
     });
 
   return candidates
     .filter((ctx) => !excludeUserId || Number(ctx.user.id) !== Number(excludeUserId))
     .map((ctx) => ctx.user);
+}
+
+function isGeneralProject(project) {
+  return normalizeDigits(project?.code).trim() === "100" && normalizeFaText(project?.name).includes("عمومی");
+}
+
+async function findInitialWorkflowUsers(kind, project, excludeUserId = null) {
+  const workflowUsers = await findWorkflowUsers(kind, excludeUserId);
+  if (!isGeneralProject(project)) return workflowUsers;
+  const managementUsers = await findWorkflowUsers("management", excludeUserId);
+  return [...workflowUsers, ...managementUsers].filter(
+    (user, index, users) => users.findIndex((candidate) => Number(candidate.id) === Number(user.id)) === index
+  );
 }
 
 function serializeWorkflowUsers(users = []) {
@@ -619,7 +637,8 @@ export async function GET(req) {
       const creatorCtx = await userRoleAndUnitContext(userId);
       const targetRoleKey = nextRoleKeyForCreatorContext(creatorCtx);
       if (!targetRoleKey) return json({ targetRoleKey: null, users: [] });
-      const users = await findWorkflowUsers(targetRoleKey, userId);
+      const project = await resolveProject(toPositiveInt(url.searchParams.get("projectId")));
+      const users = await findInitialWorkflowUsers(targetRoleKey, project, userId);
       return json({ targetRoleKey, users: serializeWorkflowUsers(users) });
     }
 
@@ -900,16 +919,13 @@ export async function POST(req) {
     const creatorCtxForRouting = await userRoleAndUnitContext(userId);
     const initialTargetRoleKey = nextRoleKeyForCreatorContext(creatorCtxForRouting);
     const initialAssignee = initialTargetRoleKey
-      ? await requireWorkflowAssignee(
-          initialTargetRoleKey,
-          targetAssigneeUserId,
-          userId,
-          initialTargetRoleKey === SUPPLY_STEP.PROJECT_CONTROL
-            ? "project_control_user_not_found"
-            : initialTargetRoleKey === SUPPLY_STEP.PROJECT_MANAGER
-              ? "project_manager_user_not_found"
-              : "commercial_user_not_found"
-        )
+      ? await (async () => {
+          const users = await findInitialWorkflowUsers(initialTargetRoleKey, project, userId);
+          const selected = users.find((user) => Number(user.id) === Number(targetAssigneeUserId));
+          if (!users.length) return { error: "workflow_user_not_found" };
+          if (!selected) return { error: targetAssigneeUserId ? "target_assignee_invalid" : "target_assignee_required" };
+          return { user: selected, users };
+        })()
       : { user: null };
     if (initialAssignee.error) return json({ error: initialAssignee.error }, 400);
 
