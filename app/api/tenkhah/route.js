@@ -27,7 +27,7 @@ async function settlements(ids) { if (!ids.length) return []; const data = await
 const norm = (value = "") => String(value).toLowerCase().replace(/ي/g, "ی").replace(/ك/g, "ک").replace(/\s+/g, " ");
 async function settlementRecipients(stage, excludeId) {
   const users = await prisma.user.findMany({ include: { units: { include: { unit: true } }, roles: { include: { role: true } } }, orderBy: { id: "asc" } });
-  const terms = stage === "control_project" ? ["کنترل پروژه", "برنامه ریزی", "برنامه‌ریزی", "project control"] : stage === "finance" ? ["مالی", "حسابداری", "حسابدار", "finance", "account"] : ["مدیر پروژه", "project manager"];
+  const terms = stage === "control_project" ? ["برنامه ریزی", "برنامه‌ریزی", "برنامه ريزي", "برنامه‌ريزی", "planning"] : stage === "finance" ? ["مالی", "حسابداری", "حسابدار", "finance", "account"] : ["مدیر پروژه", "project manager"];
   return users.filter(u => u.isActive !== false && +u.id !== +excludeId).filter(u =>
     (u.units || []).some(link => terms.some(term => norm(link.unit?.name).includes(norm(term))))
   ).map(u => ({ id: u.id, name: u.name, username: u.username, email: u.email }));
