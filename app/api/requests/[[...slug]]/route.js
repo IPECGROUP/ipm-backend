@@ -14,12 +14,13 @@ if (process.env.NODE_ENV !== "production") globalThis.__prisma_requests = prisma
 // requests, but belong exclusively to /api/supply-requests. Keep this
 // boundary at every entry point of the payment-request API.
 const SUPPLY_REQUEST_DOC_ID = "supply_request";
+const TENKHAH_REQUEST_DOC_ID = "tenkhah_request";
 const paymentRequestOnlyWhere = {
-  OR: [{ docId: null }, { docId: { not: SUPPLY_REQUEST_DOC_ID } }],
+  NOT: { docId: { in: [SUPPLY_REQUEST_DOC_ID, TENKHAH_REQUEST_DOC_ID] } },
 };
 
 function isSupplyRequest(row) {
-  return row?.docId === SUPPLY_REQUEST_DOC_ID;
+  return row?.docId === SUPPLY_REQUEST_DOC_ID || row?.docId === TENKHAH_REQUEST_DOC_ID;
 }
 
 function attachmentServerIds(rows = []) {
@@ -1111,7 +1112,7 @@ export async function POST(req, ctx) {
   const title = data.title;
   const amountBI = data.amount ?? toBigIntSafe(body?.amountStr) ?? BigInt(0);
 
-  if (data.docId === SUPPLY_REQUEST_DOC_ID) return json({ error: "invalid_doc_type" }, 400);
+  if ([SUPPLY_REQUEST_DOC_ID, TENKHAH_REQUEST_DOC_ID].includes(data.docId)) return json({ error: "invalid_doc_type" }, 400);
   if (!title) return json({ error: "title_required" }, 400);
   if (!data.projectId) return json({ error: "project_required" }, 400);
   if (!data.budgetCode) return json({ error: "budget_code_required" }, 400);
@@ -1226,7 +1227,7 @@ export async function PATCH(req, ctx) {
 
   const body = (await readJson(req)) || {};
   const data = pickUpdatable(body);
-  if (data.docId === SUPPLY_REQUEST_DOC_ID) return json({ error: "invalid_doc_type" }, 400);
+  if ([SUPPLY_REQUEST_DOC_ID, TENKHAH_REQUEST_DOC_ID].includes(data.docId)) return json({ error: "invalid_doc_type" }, 400);
 
   // A requester may edit their own request, but its approved/requested amount
   // is immutable after creation. Enforce this server-side as well as in the UI.
