@@ -228,7 +228,7 @@ function ccUserIdsOf(row) {
   const history = Array.isArray(row?.historyJson) ? row.historyJson : [];
   const ids = new Set();
   history.forEach((entry) => {
-    if (entry?.type !== "cc_added") return;
+    if (!["cc_added", "project_control_watchers"].includes(entry?.type)) return;
     normalizeIdList(entry.userIds).forEach((id) => ids.add(String(id)));
   });
   return Array.from(ids);
@@ -472,6 +472,7 @@ async function findWorkflowUsers(kind, excludeUserId = null) {
     .filter((ctx) => {
       if (kind === SUPPLY_STEP.PROJECT_MANAGER) return isProjectManagerContext(ctx);
       if (kind === SUPPLY_STEP.COMMERCIAL) return isCommercialContext(ctx);
+      if (kind === "project_control_watchers") return isProjectControlContext(ctx);
       if (kind === "management") return isManagementContext(ctx);
       return false;
     });
@@ -773,6 +774,7 @@ export async function POST(req) {
       const actionClientInfo = clientDateTimeInfo(body.clientRegistrationInfo);
       const currentIndex = typeof step.index === "number" ? step.index : 0;
       const scalarUpdates = {};
+      if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER && nextBudgetCode) scalarUpdates.budgetCode = nextBudgetCode;
       if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER && finalAmount !== null && finalAmount > 0n) scalarUpdates.amount = finalAmount;
       if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER && (actionText || deadlineDate || finalAmount !== null)) {
         history.push({
@@ -925,6 +927,7 @@ export async function POST(req) {
       roleName,
     };
     const relatedLetterIds = normalizeIdList(body.relatedLetterIds ?? body.related_letter_ids);
+    const projectControlWatchers = await findWorkflowUsers("project_control_watchers");
     const historyJson = [
       {
         byUserId: Number(userId),
@@ -937,6 +940,13 @@ export async function POST(req) {
         relatedLetterIds,
       },
     ];
+    if (projectControlWatchers.length) {
+      historyJson.push({
+        type: "project_control_watchers",
+        at: nowIso,
+        userIds: projectControlWatchers.map((user) => String(user.id)),
+      });
+    }
     if (initialTargetRoleKey) {
       historyJson.push({
         type: "step_set",
