@@ -5,6 +5,21 @@ const json = (data, status = 200) => Response.json(data, { status });
 const cookie = (r, n) => String(r.headers.get("cookie") || "").match(new RegExp(`(?:^|;\\s*)${n}=([^;]+)`))?.[1] || "";
 async function userIdOf(r) { const raw = r.headers.get("x-user-id") || cookie(r, "user_id"); if (/^\d+$/.test(raw)) return +raw; const sid = cookie(r, "ipm_session"); const s = sid && await prisma.session.findUnique({ where: { id: sid } }).catch(() => null); return s?.userId || (process.env.NODE_ENV !== "production" ? 1 : null); }
 const amount = (v) => { const x = String(v ?? "").replace(/[۰-۹]/g, d => "۰۱۲۳۴۵۶۷۸۹".indexOf(d)).replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/[^\d]/g, ""); return x ? BigInt(x) : 0n; };
+const englishDigits = (value = "") => String(value).replace(/[۰-۹]/g, d => "۰۱۲۳۴۵۶۷۸۹".indexOf(d)).replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d));
+
+async function nextSharedPaymentSerial(requestDate, projectId) {
+  const year = englishDigits(requestDate).match(/^(\d{4})/)?.[1]?.slice(-2) || "00";
+  const project = await prisma.project.findUnique({ where: { id: Number(projectId) }, select: { code: true } });
+  const projectCode = String(project?.code || "").replace(/\D/g, "");
+  if (!projectCode) throw new Error("project_not_found");
+  const rows = await prisma.paymentRequest.findMany({ select: { serial: true } });
+  const pattern = new RegExp(`^${year}/(?:\\d{3}/)?(\\d{4})$`);
+  const max = rows.reduce((highest, row) => {
+    const match = englishDigits(row?.serial || "").trim().match(pattern);
+    return match ? Math.max(highest, Number(match[1]) || 0) : highest;
+  }, 0);
+  return `${year}/${projectCode}/${String(max + 1).padStart(4, "0")}`;
+}
 
 let ready;
 async function ensure() {
@@ -67,17 +82,18 @@ export async function POST(r) {
       return json({ ok: true }, 201);
     }
     const pid = +b.projectId, mid = +b.projectManagerId, w = amount(b.amount);
-    if (!String(b.requestNumber || "").trim() || !String(b.requestDate || "").trim() || !pid || !mid || w <= 0n) return json({ error: "invalid_input" }, 400);
+    if (!String(b.requestDate || "").trim() || !pid || !mid || w <= 0n) return json({ error: "invalid_input" }, 400);
+    const requestNumber = await nextSharedPaymentSerial(b.requestDate, pid);
     // A tenkhah remains in its own tables and workflow.  The linked payment
     // request is a tracking identity only and is excluded from the normal
     // payment-request API, so its workflow can never be mixed with tenkhah.
     const linkedPayment = await prisma.paymentRequest.create({ data: {
-      serial: String(b.requestNumber).trim(), dateJalali: String(b.requestDate), scope: "tenkhah",
+      serial: requestNumber, dateJalali: String(b.requestDate), scope: "tenkhah",
       title: "درخواست تنخواه", amount: w, projectId: pid, docId: "tenkhah_request",
       createdById: uid, currentAssigneeUserId: mid, status: "pending",
     } });
-    await prisma.$executeRawUnsafe("INSERT INTO tenkhah_requests (payment_request_id,request_number,request_date,project_id,requested_amount,currency,unregistered_balance,unsettled_balance,created_by_id,project_manager_id,current_assignee_user_id,project_liquidity) VALUES ($1,$2,$3,$4,$5::bigint,$6,$7::bigint,$8::bigint,$9,$10,$10,$11::bigint)", linkedPayment.id, String(b.requestNumber).trim(), String(b.requestDate), pid, String(w), String(b.currency || ""), String(w), String(w), uid, mid, String(amount(b.projectLiquidity)));
-    return json({ ok: true }, 201);
+    await prisma.$executeRawUnsafe("INSERT INTO tenkhah_requests (payment_request_id,request_number,request_date,project_id,requested_amount,currency,unregistered_balance,unsettled_balance,created_by_id,project_manager_id,current_assignee_user_id,project_liquidity) VALUES ($1,$2,$3,$4,$5::bigint,$6,$7::bigint,$8::bigint,$9,$10,$10,$11::bigint)", linkedPayment.id, requestNumber, String(b.requestDate), pid, String(w), String(b.currency || ""), String(w), String(w), uid, mid, String(amount(b.projectLiquidity)));
+    return json({ ok: true, requestNumber }, 201);
   } catch (e) { return json({ error: "internal_error", message: String(e?.message || e) }, 500); }
 }
 
