@@ -648,7 +648,7 @@ export async function GET(req) {
       const step = getCurrentStep(row.historyJson);
       const targetRoleKey = await nextApproveRoleKeyForRow(row, step);
       if (!targetRoleKey) return json({ targetRoleKey: null, users: [] });
-      const users = await findWorkflowUsers(targetRoleKey, row.createdById);
+      const users = await findWorkflowUsers(targetRoleKey, targetRoleKey === SUPPLY_STEP.COMMERCIAL ? null : row.createdById);
       return json({ targetRoleKey, users: serializeWorkflowUsers(users) });
     }
 
@@ -849,7 +849,7 @@ export async function POST(req) {
           data = { ...scalarUpdates, status: "pending", currentAssigneeUserId: Number(resolved.user.id), historyJson: history };
         }
       } else if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER) {
-        const resolved = await requireWorkflowAssignee(SUPPLY_STEP.COMMERCIAL, targetAssigneeUserId, row.createdById, "commercial_user_not_found");
+        const resolved = await requireWorkflowAssignee(SUPPLY_STEP.COMMERCIAL, targetAssigneeUserId, null, "commercial_user_not_found");
         if (resolved.error) return json({ error: resolved.error }, 400);
         history.push({
           type: "step_set",
