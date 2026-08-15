@@ -193,12 +193,20 @@ export async function GET(request) {
           source: row.source,
           availableAmount: amountText(row.availableAmount),
           allocatedAmount: "0",
+          reserveAmount: "0",
           description: row.description || "",
           createdAt: row.createdAt,
           details: [],
         });
       }
       const batch = historyByBatch.get(batchId);
+      // A row without a project represents the unallocated balance of this
+      // batch.  It must be kept separately so the allocation total remains
+      // the sum of amounts assigned to projects.
+      if (row.projectId == null) {
+        batch.reserveAmount = amountText(BigInt(batch.reserveAmount || 0) + BigInt(row.amount || 0));
+        continue;
+      }
       batch.allocatedAmount = amountText(BigInt(batch.allocatedAmount || 0) + BigInt(row.amount || 0));
       const detailKey = mapKey(row.projectId);
       const existingDetail = batch.details.find((detail) => mapKey(detail.projectId) === detailKey);
@@ -242,8 +250,8 @@ export async function POST(request) {
     const batchId = String(body?.batchId || "").trim().slice(0, 80) || null;
     const description = String(body?.description || "").trim();
     const rows = Array.isArray(body?.rows) ? body.rows : [];
-    const parsedRows = rows.map((row) => ({ projectId: row?.projectId == null ? null : Number(row.projectId), amount: toBigInt(row?.amount) }))
-      .filter((row) => (row.projectId == null || Number.isInteger(row.projectId)) && row.amount != null && row.amount !== 0n);
+    const parsedRows = rows.map((row) => ({ projectId: Number(row?.projectId), amount: toBigInt(row?.amount) }))
+      .filter((row) => Number.isInteger(row.projectId) && row.projectId > 0 && row.amount != null && row.amount > 0n);
     if (!allocationDate || !source || availableAmount == null || availableAmount <= 0n || !parsedRows.length) {
       return json({ error: "invalid_input" }, 400);
     }
@@ -255,19 +263,34 @@ export async function POST(request) {
     if (existingBatchTotal + allocationTotal > availableAmount) {
       return json({ error: "allocation_total_exceeds_available_amount" }, 400);
     }
-    for (const row of parsedRows) {
-      await prisma.$executeRawUnsafe(
-        "INSERT INTO liquidity_allocations (allocation_date, source, available_amount, description, project_id, amount, created_by, batch_id) VALUES ($1, $2, $3::bigint, $4, $5, $6::bigint, $7, $8)",
-        allocationDate,
-        source,
-        String(availableAmount),
-        description,
-        row.projectId,
-        String(row.amount),
-        userId,
-        batchId,
-      );
-    }
+    const reserveAmount = availableAmount - existingBatchTotal - allocationTotal;
+    await prisma.$transaction(async (tx) => {
+      for (const row of parsedRows) {
+        await tx.$executeRawUnsafe(
+          "INSERT INTO liquidity_allocations (allocation_date, source, available_amount, description, project_id, amount, created_by, batch_id) VALUES ($1, $2, $3::bigint, $4, $5, $6::bigint, $7, $8)",
+          allocationDate,
+          source,
+          String(availableAmount),
+          description,
+          row.projectId,
+          String(row.amount),
+          userId,
+          batchId,
+        );
+      }
+      if (reserveAmount > 0n) {
+        await tx.$executeRawUnsafe(
+          "INSERT INTO liquidity_allocations (allocation_date, source, available_amount, description, project_id, amount, created_by, batch_id) VALUES ($1, $2, $3::bigint, $4, NULL, $5::bigint, $6, $7)",
+          allocationDate,
+          source,
+          String(availableAmount),
+          description,
+          String(reserveAmount),
+          userId,
+          batchId,
+        );
+      }
+    });
     return json({ ok: true });
   } catch (error) {
     return json({ error: "internal_error", message: String(error?.message || "internal_error") }, 500);
