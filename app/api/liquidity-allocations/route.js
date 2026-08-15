@@ -1,5 +1,5 @@
 import { prisma } from "../../../lib/prisma";
-import { requirePagePermission } from "../../../lib/pagePermissions";
+import { hasPagePermission, requirePagePermission } from "../../../lib/pagePermissions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -112,12 +112,22 @@ async function ensureLiquidityTable() {
 
 export async function GET(request) {
   try {
-    const denied = await requirePagePermission(request, "تخصیص نقدینگی", "نمایش منو");
-    if (denied) return denied;
+    const searchParams = new URL(request.url).searchParams;
+    const requestedProjectId = Number(searchParams.get("projectId") || searchParams.get("project_id"));
+    const canViewLiquidity = await hasPagePermission(request, "تخصیص نقدینگی", "نمایش منو");
+    // A payment requester may see the read-only balance of the project being
+    // selected, without being allowed to open the liquidity allocation page or
+    // read balances/history of other projects.
+    if (!canViewLiquidity) {
+      const canViewPayment = Number.isInteger(requestedProjectId) && requestedProjectId > 0
+        ? await hasPagePermission(request, "درخواست پرداخت", "نمایش منو")
+        : false;
+      if (!canViewPayment) return json({ error: "forbidden" }, 403);
+    }
     await ensureLiquidityTable();
     // A dashboard reset is intentionally view-only.  The liquidity page and
     // payment-request validation must always use the real, current balances.
-    const dashboardView = new URL(request.url).searchParams.get("dashboard") === "1";
+    const dashboardView = searchParams.get("dashboard") === "1";
     const resets = dashboardView
       ? await prisma.$queryRawUnsafe("SELECT reset_at AS \"resetAt\" FROM financial_dashboard_resets ORDER BY id DESC LIMIT 1")
       : [];
@@ -203,6 +213,15 @@ export async function GET(request) {
       }
     }
     result.history = Array.from(historyByBatch.values());
+    if (!canViewLiquidity) {
+      const key = String(requestedProjectId);
+      result.allocations = { [key]: result.allocations[key] || "0" };
+      result.spent = { [key]: result.spent[key] || "0" };
+      result.committed = { [key]: result.committed[key] || "0" };
+      result.expenseCount = { [key]: result.expenseCount[key] || 0 };
+      result.projects = result.projects.filter((project) => String(project.id) === key);
+      result.history = [];
+    }
     return json(result);
   } catch (error) {
     return json({ error: "internal_error", message: String(error?.message || "internal_error") }, 500);
