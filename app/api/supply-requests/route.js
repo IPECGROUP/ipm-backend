@@ -596,15 +596,16 @@ async function makeSerial({ dateJalali, projectCode }) {
   const rows = await prisma.paymentRequest.findMany({
     where: {
       docId: REQUEST_DOC_ID,
-      serial: { startsWith: `${prefix}/` },
+      // The sequence is shared by every project within the same Jalali year.
+      serial: { startsWith: `${yy}/` },
     },
     select: { serial: true },
     take: 1000,
   });
 
   let maxSeq = 0;
-  const escapedPrefix = prefix.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`^${escapedPrefix}/(\\d{3})$`);
+  const escapedYear = yy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+  const re = new RegExp(`^${escapedYear}/[^/]+/(\\d{3})$`);
   for (const row of rows) {
     const m = String(row?.serial || "").match(re);
     if (m) maxSeq = Math.max(maxSeq, Number(m[1]) || 0);
