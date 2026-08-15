@@ -8,7 +8,6 @@ export const runtime = "nodejs";
 const REQUEST_DOC_ID = "supply_request";
 const SUPPLY_STEP = {
   REQUESTER: "requester",
-  PROJECT_CONTROL: "project_control",
   PROJECT_MANAGER: "project_manager",
   COMMERCIAL: "commercial",
 };
@@ -216,7 +215,6 @@ function latestWorkflowAction(historyJson) {
 
 function workflowStatusOf(row) {
   const step = getCurrentStep(row?.historyJson);
-  if (step?.roleKey === SUPPLY_STEP.PROJECT_CONTROL) return "pending";
   if (step?.roleKey === SUPPLY_STEP.PROJECT_MANAGER) return "final_approval";
   if (step?.roleKey === SUPPLY_STEP.COMMERCIAL) return "in_progress";
   if (step?.roleKey === SUPPLY_STEP.REQUESTER) return "in_progress";
@@ -472,7 +470,6 @@ async function findWorkflowUsers(kind, excludeUserId = null) {
       return { user, roleNames, unitNames };
     })
     .filter((ctx) => {
-      if (kind === SUPPLY_STEP.PROJECT_CONTROL) return isProjectControlContext(ctx);
       if (kind === SUPPLY_STEP.PROJECT_MANAGER) return isProjectManagerContext(ctx);
       if (kind === SUPPLY_STEP.COMMERCIAL) return isCommercialContext(ctx);
       if (kind === "management") return isManagementContext(ctx);
@@ -516,12 +513,8 @@ async function requireWorkflowAssignee(kind, selectedUserId, excludeUserId, erro
 }
 
 function nextRoleKeyForCreatorContext(ctx) {
-  // Requests created by Supply must always enter the full approval flow,
-  // even when the creator also has a project-management/control role.
-  if (isCommercialContext(ctx)) return SUPPLY_STEP.PROJECT_CONTROL;
-  if (isProjectManagerContext(ctx)) return SUPPLY_STEP.COMMERCIAL;
-  if (isProjectControlContext(ctx)) return SUPPLY_STEP.PROJECT_MANAGER;
-  return SUPPLY_STEP.PROJECT_CONTROL;
+  // Every new supply request starts with final review by project management.
+  return SUPPLY_STEP.PROJECT_MANAGER;
 }
 
 async function nextApproveRoleKeyForRow(row, step) {
@@ -530,7 +523,6 @@ async function nextApproveRoleKeyForRow(row, step) {
     const creatorCtx = await userRoleAndUnitContext(row.createdById);
     return nextRoleKeyForCreatorContext(creatorCtx);
   }
-  if (step.roleKey === SUPPLY_STEP.PROJECT_CONTROL) return SUPPLY_STEP.PROJECT_MANAGER;
   if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER) return SUPPLY_STEP.COMMERCIAL;
   return null;
 }
@@ -781,7 +773,6 @@ export async function POST(req) {
       const actionClientInfo = clientDateTimeInfo(body.clientRegistrationInfo);
       const currentIndex = typeof step.index === "number" ? step.index : 0;
       const scalarUpdates = {};
-      if (step.roleKey === SUPPLY_STEP.PROJECT_CONTROL && nextBudgetCode) scalarUpdates.budgetCode = nextBudgetCode;
       if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER && finalAmount !== null && finalAmount > 0n) scalarUpdates.amount = finalAmount;
       if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER && (actionText || deadlineDate || finalAmount !== null)) {
         history.push({
@@ -817,7 +808,7 @@ export async function POST(req) {
 
       let data = { historyJson: history };
       if (workflowAction === "return") {
-        if (![SUPPLY_STEP.PROJECT_CONTROL, SUPPLY_STEP.PROJECT_MANAGER].includes(step.roleKey)) return json({ error: "return_not_allowed_for_step" }, 403);
+        if (step.roleKey !== SUPPLY_STEP.PROJECT_MANAGER) return json({ error: "return_not_allowed_for_step" }, 403);
         history.push({
           type: "step_set",
           at: nowIso,
@@ -840,9 +831,7 @@ export async function POST(req) {
             nextRoleKey,
             targetAssigneeUserId,
             row.createdById,
-            nextRoleKey === SUPPLY_STEP.PROJECT_CONTROL
-              ? "project_control_user_not_found"
-              : nextRoleKey === SUPPLY_STEP.PROJECT_MANAGER
+            nextRoleKey === SUPPLY_STEP.PROJECT_MANAGER
                 ? "project_manager_user_not_found"
                 : "commercial_user_not_found"
           );
@@ -851,22 +840,11 @@ export async function POST(req) {
             type: "step_set",
             at: nowIso,
             roleKey: nextRoleKey,
-            index: nextRoleKey === SUPPLY_STEP.PROJECT_CONTROL ? 1 : nextRoleKey === SUPPLY_STEP.PROJECT_MANAGER ? 2 : 3,
+            index: nextRoleKey === SUPPLY_STEP.PROJECT_MANAGER ? 1 : 2,
             assignedToUserId: Number(resolved.user.id),
           });
           data = { ...scalarUpdates, status: "pending", currentAssigneeUserId: Number(resolved.user.id), historyJson: history };
         }
-      } else if (step.roleKey === SUPPLY_STEP.PROJECT_CONTROL) {
-        const resolved = await requireWorkflowAssignee(SUPPLY_STEP.PROJECT_MANAGER, targetAssigneeUserId, row.createdById, "project_manager_user_not_found");
-        if (resolved.error) return json({ error: resolved.error }, 400);
-        history.push({
-          type: "step_set",
-          at: nowIso,
-          roleKey: SUPPLY_STEP.PROJECT_MANAGER,
-          index: 2,
-          assignedToUserId: Number(resolved.user.id),
-        });
-        data = { ...scalarUpdates, status: "pending", currentAssigneeUserId: Number(resolved.user.id), historyJson: history };
       } else if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER) {
         const resolved = await requireWorkflowAssignee(SUPPLY_STEP.COMMERCIAL, targetAssigneeUserId, row.createdById, "commercial_user_not_found");
         if (resolved.error) return json({ error: resolved.error }, 400);
@@ -874,7 +852,7 @@ export async function POST(req) {
           type: "step_set",
           at: nowIso,
           roleKey: SUPPLY_STEP.COMMERCIAL,
-          index: 3,
+          index: 2,
           assignedToUserId: Number(resolved.user.id),
         });
         data = { ...scalarUpdates, status: "pending", currentAssigneeUserId: Number(resolved.user.id), historyJson: history };
@@ -929,7 +907,8 @@ export async function POST(req) {
       : { user: null };
     if (initialAssignee.error) return json({ error: initialAssignee.error }, 400);
 
-    const serial = await makeSerial({ dateJalali, projectCode: project.code });
+    const effectiveDateJalali = dateJalali || formatRegistrationDateTime().dateJalali;
+    const serial = await makeSerial({ dateJalali: effectiveDateJalali, projectCode: project.code });
     if (!serial) return json({ error: "serial_generation_failed" }, 400);
 
     const now = new Date();
@@ -963,7 +942,7 @@ export async function POST(req) {
         type: "step_set",
         at: nowIso,
         roleKey: initialTargetRoleKey,
-        index: initialTargetRoleKey === SUPPLY_STEP.PROJECT_CONTROL ? 1 : initialTargetRoleKey === SUPPLY_STEP.PROJECT_MANAGER ? 2 : 3,
+        index: initialTargetRoleKey === SUPPLY_STEP.PROJECT_MANAGER ? 1 : 2,
         assignedToUserId: Number(initialAssignee.user.id),
       });
     } else {
@@ -972,7 +951,7 @@ export async function POST(req) {
     const created = await prisma.paymentRequest.create({
       data: {
         serial,
-        dateJalali: dateJalali || null,
+        dateJalali: effectiveDateJalali,
         scope: "projects",
         title,
         description: description || null,
