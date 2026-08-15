@@ -537,7 +537,9 @@ function canActOnSupplyStep({ row, userId }) {
     if (isCreator) return Number(row.currentAssigneeUserId) === Number(userId) && latestAction?.type === "returned";
     return Number(row.currentAssigneeUserId) === Number(userId);
   }
-  if (isCreator) return false;
+  // A requester normally cannot act on later stages; the exception is a
+  // requester who is explicitly assigned the commercial/supply stage.
+  if (isCreator && step.roleKey !== SUPPLY_STEP.COMMERCIAL) return false;
   if (Number(row.currentAssigneeUserId) === Number(userId)) return true;
   return false;
 }
