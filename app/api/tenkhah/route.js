@@ -71,7 +71,7 @@ async function settlementRecipients(stage, excludeId) {
       .map((row) => Number(row.userId))
   );
   const users = await prisma.user.findMany({ include: { units: { include: { unit: true } }, roles: { include: { role: true } } }, orderBy: { id: "asc" } });
-  return users.filter(u => u.isActive !== false && +u.id !== +excludeId).filter(u =>
+  return users.filter(u => u.isActive !== false).filter(u =>
     mappedUserIds.has(Number(u.id)) || isWorkflowUnitMember(stage, u.units)
   ).map(u => ({ id: u.id, name: u.name, username: u.username, email: u.email }));
 }

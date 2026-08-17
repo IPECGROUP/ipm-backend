@@ -612,8 +612,6 @@ function canActOnStep({ row, userId, userUnitNames, roleUnitNames }) {
   }
 
   // جلوگیری از تایید/رد درخواستِ خودِ کاربر در سایر مراحل
-  if (row.createdById === userId) return false;
-
   return hasWorkflowUnitForRole({ roleKey: step.roleKey, userUnitNames, roleUnitNames });
 }
 
@@ -642,7 +640,6 @@ async function findWorkflowUsersForRole(roleKey, excludeUserId = null) {
     users = await prisma.user.findMany({ orderBy: { id: "asc" }, take: 500 });
   }
   return users.filter((candidate) => {
-    if (excludeUserId && Number(candidate.id) === Number(excludeUserId)) return false;
     const userUnitNames = [
       ...(Array.isArray(candidate.units) ? candidate.units.map((row) => row.unit?.name).filter(Boolean) : []),
     ];
@@ -842,8 +839,8 @@ export async function GET(req, ctx) {
   if (slug.length === 0 && url.searchParams.get("nextRecipientsForCreate") === "1") {
     const targetRoleKey = initialWorkflowRoleForUser(uctx);
     const users = targetRoleKey === ROLE_KEYS.MANAGEMENT
-      ? await findWorkflowUsersForRole(targetRoleKey, userId)
-      : await findInitialWorkflowUsers(url.searchParams.get("projectId"), userId);
+      ? await findWorkflowUsersForRole(targetRoleKey)
+      : await findInitialWorkflowUsers(url.searchParams.get("projectId"));
     return json({ targetRoleKey, users: serializeWorkflowUsers(users) });
   }
 
@@ -858,7 +855,7 @@ export async function GET(req, ctx) {
     const nextIndex = Number(step?.index ?? -1) + 1;
     const targetRoleKey = chain?.[nextIndex] || null;
     if (!targetRoleKey) return json({ targetRoleKey: null, users: [] });
-    const users = await findWorkflowUsersForRole(targetRoleKey, row.createdById);
+    const users = await findWorkflowUsersForRole(targetRoleKey);
     return json({ targetRoleKey, users: serializeWorkflowUsers(users) });
   }
 
@@ -985,10 +982,6 @@ export async function POST(req, ctx) {
       return json({ error: "return_not_allowed_for_step" }, 403);
     }
 
-    if (row.createdById === userId && step.roleKey !== ROLE_KEYS.REQUESTER) {
-      return json({ error: "self_action_forbidden" }, 403);
-    }
-
     if (!canActOnStep({
       row,
       userId,
@@ -1039,7 +1032,7 @@ export async function POST(req, ctx) {
       }
 
       const nextRoleKey = chain[nextIndex];
-      const workflowUsers = await findWorkflowUsersForRole(nextRoleKey, row.createdById);
+      const workflowUsers = await findWorkflowUsersForRole(nextRoleKey);
       const nextAssignee = workflowUsers.find((candidate) => Number(candidate.id) === targetAssigneeUserId);
       if (!nextAssignee) return json({ error: targetAssigneeUserId ? "target_assignee_invalid" : "target_assignee_required" }, 400);
       history.push({
@@ -1122,8 +1115,8 @@ export async function POST(req, ctx) {
   const targetAssigneeUserId = Number(body?.targetAssigneeUserId ?? body?.target_assignee_user_id);
   const initialRoleKey = initialWorkflowRoleForUser(uctx);
   const workflowUsers = initialRoleKey === ROLE_KEYS.MANAGEMENT
-    ? await findWorkflowUsersForRole(initialRoleKey, userId)
-    : await findInitialWorkflowUsers(data.projectId, userId);
+    ? await findWorkflowUsersForRole(initialRoleKey)
+    : await findInitialWorkflowUsers(data.projectId);
   const initialAssignee = workflowUsers.find((candidate) => Number(candidate.id) === targetAssigneeUserId);
   if (!initialAssignee) return json({ error: targetAssigneeUserId ? "target_assignee_invalid" : "target_assignee_required" }, 400);
 
