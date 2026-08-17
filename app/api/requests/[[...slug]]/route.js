@@ -553,7 +553,7 @@ function getWorkflowChainForUnit(unitKind) {
 }
 
 function initialWorkflowRoleForUser(userContext) {
-  return hasWorkflowUnitForRole({ roleKey: ROLE_KEYS.ACCOUNTING, userUnitNames: userContext?.userUnitNames })
+  return hasWorkflowUnitForRole({ roleKey: ROLE_KEYS.ACCOUNTING, userUnitNames: userContext?.userUnitNames, roleUnitNames: userContext?.roleUnitNames })
     ? ROLE_KEYS.MANAGEMENT
     : ROLE_KEYS.PROJECT_CONTROL;
 }
@@ -586,10 +586,10 @@ function includesAny(values, patterns) {
   return patterns.some((pattern) => text.includes(normalizeFaText(pattern)));
 }
 
-function hasWorkflowUnitForRole({ roleKey, userUnitNames }) {
+function hasWorkflowUnitForRole({ roleKey, userUnitNames, roleUnitNames = [] }) {
   // Workflow membership is intentionally derived only from explicit user-unit
   // assignments. Role, position and department wording must never route work.
-  const unitNames = (Array.isArray(userUnitNames) ? userUnitNames : []).map(normalizeFaText);
+  const unitNames = [...(Array.isArray(userUnitNames) ? userUnitNames : []), ...(Array.isArray(roleUnitNames) ? roleUnitNames : [])].map(normalizeFaText);
   const isProjectManagement = unitNames.some((name) => name.includes(normalizeFaText("مدیریت پروژه")) || name.includes("project management"));
   if (roleKey === ROLE_KEYS.PROJECT_CONTROL) return includesAny(unitNames, ["برنامه ریزی", "برنامه‌ریزی", "کنترل پروژه"]);
   if (roleKey === ROLE_KEYS.PROJECT_MANAGER) return isProjectManagement;
@@ -599,7 +599,7 @@ function hasWorkflowUnitForRole({ roleKey, userUnitNames }) {
   return false;
 }
 
-function canActOnStep({ row, userId, userUnitNames }) {
+function canActOnStep({ row, userId, userUnitNames, roleUnitNames }) {
   const step = getCurrentStep(row.historyJson);
   if (!step) return false;
 
@@ -614,10 +614,21 @@ function canActOnStep({ row, userId, userUnitNames }) {
   // جلوگیری از تایید/رد درخواستِ خودِ کاربر در سایر مراحل
   if (row.createdById === userId) return false;
 
-  return hasWorkflowUnitForRole({ roleKey: step.roleKey, userUnitNames });
+  return hasWorkflowUnitForRole({ roleKey: step.roleKey, userUnitNames, roleUnitNames });
 }
 
 async function findWorkflowUsersForRole(roleKey, excludeUserId = null) {
+  // Membership can be explicit (UserUnit) or inherited through the positions
+  // assigned to a unit (UnitRoleMap -> UserRoleMap). No role-name text is read.
+  const unitRoleMaps = await prisma.unitRoleMap.findMany({ include: { unit: true } }).catch(() => []);
+  const workflowRoleIds = unitRoleMaps
+    .filter((row) => hasWorkflowUnitForRole({ roleKey, userUnitNames: [row?.unit?.name] }))
+    .map((row) => Number(row.roleId))
+    .filter(Boolean);
+  const mappedMembers = workflowRoleIds.length
+    ? await prisma.userRoleMap.findMany({ where: { roleId: { in: workflowRoleIds } }, select: { userId: true } }).catch(() => [])
+    : [];
+  const mappedUserIds = new Set(mappedMembers.map((row) => Number(row.userId)));
   let users = [];
   try {
     users = await prisma.user.findMany({
@@ -633,7 +644,7 @@ async function findWorkflowUsersForRole(roleKey, excludeUserId = null) {
     const userUnitNames = [
       ...(Array.isArray(candidate.units) ? candidate.units.map((row) => row.unit?.name).filter(Boolean) : []),
     ];
-    return candidate.isActive !== false && hasWorkflowUnitForRole({ roleKey, userUnitNames });
+    return candidate.isActive !== false && (mappedUserIds.has(Number(candidate.id)) || hasWorkflowUnitForRole({ roleKey, userUnitNames }));
   });
 }
 

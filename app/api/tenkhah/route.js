@@ -52,16 +52,24 @@ function isWorkflowUnitMember(stage, links = []) {
   return false;
 }
 async function isFinanceUser(userId) {
-  const user = await prisma.user.findUnique({
-    where: { id: Number(userId) },
-    include: { units: { include: { unit: true } }, roles: { include: { role: true } } },
-  });
-  return isWorkflowUnitMember("finance", user?.units);
+  const financeUsers = await settlementRecipients("finance", null);
+  return financeUsers.some((user) => Number(user.id) === Number(userId));
 }
 async function settlementRecipients(stage, excludeId) {
+  // A user's membership can come from a direct unit assignment or from one of
+  // that unit's designated positions (UnitRoleMap -> UserRoleMap).
+  const unitRoleMaps = await prisma.unitRoleMap.findMany({ include: { unit: true } }).catch(() => []);
+  const workflowRoleIds = unitRoleMaps
+    .filter((row) => isWorkflowUnitMember(stage, [{ unit: row?.unit }]))
+    .map((row) => Number(row.roleId))
+    .filter(Boolean);
+  const mappedMembers = workflowRoleIds.length
+    ? await prisma.userRoleMap.findMany({ where: { roleId: { in: workflowRoleIds } }, select: { userId: true } }).catch(() => [])
+    : [];
+  const mappedUserIds = new Set(mappedMembers.map((row) => Number(row.userId)));
   const users = await prisma.user.findMany({ include: { units: { include: { unit: true } }, roles: { include: { role: true } } }, orderBy: { id: "asc" } });
   return users.filter(u => u.isActive !== false && +u.id !== +excludeId).filter(u =>
-    isWorkflowUnitMember(stage, u.units)
+    mappedUserIds.has(Number(u.id)) || isWorkflowUnitMember(stage, u.units)
   ).map(u => ({ id: u.id, name: u.name, username: u.username, email: u.email }));
 }
 
