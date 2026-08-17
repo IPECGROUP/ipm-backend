@@ -620,15 +620,17 @@ function canActOnStep({ row, userId, userUnitNames, roleUnitNames }) {
 async function findWorkflowUsersForRole(roleKey, excludeUserId = null) {
   // Membership can be explicit (UserUnit) or inherited through the positions
   // assigned to a unit (UnitRoleMap -> UserRoleMap). No role-name text is read.
-  const unitRoleMaps = await prisma.unitRoleMap.findMany({ include: { unit: true } }).catch(() => []);
-  const workflowRoleIds = unitRoleMaps
-    .filter((row) => hasWorkflowUnitForRole({ roleKey, userUnitNames: [row?.unit?.name] }))
-    .map((row) => Number(row.roleId))
-    .filter(Boolean);
-  const mappedMembers = workflowRoleIds.length
-    ? await prisma.userRoleMap.findMany({ where: { roleId: { in: workflowRoleIds } }, select: { userId: true } }).catch(() => [])
-    : [];
-  const mappedUserIds = new Set(mappedMembers.map((row) => Number(row.userId)));
+  const mappedMembers = await prisma.$queryRawUnsafe(`
+    SELECT DISTINCT urm."userId" AS "userId", un."name" AS "unitName"
+    FROM "UserRoleMap" urm
+    INNER JOIN "UnitRoleMap" unit_role ON unit_role."roleId" = urm."roleId"
+    INNER JOIN "Unit" un ON un."id" = unit_role."unitId"
+  `).catch(() => []);
+  const mappedUserIds = new Set(
+    mappedMembers
+      .filter((row) => hasWorkflowUnitForRole({ roleKey, userUnitNames: [row?.unitName] }))
+      .map((row) => Number(row.userId))
+  );
   let users = [];
   try {
     users = await prisma.user.findMany({
@@ -653,17 +655,7 @@ function isGeneralProject(project) {
 }
 
 async function findInitialWorkflowUsers(projectId, excludeUserId = null) {
-  const projectControlUsers = await findWorkflowUsersForRole(ROLE_KEYS.PROJECT_CONTROL, excludeUserId);
-  const project = await prisma.project.findUnique({
-    where: { id: Number(projectId) },
-    select: { code: true, name: true },
-  });
-  if (!isGeneralProject(project)) return projectControlUsers;
-
-  const managementUsers = await findWorkflowUsersForRole(ROLE_KEYS.MANAGEMENT, excludeUserId);
-  return [...projectControlUsers, ...managementUsers].filter(
-    (user, index, users) => users.findIndex((candidate) => Number(candidate.id) === Number(user.id)) === index
-  );
+  return findWorkflowUsersForRole(ROLE_KEYS.PROJECT_CONTROL, excludeUserId);
 }
 
 function serializeWorkflowUsers(users = []) {
@@ -759,16 +751,12 @@ async function getUserContext(req, userId) {
     new Set([
       ...(userUnits || []).map((row) => row?.unit?.name).filter(Boolean),
       ...unitRoleRows.map((row) => row?.unit?.name).filter(Boolean),
-      ...fallbackUnitsForRoleNames(roleNames),
-      ...inferredUnitNamesFromRoles(roleNames),
     ])
   );
   const userUnitNames = Array.from(new Set((userUnits || []).map((row) => row?.unit?.name).filter(Boolean)));
   const roleUnitNames = Array.from(
     new Set([
       ...unitRoleRows.map((row) => row?.unit?.name).filter(Boolean),
-      ...fallbackUnitsForRoleNames(roleNames),
-      ...inferredUnitNamesFromRoles(roleNames),
     ])
   );
   const unitKinds = Array.from(

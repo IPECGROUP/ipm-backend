@@ -58,15 +58,17 @@ async function isFinanceUser(userId) {
 async function settlementRecipients(stage, excludeId) {
   // A user's membership can come from a direct unit assignment or from one of
   // that unit's designated positions (UnitRoleMap -> UserRoleMap).
-  const unitRoleMaps = await prisma.unitRoleMap.findMany({ include: { unit: true } }).catch(() => []);
-  const workflowRoleIds = unitRoleMaps
-    .filter((row) => isWorkflowUnitMember(stage, [{ unit: row?.unit }]))
-    .map((row) => Number(row.roleId))
-    .filter(Boolean);
-  const mappedMembers = workflowRoleIds.length
-    ? await prisma.userRoleMap.findMany({ where: { roleId: { in: workflowRoleIds } }, select: { userId: true } }).catch(() => [])
-    : [];
-  const mappedUserIds = new Set(mappedMembers.map((row) => Number(row.userId)));
+  const mappedMembers = await prisma.$queryRawUnsafe(`
+    SELECT DISTINCT urm."userId" AS "userId", un."name" AS "unitName"
+    FROM "UserRoleMap" urm
+    INNER JOIN "UnitRoleMap" unit_role ON unit_role."roleId" = urm."roleId"
+    INNER JOIN "Unit" un ON un."id" = unit_role."unitId"
+  `).catch(() => []);
+  const mappedUserIds = new Set(
+    mappedMembers
+      .filter((row) => isWorkflowUnitMember(stage, [{ unit: { name: row?.unitName } }]))
+      .map((row) => Number(row.userId))
+  );
   const users = await prisma.user.findMany({ include: { units: { include: { unit: true } }, roles: { include: { role: true } } }, orderBy: { id: "asc" } });
   return users.filter(u => u.isActive !== false && +u.id !== +excludeId).filter(u =>
     mappedUserIds.has(Number(u.id)) || isWorkflowUnitMember(stage, u.units)
