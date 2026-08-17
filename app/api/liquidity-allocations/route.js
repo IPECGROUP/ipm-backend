@@ -161,7 +161,7 @@ export async function GET(request) {
     const projectRecords = projectIds.length
       ? await prisma.project.findMany({ where: { id: { in: projectIds } }, orderBy: { code: "asc" } })
       : [];
-    const result = { allocations: {}, spent: {}, committed: {}, expenseCount: {}, projects: [], history: [] };
+    const result = { allocations: {}, spent: {}, committed: {}, expenseCount: {}, projects: [], history: [], contingencyReserve: "0" };
     for (const row of allocations) {
       const key = mapKey(row.projectId);
       if (key != null) result.allocations[key] = amountText(row.amount);
@@ -193,6 +193,9 @@ export async function GET(request) {
     const projectById = new Map(projectRecords.map((project) => [String(project.id), project]));
     const historyByBatch = new Map();
     for (const row of historyRows) {
+      if (row.rowType === "contingency_reserve") {
+        result.contingencyReserve = amountText(BigInt(result.contingencyReserve || 0) + BigInt(row.amount || 0));
+      }
       const batchId = String(row.batchId || `legacy-${row.id}`);
       if (!historyByBatch.has(batchId)) {
         historyByBatch.set(batchId, {
@@ -241,6 +244,7 @@ export async function GET(request) {
       result.expenseCount = { [key]: result.expenseCount[key] || 0 };
       result.projects = result.projects.filter((project) => String(project.id) === key);
       result.history = [];
+      result.contingencyReserve = "0";
     }
     return json(result);
   } catch (error) {
