@@ -552,6 +552,12 @@ function getWorkflowChainForUnit(unitKind) {
   return unitKind === "projects" ? PAYMENT_WORKFLOW_CHAIN : PAYMENT_WORKFLOW_CHAIN;
 }
 
+function initialWorkflowRoleForUser(userContext) {
+  return userContext?.roleKeys?.includes(ROLE_KEYS.ACCOUNTING) || userContext?.roleKeys?.includes(ROLE_KEYS.FINANCE_MANAGER)
+    ? ROLE_KEYS.MANAGEMENT
+    : ROLE_KEYS.PROJECT_CONTROL;
+}
+
 function getCurrentStep(historyJson) {
   const h = Array.isArray(historyJson) ? historyJson : [];
   for (let i = h.length - 1; i >= 0; i--) {
@@ -846,8 +852,10 @@ export async function GET(req, ctx) {
   const url = new URL(req.url);
 
   if (slug.length === 0 && url.searchParams.get("nextRecipientsForCreate") === "1") {
-    const targetRoleKey = ROLE_KEYS.PROJECT_CONTROL;
-    const users = await findInitialWorkflowUsers(url.searchParams.get("projectId"), userId);
+    const targetRoleKey = initialWorkflowRoleForUser(uctx);
+    const users = targetRoleKey === ROLE_KEYS.MANAGEMENT
+      ? await findWorkflowUsersForRole(targetRoleKey, userId)
+      : await findInitialWorkflowUsers(url.searchParams.get("projectId"), userId);
     return json({ targetRoleKey, users: serializeWorkflowUsers(users) });
   }
 
@@ -1124,7 +1132,10 @@ export async function POST(req, ctx) {
   }
 
   const targetAssigneeUserId = Number(body?.targetAssigneeUserId ?? body?.target_assignee_user_id);
-  const workflowUsers = await findInitialWorkflowUsers(data.projectId, userId);
+  const initialRoleKey = initialWorkflowRoleForUser(uctx);
+  const workflowUsers = initialRoleKey === ROLE_KEYS.MANAGEMENT
+    ? await findWorkflowUsersForRole(initialRoleKey, userId)
+    : await findInitialWorkflowUsers(data.projectId, userId);
   const initialAssignee = workflowUsers.find((candidate) => Number(candidate.id) === targetAssigneeUserId);
   if (!initialAssignee) return json({ error: targetAssigneeUserId ? "target_assignee_invalid" : "target_assignee_required" }, 400);
 
@@ -1198,8 +1209,8 @@ export async function POST(req, ctx) {
           type: "step_set",
           at: nowIso,
           unitKind: enforcedScope,
-          roleKey: ROLE_KEYS.PROJECT_CONTROL,
-          index: 1,
+          roleKey: initialRoleKey,
+          index: PAYMENT_WORKFLOW_CHAIN.indexOf(initialRoleKey),
           assignedToUserId: Number(initialAssignee.id),
         },
       ],

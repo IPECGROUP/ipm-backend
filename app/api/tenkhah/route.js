@@ -42,9 +42,20 @@ async function requests(where = "", params = []) {
 }
 async function settlements(ids) { if (!ids.length) return []; const data = await prisma.$queryRawUnsafe(`SELECT s.id,s.tenkhah_request_id AS "tenkhahRequestId",s.created_by_id AS "createdById",s.current_assignee_user_id AS "currentAssigneeUserId",s.stage,s.status,u.name AS "currentAssigneeName",u.username AS "currentAssigneeUsername" FROM tenkhah_settlements s LEFT JOIN "User" u ON u.id=s.current_assignee_user_id WHERE s.tenkhah_request_id=ANY($1::int[]) ORDER BY s.created_at DESC`, ids); const es = await prisma.$queryRawUnsafe(`SELECT id,settlement_id AS "settlementId",expense_date AS "expenseDate",description,budget_code AS "budgetCode",amount::text AS amount,file_name AS "fileName",file_url AS "fileUrl" FROM tenkhah_settlement_entries WHERE settlement_id=ANY($1::int[]) ORDER BY id`, data.map(x => x.id)); return data.map(s => ({ ...s, entries: es.filter(e => +e.settlementId === +s.id) })); }
 const norm = (value = "") => String(value).toLowerCase().replace(/ي/g, "ی").replace(/ك/g, "ک").replace(/\s+/g, " ");
+async function isFinanceUser(userId) {
+  const user = await prisma.user.findUnique({
+    where: { id: Number(userId) },
+    include: { units: { include: { unit: true } }, roles: { include: { role: true } } },
+  });
+  const affiliations = [
+    ...(user?.units || []).map((link) => link?.unit?.name),
+    ...(user?.roles || []).map((link) => link?.role?.name),
+  ].filter(Boolean).join(" ");
+  return /مالی|حسابدار|finance|account/i.test(affiliations);
+}
 async function settlementRecipients(stage, excludeId) {
   const users = await prisma.user.findMany({ include: { units: { include: { unit: true } }, roles: { include: { role: true } } }, orderBy: { id: "asc" } });
-  const terms = stage === "control_project" ? ["برنامه ریزی", "برنامه‌ریزی", "برنامه ريزي", "برنامه‌ريزی", "planning"] : stage === "finance" ? ["مالی", "حسابداری", "حسابدار", "finance", "account"] : ["مدیر پروژه", "project manager"];
+  const terms = stage === "control_project" ? ["برنامه ریزی", "برنامه‌ریزی", "برنامه ريزي", "برنامه‌ريزی", "planning"] : stage === "finance" ? ["مالی", "حسابداری", "حسابدار", "finance", "account"] : stage === "management" ? ["مدیریت ارشد", "مدیرعامل", "مدیر عامل", "هیئت مدیره", "هیات مدیره", "management"] : ["مدیر پروژه", "project manager"];
   let roleUnitMembers = new Set();
   try {
     const rows = await prisma.$queryRawUnsafe(`SELECT DISTINCT urm."userId" AS "userId", un.name AS "unitName" FROM "UserRoleMap" urm INNER JOIN "UnitRoleMap" urm2 ON urm2."roleId"=urm."roleId" INNER JOIN "Unit" un ON un.id=urm2."unitId"`);
@@ -59,7 +70,7 @@ export async function GET(r) {
   try {
     await ensure(); const uid = await userIdOf(r); if (!uid) return json({ error: "unauthorized" }, 401);
     const url = new URL(r.url), recipientStage = url.searchParams.get("recipients"), balanceProjectId = +url.searchParams.get("projectBalances");
-    if (["control_project", "finance", "project_manager"].includes(recipientStage)) return json({ users: await settlementRecipients(recipientStage, uid) });
+    if (["control_project", "finance", "project_manager", "management"].includes(recipientStage)) return json({ users: await settlementRecipients(recipientStage, uid) });
     if (balanceProjectId) { const rows = await prisma.$queryRawUnsafe(`SELECT COALESCE(SUM(GREATEST(0,t.requested_amount-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id),0))),0)::text AS "unregisteredBalance",COALESCE(SUM(GREATEST(0,t.requested_amount-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id AND s.status='completed'),0))),0)::text AS "unsettledBalance",COALESCE(SUM(CASE WHEN t.status='charged' THEN COALESCE(t.charged_amount,0) ELSE 0 END),0)::text AS "receivedAmount" FROM tenkhah_requests t WHERE t.project_id=$1 AND t.created_by_id=$2`, balanceProjectId, uid); return json(rows[0] || { unregisteredBalance: "0", unsettledBalance: "0", receivedAmount: "0" }); }
     const inbox = url.searchParams.get("inbox") === "1";
     const items = await requests(inbox ? "WHERE (t.current_assignee_user_id=$1 AND t.status='pending') OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND s.current_assignee_user_id=$1 AND s.status='pending')" : "WHERE t.created_by_id=$1 OR t.current_assignee_user_id=$1 OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND s.current_assignee_user_id=$1)", [uid]);
@@ -82,7 +93,10 @@ export async function POST(r) {
       return json({ ok: true }, 201);
     }
     const pid = +b.projectId, mid = +b.projectManagerId, w = amount(b.amount);
+    const createdByFinance = await isFinanceUser(uid);
     if (!String(b.requestDate || "").trim() || !pid || !mid || w <= 0n) return json({ error: "invalid_input" }, 400);
+    const initialAssigneeId = mid;
+    const initialStage = createdByFinance ? "management" : "project_manager";
     const requestNumber = await nextSharedPaymentSerial(b.requestDate, pid);
     // A tenkhah remains in its own tables and workflow.  The linked payment
     // request is a tracking identity only and is excluded from the normal
@@ -90,9 +104,9 @@ export async function POST(r) {
     const linkedPayment = await prisma.paymentRequest.create({ data: {
       serial: requestNumber, dateJalali: String(b.requestDate), scope: "tenkhah",
       title: "درخواست تنخواه", amount: w, projectId: pid, docId: "tenkhah_request",
-      createdById: uid, currentAssigneeUserId: mid, status: "pending",
+      createdById: uid, currentAssigneeUserId: initialAssigneeId, status: "pending",
     } });
-    await prisma.$executeRawUnsafe("INSERT INTO tenkhah_requests (payment_request_id,request_number,request_date,project_id,requested_amount,currency,unregistered_balance,unsettled_balance,created_by_id,project_manager_id,current_assignee_user_id,project_liquidity) VALUES ($1,$2,$3,$4,$5::bigint,$6,$7::bigint,$8::bigint,$9,$10,$10,$11::bigint)", linkedPayment.id, requestNumber, String(b.requestDate), pid, String(w), String(b.currency || ""), String(w), String(w), uid, mid, String(amount(b.projectLiquidity)));
+    await prisma.$executeRawUnsafe("INSERT INTO tenkhah_requests (payment_request_id,request_number,request_date,project_id,requested_amount,currency,unregistered_balance,unsettled_balance,created_by_id,project_manager_id,finance_user_id,current_assignee_user_id,project_liquidity,stage) VALUES ($1,$2,$3,$4,$5::bigint,$6,$7::bigint,$8::bigint,$9,$10,$11,$12,$13::bigint,$14)", linkedPayment.id, requestNumber, String(b.requestDate), pid, String(w), String(b.currency || ""), String(w), String(w), uid, initialAssigneeId, null, initialAssigneeId, String(amount(b.projectLiquidity)), initialStage);
     return json({ ok: true, requestNumber }, 201);
   } catch (e) { return json({ error: "internal_error", message: String(e?.message || e) }, 500); }
 }
@@ -111,7 +125,8 @@ export async function PATCH(r) {
       return json({ ok: true });
     }
     const row = (await requests("WHERE t.id=$1", [+b.id]))[0]; if (!uid || !row || +row.currentAssigneeUserId !== uid || row.status !== "pending") return json({ error: "not_allowed" }, 403);
-    if (row.stage === "project_manager") { if (!+b.financeUserId || !String(b.approvedDate || "").trim()) return json({ error: "invalid_input" }, 400); await prisma.$executeRawUnsafe("UPDATE tenkhah_requests SET finance_user_id=$1,current_assignee_user_id=$1,stage='finance',manager_approved_date=$2,updated_at=CURRENT_TIMESTAMP WHERE id=$3", +b.financeUserId, String(b.approvedDate), row.id); }
+    if (row.stage === "project_manager") { if (!+b.managementUserId || !String(b.approvedDate || "").trim()) return json({ error: "invalid_input" }, 400); const managers = await settlementRecipients("management", row.createdById); if (!managers.some((user) => +user.id === +b.managementUserId)) return json({ error: "invalid_management_user" }, 400); await prisma.$executeRawUnsafe("UPDATE tenkhah_requests SET current_assignee_user_id=$1,stage='management',manager_approved_date=$2,updated_at=CURRENT_TIMESTAMP WHERE id=$3", +b.managementUserId, String(b.approvedDate), row.id); }
+    else if (row.stage === "management") { if (!+b.financeUserId) return json({ error: "invalid_input" }, 400); const finances = await settlementRecipients("finance", row.createdById); if (!finances.some((user) => +user.id === +b.financeUserId)) return json({ error: "invalid_finance_user" }, 400); await prisma.$executeRawUnsafe("UPDATE tenkhah_requests SET finance_user_id=$1,current_assignee_user_id=$1,stage='finance',updated_at=CURRENT_TIMESTAMP WHERE id=$2", +b.financeUserId, row.id); }
     else if (row.stage === "finance") await prisma.$executeRawUnsafe("UPDATE tenkhah_requests SET charged_date=$1,charged_amount=$2::bigint,status='charged',stage='completed',current_assignee_user_id=NULL,updated_at=CURRENT_TIMESTAMP WHERE id=$3", String(b.chargedDate || ""), String(amount(b.chargedAmount)), row.id);
     else return json({ error: "invalid_stage" }, 400);
     return json({ ok: true });
