@@ -259,12 +259,13 @@ export async function POST(request) {
     const allocationDate = String(body?.allocationDate || "").trim();
     const source = String(body?.source || "").trim();
     const availableAmount = toBigInt(body?.availableAmount);
+    const reserveAdjustment = toBigInt(body?.reserveAdjustment) ?? 0n;
     const batchId = String(body?.batchId || "").trim().slice(0, 80) || null;
     const description = String(body?.description || "").trim();
     const rows = Array.isArray(body?.rows) ? body.rows : [];
     const parsedRows = rows.map((row) => ({ projectId: Number(row?.projectId), amount: toBigInt(row?.amount) }))
       .filter((row) => Number.isInteger(row.projectId) && row.projectId > 0 && row.amount != null && row.amount !== 0n);
-    if (!allocationDate || !source || availableAmount == null || availableAmount <= 0n || !parsedRows.length) {
+    if (!allocationDate || !source || availableAmount == null || availableAmount <= 0n || (!parsedRows.length && reserveAdjustment === 0n)) {
       return json({ error: "invalid_input" }, 400);
     }
     const allocationTotal = parsedRows.reduce((total, row) => total + row.amount, 0n);
@@ -275,7 +276,10 @@ export async function POST(request) {
     if (existingBatchTotal + allocationTotal > availableAmount) {
       return json({ error: "allocation_total_exceeds_available_amount" }, 400);
     }
-    const contingencyReserveAmount = availableAmount - existingBatchTotal - allocationTotal;
+    const contingencyReserveAmount = availableAmount - existingBatchTotal - allocationTotal + reserveAdjustment;
+    if (contingencyReserveAmount < 0n) {
+      return json({ error: "contingency_reserve_cannot_be_negative" }, 400);
+    }
     await prisma.$transaction(async (tx) => {
       for (const row of parsedRows) {
         await tx.$executeRawUnsafe(
