@@ -3,6 +3,7 @@ export const runtime = "nodejs";
 
 import { prisma } from "../../../../lib/prisma";
 import bcrypt from "bcryptjs";
+import { randomUUID } from "node:crypto";
 import { isDbConnectionError, readOrgStore, writeOrgStore } from "../../../../lib/orgStructureFallback";
 
 async function readJson(request) {
@@ -323,9 +324,11 @@ export async function GET(request) {
 export async function POST(request) {
   const body = await readJson(request);
   try {
-    const username = String(body.username || "").trim();
-    const password = String(body.password || "");
-    if (!username || !password) {
+    const role = body.role ? String(body.role).trim() : "user";
+    const isPersonnel = role === "personnel";
+    const username = isPersonnel ? `personnel-${randomUUID()}` : String(body.username || "").trim();
+    const password = isPersonnel ? randomUUID() : String(body.password || "");
+    if ((!isPersonnel && (!username || !password)) || (isPersonnel && !String(body.name || "").trim())) {
       return new Response(JSON.stringify({ error: "username_password_required", message: "نام کاربری و گذرواژه الزامی است" }), {
         status: 400, headers: { "Content-Type": "application/json" },
       });
@@ -334,7 +337,6 @@ export async function POST(request) {
     const name = body.name ? String(body.name).trim() : null;
     const email = body.email ? String(body.email).trim() : null;
     const department = body.department ? String(body.department).trim() : null;
-    const role = body.role ? String(body.role).trim() : "user";
     const isActive = body.isActive !== false;
     const expiresAt = parseExpiresAtInput(readExpiresAtInput(body));
 
@@ -373,9 +375,11 @@ export async function POST(request) {
   } catch (e) {
     console.error("admin_users_post_error", e);
     if (isDbConnectionError(e)) {
-      const username = String(body.username || "").trim();
-      const password = String(body.password || "");
-      if (!username || !password) {
+      const role = body.role ? String(body.role).trim() : "user";
+      const isPersonnel = role === "personnel";
+      const username = isPersonnel ? `personnel-${randomUUID()}` : String(body.username || "").trim();
+      const password = isPersonnel ? randomUUID() : String(body.password || "");
+      if ((!isPersonnel && (!username || !password)) || (isPersonnel && !String(body.name || "").trim())) {
         return new Response(JSON.stringify({ error: "username_password_required", message: "username_password_required" }), {
           status: 400, headers: { "Content-Type": "application/json" },
         });
@@ -388,7 +392,7 @@ export async function POST(request) {
         email: body.email ? String(body.email).trim() : null,
         username,
         department: body.department ? String(body.department).trim() : null,
-        role: body.role ? String(body.role).trim() : "user",
+        role,
         isActive: body.isActive !== false,
         expiresAt: parseExpiresAtInput(readExpiresAtInput(body))?.toISOString?.() || null,
         access: Array.isArray(body.access) ? body.access.map((v) => String(v || "")) : [],
