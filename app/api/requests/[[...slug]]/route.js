@@ -589,11 +589,13 @@ function includesAny(values, patterns) {
 function hasWorkflowUnitForRole({ roleKey, userUnitNames }) {
   // Workflow membership is intentionally derived only from explicit user-unit
   // assignments. Role, position and department wording must never route work.
-  const unitNames = Array.isArray(userUnitNames) ? userUnitNames : [];
+  const unitNames = (Array.isArray(userUnitNames) ? userUnitNames : []).map(normalizeFaText);
+  const isProjectManagement = unitNames.some((name) => name.includes(normalizeFaText("مدیریت پروژه")) || name.includes("project management"));
   if (roleKey === ROLE_KEYS.PROJECT_CONTROL) return includesAny(unitNames, ["برنامه ریزی", "برنامه‌ریزی", "کنترل پروژه"]);
-  if (roleKey === ROLE_KEYS.PROJECT_MANAGER) return includesAny(unitNames, ["مدیریت پروژه", "project management"]);
+  if (roleKey === ROLE_KEYS.PROJECT_MANAGER) return isProjectManagement;
   if (roleKey === ROLE_KEYS.ACCOUNTING) return includesAny(unitNames, ["واحد مالی", "مالی", "حسابداری", "finance", "accounting"]);
-  if (roleKey === ROLE_KEYS.MANAGEMENT) return includesAny(unitNames, ["مدیریت ارشد", "senior management"]);
+  // The management stage must not include members of «مدیریت پروژه‌ها».
+  if (roleKey === ROLE_KEYS.MANAGEMENT) return !isProjectManagement && includesAny(unitNames, ["مدیریت", "management"]);
   return false;
 }
 

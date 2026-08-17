@@ -42,19 +42,26 @@ async function requests(where = "", params = []) {
 }
 async function settlements(ids) { if (!ids.length) return []; const data = await prisma.$queryRawUnsafe(`SELECT s.id,s.tenkhah_request_id AS "tenkhahRequestId",s.created_by_id AS "createdById",s.current_assignee_user_id AS "currentAssigneeUserId",s.stage,s.status,u.name AS "currentAssigneeName",u.username AS "currentAssigneeUsername" FROM tenkhah_settlements s LEFT JOIN "User" u ON u.id=s.current_assignee_user_id WHERE s.tenkhah_request_id=ANY($1::int[]) ORDER BY s.created_at DESC`, ids); const es = await prisma.$queryRawUnsafe(`SELECT id,settlement_id AS "settlementId",expense_date AS "expenseDate",description,budget_code AS "budgetCode",amount::text AS amount,file_name AS "fileName",file_url AS "fileUrl" FROM tenkhah_settlement_entries WHERE settlement_id=ANY($1::int[]) ORDER BY id`, data.map(x => x.id)); return data.map(s => ({ ...s, entries: es.filter(e => +e.settlementId === +s.id) })); }
 const norm = (value = "") => String(value).toLowerCase().replace(/ي/g, "ی").replace(/ك/g, "ک").replace(/\s+/g, " ");
+function isWorkflowUnitMember(stage, links = []) {
+  const unitNames = (Array.isArray(links) ? links : []).map((link) => norm(link?.unit?.name)).filter(Boolean);
+  const isProjectManagement = unitNames.some((name) => name.includes(norm("مدیریت پروژه")) || name.includes("project management"));
+  if (stage === "project_manager") return isProjectManagement;
+  if (stage === "management") return !isProjectManagement && unitNames.some((name) => name.includes(norm("مدیریت")) || name.includes("management"));
+  if (stage === "finance") return unitNames.some((name) => /مالی|حسابداری|finance|accounting/i.test(name));
+  if (stage === "control_project") return unitNames.some((name) => name.includes(norm("برنامه ریزی")) || name.includes(norm("برنامه‌ریزی")) || name.includes(norm("کنترل پروژه")) || name.includes("planning"));
+  return false;
+}
 async function isFinanceUser(userId) {
   const user = await prisma.user.findUnique({
     where: { id: Number(userId) },
     include: { units: { include: { unit: true } }, roles: { include: { role: true } } },
   });
-  const unitNames = (user?.units || []).map((link) => link?.unit?.name).filter(Boolean);
-  return unitNames.some((name) => /مالی|حسابداری|finance|account/i.test(norm(name)));
+  return isWorkflowUnitMember("finance", user?.units);
 }
 async function settlementRecipients(stage, excludeId) {
   const users = await prisma.user.findMany({ include: { units: { include: { unit: true } }, roles: { include: { role: true } } }, orderBy: { id: "asc" } });
-  const terms = stage === "control_project" ? ["برنامه ریزی", "برنامه‌ریزی", "کنترل پروژه", "planning"] : stage === "finance" ? ["واحد مالی", "مالی", "حسابداری", "finance", "accounting"] : stage === "management" ? ["مدیریت ارشد", "senior management"] : ["مدیریت پروژه", "project management"];
   return users.filter(u => u.isActive !== false && +u.id !== +excludeId).filter(u =>
-    (u.units || []).some(link => terms.some(term => norm(link.unit?.name).includes(norm(term))))
+    isWorkflowUnitMember(stage, u.units)
   ).map(u => ({ id: u.id, name: u.name, username: u.username, email: u.email }));
 }
 
