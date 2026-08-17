@@ -47,22 +47,14 @@ async function isFinanceUser(userId) {
     where: { id: Number(userId) },
     include: { units: { include: { unit: true } }, roles: { include: { role: true } } },
   });
-  const affiliations = [
-    ...(user?.units || []).map((link) => link?.unit?.name),
-    ...(user?.roles || []).map((link) => link?.role?.name),
-  ].filter(Boolean).join(" ");
-  return /مالی|حسابدار|finance|account/i.test(affiliations);
+  const unitNames = (user?.units || []).map((link) => link?.unit?.name).filter(Boolean);
+  return unitNames.some((name) => /مالی|حسابداری|finance|account/i.test(norm(name)));
 }
 async function settlementRecipients(stage, excludeId) {
   const users = await prisma.user.findMany({ include: { units: { include: { unit: true } }, roles: { include: { role: true } } }, orderBy: { id: "asc" } });
-  const terms = stage === "control_project" ? ["برنامه ریزی", "برنامه‌ریزی", "برنامه ريزي", "برنامه‌ريزی", "planning"] : stage === "finance" ? ["مالی", "حسابداری", "حسابدار", "finance", "account"] : stage === "management" ? ["مدیریت ارشد", "مدیرعامل", "مدیر عامل", "هیئت مدیره", "هیات مدیره", "management"] : ["مدیر پروژه", "project manager"];
-  let roleUnitMembers = new Set();
-  try {
-    const rows = await prisma.$queryRawUnsafe(`SELECT DISTINCT urm."userId" AS "userId", un.name AS "unitName" FROM "UserRoleMap" urm INNER JOIN "UnitRoleMap" urm2 ON urm2."roleId"=urm."roleId" INNER JOIN "Unit" un ON un.id=urm2."unitId"`);
-    roleUnitMembers = new Set(rows.filter(row => terms.some(term => norm(row.unitName).includes(norm(term)))).map(row => +row.userId));
-  } catch {}
+  const terms = stage === "control_project" ? ["برنامه ریزی", "برنامه‌ریزی", "کنترل پروژه", "planning"] : stage === "finance" ? ["واحد مالی", "مالی", "حسابداری", "finance", "accounting"] : stage === "management" ? ["مدیریت ارشد", "senior management"] : ["مدیریت پروژه", "project management"];
   return users.filter(u => u.isActive !== false && +u.id !== +excludeId).filter(u =>
-    roleUnitMembers.has(+u.id) || (u.units || []).some(link => terms.some(term => norm(link.unit?.name).includes(norm(term))))
+    (u.units || []).some(link => terms.some(term => norm(link.unit?.name).includes(norm(term))))
   ).map(u => ({ id: u.id, name: u.name, username: u.username, email: u.email }));
 }
 
@@ -70,6 +62,7 @@ export async function GET(r) {
   try {
     await ensure(); const uid = await userIdOf(r); if (!uid) return json({ error: "unauthorized" }, 401);
     const url = new URL(r.url), recipientStage = url.searchParams.get("recipients"), balanceProjectId = +url.searchParams.get("projectBalances");
+    if (url.searchParams.get("currentUserFinance") === "1") return json({ isFinance: await isFinanceUser(uid) });
     if (["control_project", "finance", "project_manager", "management"].includes(recipientStage)) return json({ users: await settlementRecipients(recipientStage, uid) });
     if (balanceProjectId) { const rows = await prisma.$queryRawUnsafe(`SELECT COALESCE(SUM(GREATEST(0,t.requested_amount-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id),0))),0)::text AS "unregisteredBalance",COALESCE(SUM(GREATEST(0,t.requested_amount-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id AND s.status='completed'),0))),0)::text AS "unsettledBalance",COALESCE(SUM(CASE WHEN t.status='charged' THEN COALESCE(t.charged_amount,0) ELSE 0 END),0)::text AS "receivedAmount" FROM tenkhah_requests t WHERE t.project_id=$1 AND t.created_by_id=$2`, balanceProjectId, uid); return json(rows[0] || { unregisteredBalance: "0", unsettledBalance: "0", receivedAmount: "0" }); }
     const inbox = url.searchParams.get("inbox") === "1";
@@ -103,7 +96,7 @@ export async function POST(r) {
     // payment-request API, so its workflow can never be mixed with tenkhah.
     const linkedPayment = await prisma.paymentRequest.create({ data: {
       serial: requestNumber, dateJalali: String(b.requestDate), scope: "tenkhah",
-      title: "درخواست تنخواه", amount: w, projectId: pid, docId: "tenkhah_request",
+      title: "تنخواه", amount: w, projectId: pid, docId: "tenkhah_request",
       createdById: uid, currentAssigneeUserId: initialAssigneeId, status: "pending",
     } });
     await prisma.$executeRawUnsafe("INSERT INTO tenkhah_requests (payment_request_id,request_number,request_date,project_id,requested_amount,currency,unregistered_balance,unsettled_balance,created_by_id,project_manager_id,finance_user_id,current_assignee_user_id,project_liquidity,stage) VALUES ($1,$2,$3,$4,$5::bigint,$6,$7::bigint,$8::bigint,$9,$10,$11,$12,$13::bigint,$14)", linkedPayment.id, requestNumber, String(b.requestDate), pid, String(w), String(b.currency || ""), String(w), String(w), uid, initialAssigneeId, null, initialAssigneeId, String(amount(b.projectLiquidity)), initialStage);

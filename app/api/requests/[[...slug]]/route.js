@@ -553,7 +553,7 @@ function getWorkflowChainForUnit(unitKind) {
 }
 
 function initialWorkflowRoleForUser(userContext) {
-  return userContext?.roleKeys?.includes(ROLE_KEYS.ACCOUNTING) || userContext?.roleKeys?.includes(ROLE_KEYS.FINANCE_MANAGER)
+  return hasWorkflowUnitForRole({ roleKey: ROLE_KEYS.ACCOUNTING, userUnitNames: userContext?.userUnitNames })
     ? ROLE_KEYS.MANAGEMENT
     : ROLE_KEYS.PROJECT_CONTROL;
 }
@@ -586,22 +586,18 @@ function includesAny(values, patterns) {
   return patterns.some((pattern) => text.includes(normalizeFaText(pattern)));
 }
 
-function hasWorkflowUnitForRole({ roleKey, userUnitNames, roleUnitNames, roleNames }) {
-  const combinedUnitNames = [...(userUnitNames || []), ...(roleUnitNames || [])];
-  if (roleKey === ROLE_KEYS.PROJECT_MANAGER) return true;
-  if (roleKey === ROLE_KEYS.PROJECT_CONTROL) {
-    return includesAny(combinedUnitNames, ["برنامه ریزی", "برنامه‌ریزی", "کنترل پروژه"]) || includesAny(roleNames, ["برنامه ریزی", "برنامه‌ریزی", "کنترل پروژه"]);
-  }
-  if (roleKey === ROLE_KEYS.ACCOUNTING) {
-    return includesAny(combinedUnitNames, ["مالی", "حسابداری"]) || includesAny(roleNames, ["مالی", "حسابداری", "حسابدار"]);
-  }
-  if (roleKey === ROLE_KEYS.MANAGEMENT) {
-    return includesAny(combinedUnitNames, ["مدیریت"]) || includesAny(roleNames, ["مدیریت", "مدیرعامل", "مدیر عامل", "هیئت مدیره", "هیات مدیره"]);
-  }
-  return true;
+function hasWorkflowUnitForRole({ roleKey, userUnitNames }) {
+  // Workflow membership is intentionally derived only from explicit user-unit
+  // assignments. Role, position and department wording must never route work.
+  const unitNames = Array.isArray(userUnitNames) ? userUnitNames : [];
+  if (roleKey === ROLE_KEYS.PROJECT_CONTROL) return includesAny(unitNames, ["برنامه ریزی", "برنامه‌ریزی", "کنترل پروژه"]);
+  if (roleKey === ROLE_KEYS.PROJECT_MANAGER) return includesAny(unitNames, ["مدیریت پروژه", "project management"]);
+  if (roleKey === ROLE_KEYS.ACCOUNTING) return includesAny(unitNames, ["واحد مالی", "مالی", "حسابداری", "finance", "accounting"]);
+  if (roleKey === ROLE_KEYS.MANAGEMENT) return includesAny(unitNames, ["مدیریت ارشد", "senior management"]);
+  return false;
 }
 
-function canActOnStep({ row, userId, userRoleKeys, userUnitNames, roleUnitNames, roleNames }) {
+function canActOnStep({ row, userId, userUnitNames }) {
   const step = getCurrentStep(row.historyJson);
   if (!step) return false;
 
@@ -616,10 +612,7 @@ function canActOnStep({ row, userId, userRoleKeys, userUnitNames, roleUnitNames,
   // جلوگیری از تایید/رد درخواستِ خودِ کاربر در سایر مراحل
   if (row.createdById === userId) return false;
 
-  // نقش لازم را دارد؟
-  if (!userRoleKeys.includes(step.roleKey)) return false;
-
-  return hasWorkflowUnitForRole({ roleKey: step.roleKey, userUnitNames, roleUnitNames, roleNames });
+  return hasWorkflowUnitForRole({ roleKey: step.roleKey, userUnitNames });
 }
 
 async function findWorkflowUsersForRole(roleKey, excludeUserId = null) {
@@ -635,16 +628,10 @@ async function findWorkflowUsersForRole(roleKey, excludeUserId = null) {
   }
   return users.filter((candidate) => {
     if (excludeUserId && Number(candidate.id) === Number(excludeUserId)) return false;
-    const roleNames = [
-      ...(Array.isArray(candidate.roles) ? candidate.roles.map((row) => row.role?.name).filter(Boolean) : []),
-      candidate.role && candidate.role !== "user" ? candidate.role : "",
-    ].filter(Boolean);
     const userUnitNames = [
       ...(Array.isArray(candidate.units) ? candidate.units.map((row) => row.unit?.name).filter(Boolean) : []),
-      ...fallbackUnitsForRoleNames(roleNames),
-      ...inferredUnitNamesFromRoles(roleNames),
     ];
-    return detectUserRoleKeys(roleNames).includes(roleKey) && hasWorkflowUnitForRole({ roleKey, userUnitNames, roleUnitNames: [], roleNames });
+    return candidate.isActive !== false && hasWorkflowUnitForRole({ roleKey, userUnitNames });
   });
 }
 
