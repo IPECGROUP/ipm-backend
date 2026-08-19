@@ -664,19 +664,38 @@ export async function GET(req) {
     }
 
     const { mainAdmin } = await userContext(userId);
+    const ownerOnly = url.searchParams.get("owner") === "me";
+    const search = cleanText(url.searchParams.get("search") || "", 120);
+    const requestedPage = Number(url.searchParams.get("page") || 1);
+    const requestedPageSize = Number(url.searchParams.get("pageSize") || (ownerOnly ? 50 : 500));
+    const page = Number.isFinite(requestedPage) && requestedPage > 0 ? Math.trunc(requestedPage) : 1;
+    // Keep the picker responsive even after the request archive becomes large.
+    const pageSize = Math.min(ownerOnly ? 100 : 500, Math.max(10, Number.isFinite(requestedPageSize) ? Math.trunc(requestedPageSize) : (ownerOnly ? 50 : 500)));
     const where = {
       docId: REQUEST_DOC_ID,
+      ...(ownerOnly ? { createdById: Number(userId) } : {}),
+      ...(search ? {
+        OR: [
+          { serial: { contains: search } },
+          { title: { contains: search } },
+          { description: { contains: search } },
+        ],
+      } : {}),
     };
 
-    const rows = await prisma.paymentRequest.findMany({
-      where,
-      include: {
-        createdBy: { select: { name: true, username: true, email: true } },
-        currentAssigneeUser: { select: { name: true, username: true, email: true } },
-      },
-      orderBy: { id: "desc" },
-      take: 500,
-    });
+    const [rows, total] = await Promise.all([
+      prisma.paymentRequest.findMany({
+        where,
+        include: {
+          createdBy: { select: { name: true, username: true, email: true } },
+          currentAssigneeUser: { select: { name: true, username: true, email: true } },
+        },
+        orderBy: { id: "desc" },
+        skip: (page - 1) * pageSize,
+        take: pageSize,
+      }),
+      prisma.paymentRequest.count({ where }),
+    ]);
 
     const projectIds = Array.from(new Set(rows.map((row) => row.projectId).filter(Boolean)));
     const projects = projectIds.length
@@ -718,6 +737,7 @@ export async function GET(req) {
         canAct: canActOnSupplyStep({ row, userId, userCtx, mainAdmin }),
         canDelete: Number(row.createdById) === Number(userId),
       })),
+      pagination: { page, pageSize, total, hasMore: page * pageSize < total },
     });
   } catch (e) {
     console.error("supply_requests_get_error", e);
