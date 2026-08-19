@@ -87,7 +87,7 @@ export async function GET(r) {
     if (["control_project", "finance", "project_manager", "management"].includes(recipientStage)) return json({ users: await settlementRecipients(recipientStage, uid) });
     if (balanceProjectId && balanceBeneficiaryId) { const rows = await prisma.$queryRawUnsafe(`SELECT COALESCE(SUM(GREATEST(0,t.requested_amount-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id),0))),0)::text AS "unregisteredBalance",COALESCE(SUM(GREATEST(0,t.requested_amount-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id AND s.status='completed'),0))),0)::text AS "unsettledBalance",COALESCE(SUM(CASE WHEN t.status='charged' THEN COALESCE(t.charged_amount,0) ELSE 0 END),0)::text AS "receivedAmount" FROM tenkhah_requests t WHERE t.project_id=$1 AND COALESCE(t.beneficiary_user_id,t.created_by_id)=$2`, balanceProjectId, balanceBeneficiaryId); return json(rows[0] || { unregisteredBalance: "0", unsettledBalance: "0", receivedAmount: "0" }); }
     const inbox = url.searchParams.get("inbox") === "1";
-    const items = await requests(inbox ? "WHERE (t.current_assignee_user_id=$1 AND t.status='pending') OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND s.current_assignee_user_id=$1 AND s.status='pending')" : "WHERE t.created_by_id=$1 OR t.current_assignee_user_id=$1 OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND s.current_assignee_user_id=$1)", [uid]);
+    const items = await requests(inbox ? "WHERE (t.current_assignee_user_id=$1 AND t.status='pending') OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND s.current_assignee_user_id=$1 AND s.status='pending')" : "WHERE t.created_by_id=$1 OR t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1 OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND (s.current_assignee_user_id=$1 OR s.created_by_id=$1))", [uid]);
     const all = await settlements(items.map(x => x.id)); const shown = inbox ? all.filter(s => +s.currentAssigneeUserId === uid && s.status === "pending") : all.filter(s => +s.createdById === uid || +s.currentAssigneeUserId === uid);
     return json({ items: items.map(x => ({ ...x, settlements: all.filter(s => +s.tenkhahRequestId === +x.id) })), settlements: shown });
   } catch (e) { return json({ error: "internal_error", message: String(e?.message || e) }, 500); }
@@ -158,4 +158,40 @@ export async function PATCH(r) {
     else return json({ error: "invalid_stage" }, 400);
     return json({ ok: true });
   } catch (e) { return json({ error: "internal_error", message: String(e?.message || e) }, 500); }
+}
+
+export async function DELETE(r) {
+  try {
+    await ensure();
+    const uid = await userIdOf(r);
+    if (!uid) return json({ error: "unauthorized" }, 401);
+
+    const url = new URL(r.url);
+    const id = Number(url.searchParams.get("id"));
+    if (!Number.isFinite(id) || id <= 0) return json({ error: "invalid_id" }, 400);
+
+    const row = (await requests("WHERE t.id=$1", [id]))[0];
+    if (!row) return json({ error: "not_found" }, 404);
+    if (Number(row.createdById) !== Number(uid)) return json({ error: "forbidden" }, 403);
+    if (["charged", "rejected", "completed", "cancelled", "canceled"].includes(String(row.status))) {
+      return json({ error: "delete_not_allowed" }, 400);
+    }
+
+    const settlementCount = await prisma.$queryRawUnsafe(
+      "SELECT COUNT(*)::int AS count FROM tenkhah_settlements WHERE tenkhah_request_id=$1",
+      id
+    );
+    if (Number(settlementCount?.[0]?.count || 0) > 0) return json({ error: "delete_has_settlements" }, 400);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe("DELETE FROM tenkhah_requests WHERE id=$1", id);
+      if (row.paymentRequestId) {
+        await tx.paymentRequest.deleteMany({ where: { id: Number(row.paymentRequestId) } });
+      }
+    });
+
+    return json({ ok: true });
+  } catch (e) {
+    return json({ error: "internal_error", message: String(e?.message || e) }, 500);
+  }
 }

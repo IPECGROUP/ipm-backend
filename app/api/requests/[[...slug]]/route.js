@@ -568,6 +568,20 @@ function getCurrentStep(historyJson) {
   return null;
 }
 
+function wasInvolvedInRequest(row, userId) {
+  const targetId = Number(userId);
+  if (!Number.isFinite(targetId) || !row) return false;
+  if (Number(row.createdById) === targetId || Number(row.currentAssigneeUserId) === targetId) return true;
+
+  return (Array.isArray(row.historyJson) ? row.historyJson : []).some((entry) => [
+    entry?.byUserId,
+    entry?.assignedToUserId,
+    entry?.targetAssigneeUserId,
+    entry?.assigneeUserId,
+    entry?.userId,
+  ].some((value) => Number(value) === targetId));
+}
+
 function canRejectAtStep(roleKey) {
   return [ROLE_KEYS.PROJECT_CONTROL, ROLE_KEYS.PROJECT_MANAGER].includes(roleKey);
 }
@@ -877,7 +891,7 @@ export async function GET(req, ctx) {
       roleUnitNames: uctx.roleUnitNames,
       roleNames: uctx.roleNames,
     });
-    const canView = uctx.isMainAdmin || row.createdById === userId || canAct;
+    const canView = uctx.isMainAdmin || canAct || wasInvolvedInRequest(row, userId);
     if (!canView) return json({ error: "forbidden" }, 403);
 
     const userNamesById = await userNameMapForRows([row]);
@@ -922,8 +936,9 @@ export async function GET(req, ctx) {
       roleNames: uctx.roleNames,
     });
     const isMine = r.createdById === userId;
-    const canView = uctx.isMainAdmin || isMine || canAct;
-    return { row: r, canAct, isMine, canView };
+    const wasInvolved = wasInvolvedInRequest(r, userId);
+    const canView = uctx.isMainAdmin || canAct || wasInvolved;
+    return { row: r, canAct, isMine, wasInvolved, canView };
   });
 
   let filtered = rowsWithFlags;
