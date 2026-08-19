@@ -15,6 +15,21 @@ function bad(message, status = 400) {
   return json({ error: message }, status);
 }
 
+// Request payloads may come from JSON, form controls, or older clients.  In
+// particular, Boolean("false") is true in JavaScript, so do not use a truthy
+// cast for persisted yes/no fields.
+function parseBoolean(value, fallback = false) {
+  if (value === undefined || value === null || value === "") return fallback;
+  if (typeof value === "boolean") return value;
+  if (typeof value === "number") return value === 1;
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["true", "1", "yes", "on"].includes(normalized)) return true;
+    if (["false", "0", "no", "off"].includes(normalized)) return false;
+  }
+  return Boolean(value);
+}
+
 const DOC_CLASS_CLASSIFICATION_PREFIX = "__classification__:";
 
 function encodeClassificationDocClassFallback(raw) {
@@ -68,7 +83,7 @@ function toSnakeLetter(l, { includeAttachments = true } = {}) {
     to_name: l.toName ?? "",
     org_name: l.orgName ?? "",
     subject: l.subject ?? "",
-    has_attachment: !!l.hasAttachment,
+    has_attachment: parseBoolean(l.hasAttachment),
     attachment_title: l.attachmentTitle ?? "",
     return_to_ids: l.returnToIds ?? [],
     piro_ids: l.piroIds ?? [],
@@ -807,7 +822,7 @@ function normalizeIncomingPayload(body) {
   const internalUnitId =
     internalUnitIdParsed === undefined ? null : internalUnitIdParsed;
 
-  const hasAttachment = !!(b.hasAttachment ?? b.has_attachment);
+  const hasAttachment = parseBoolean(b.hasAttachment ?? b.has_attachment);
   const attachments = Array.isArray(b.attachments) ? b.attachments : [];
 
   return {
@@ -898,7 +913,7 @@ function normalizePatchPayload(body) {
   }
 
   if (hasOwn(b, "hasAttachment") || hasOwn(b, "has_attachment")) {
-    out.hasAttachment = !!(b.hasAttachment ?? b.has_attachment);
+    out.hasAttachment = parseBoolean(b.hasAttachment ?? b.has_attachment);
   }
 
   if (hasOwn(b, "docClass") || hasOwn(b, "doc_class"))
@@ -1317,7 +1332,7 @@ export async function POST(req, ctx) {
       toName: payload.toName || null,
       orgName: payload.orgName || null,
       subject: payload.subject || null,
-      hasAttachment: !!payload.hasAttachment,
+      hasAttachment: parseBoolean(payload.hasAttachment),
       attachmentTitle: payload.attachmentTitle || null,
       returnToIds: payload.returnToIds ?? [],
       piroIds: payload.piroIds ?? [],
