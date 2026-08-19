@@ -173,17 +173,18 @@ export async function DELETE(r) {
     const row = (await requests("WHERE t.id=$1", [id]))[0];
     if (!row) return json({ error: "not_found" }, 404);
     if (Number(row.createdById) !== Number(uid)) return json({ error: "forbidden" }, 403);
-    if (["charged", "rejected", "completed", "cancelled", "canceled"].includes(String(row.status))) {
-      return json({ error: "delete_not_allowed" }, 400);
-    }
 
-    const settlementCount = await prisma.$queryRawUnsafe(
-      "SELECT COUNT(*)::int AS count FROM tenkhah_settlements WHERE tenkhah_request_id=$1",
-      id
-    );
-    if (Number(settlementCount?.[0]?.count || 0) > 0) return json({ error: "delete_has_settlements" }, 400);
+    const history = Array.isArray(row.workflowHistory) ? row.workflowHistory : [];
+    const hasWorkflowAction = history.some((event) => String(event?.type || "") !== "created");
+    const isUntouchedPending = row.status === "pending" && !hasWorkflowAction;
+    if (!isUntouchedPending) return json({ error: "delete_not_allowed" }, 409);
 
     await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(
+        "DELETE FROM tenkhah_settlement_entries WHERE settlement_id IN (SELECT id FROM tenkhah_settlements WHERE tenkhah_request_id=$1)",
+        id
+      );
+      await tx.$executeRawUnsafe("DELETE FROM tenkhah_settlements WHERE tenkhah_request_id=$1", id);
       await tx.$executeRawUnsafe("DELETE FROM tenkhah_requests WHERE id=$1", id);
       if (row.paymentRequestId) {
         await tx.paymentRequest.deleteMany({ where: { id: Number(row.paymentRequestId) } });
