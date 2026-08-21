@@ -262,6 +262,21 @@ function canUseSupplyAction(row, userId) {
   );
 }
 
+function isSupplyParticipant(row, userId) {
+  const targetUserId = Number(userId);
+  if (!targetUserId) return false;
+  if (Number(row?.createdById) === targetUserId || Number(row?.currentAssigneeUserId) === targetUserId) return true;
+  const history = historyOf(row);
+  const hasHistoryInvolvement = history.some((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    if (["assignedToUserId", "byUserId", "userId", "actorUserId", "createdById"].some((key) => Number(entry[key]) === targetUserId)) return true;
+    return Array.isArray(entry.userIds) && entry.userIds.map(String).includes(String(targetUserId));
+  });
+  if (hasHistoryInvolvement) return true;
+  const actions = Array.isArray(row?.supplyActions) ? row.supplyActions : supplyActionsOf(history);
+  return actions.some((action) => Number(action?.byUserId) === targetUserId);
+}
+
 function statusData(nextStatus, row, history, userId, actorName = "") {
   if (nextStatus === "done") {
     const at = new Date().toISOString();
@@ -308,11 +323,6 @@ export async function GET(req) {
       where: {
         docId: REQUEST_DOC_ID,
         ...(requestId ? { id: requestId } : {}),
-        OR: [
-          { currentAssigneeUserId: Number(userId) },
-          { createdById: Number(userId) },
-          { status: { in: ["approved", "rejected"] } },
-        ],
       },
       orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
       take: requestId ? 1 : 300,
@@ -324,7 +334,7 @@ export async function GET(req) {
       supplyActions: actionsMap.get(Number(row.id)) || [],
     }));
     const items = rowsWithProjects
-      .filter((row) => canUseSupplyAction(row, userId) || Number(row.createdById) === Number(userId))
+      .filter((row) => isSupplyParticipant(row, userId))
       .map(serialize);
     return json({ ok: true, items });
   } catch (error) {

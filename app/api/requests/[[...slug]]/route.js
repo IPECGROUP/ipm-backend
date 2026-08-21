@@ -568,18 +568,28 @@ function getCurrentStep(historyJson) {
   return null;
 }
 
-function wasInvolvedInRequest(row, userId) {
+function wasInvolvedInRequest(row, userId, { userUnitNames = [], roleUnitNames = [] } = {}) {
   const targetId = Number(userId);
   if (!Number.isFinite(targetId) || !row) return false;
   if (Number(row.createdById) === targetId || Number(row.currentAssigneeUserId) === targetId) return true;
 
-  return (Array.isArray(row.historyJson) ? row.historyJson : []).some((entry) => [
+  const history = Array.isArray(row.historyJson) ? row.historyJson : [];
+  const involvedByUser = history.some((entry) => [
     entry?.byUserId,
     entry?.assignedToUserId,
     entry?.targetAssigneeUserId,
     entry?.assigneeUserId,
     entry?.userId,
   ].some((value) => Number(value) === targetId));
+  if (involvedByUser) return true;
+
+  // Shared finance recipients remain involved after the request advances, so
+  // every finance member keeps the request in their history/cartable.
+  return history.some((entry) => entry?.assignedToUnit === "finance") && hasWorkflowUnitForRole({
+    roleKey: ROLE_KEYS.ACCOUNTING,
+    userUnitNames,
+    roleUnitNames,
+  });
 }
 
 function canRejectAtStep(roleKey) {
@@ -869,6 +879,11 @@ export async function GET(req, ctx) {
     const nextIndex = Number(step?.index ?? -1) + 1;
     const targetRoleKey = chain?.[nextIndex] || null;
     if (!targetRoleKey) return json({ targetRoleKey: null, users: [] });
+    // Accounting is a shared unit queue; its members must not be exposed as
+    // individual recipients for the previous actor to choose from.
+    if (targetRoleKey === ROLE_KEYS.ACCOUNTING) {
+      return json({ targetRoleKey, users: [] });
+    }
     const users = await findWorkflowUsersForRole(targetRoleKey);
     return json({ targetRoleKey, users: serializeWorkflowUsers(users) });
   }
@@ -891,7 +906,7 @@ export async function GET(req, ctx) {
       roleUnitNames: uctx.roleUnitNames,
       roleNames: uctx.roleNames,
     });
-    const canView = uctx.isMainAdmin || canAct || wasInvolvedInRequest(row, userId);
+    const canView = uctx.isMainAdmin || canAct || wasInvolvedInRequest(row, userId, uctx);
     if (!canView) return json({ error: "forbidden" }, 403);
 
     const userNamesById = await userNameMapForRows([row]);
@@ -936,7 +951,7 @@ export async function GET(req, ctx) {
       roleNames: uctx.roleNames,
     });
     const isMine = r.createdById === userId;
-    const wasInvolved = wasInvolvedInRequest(r, userId);
+    const wasInvolved = wasInvolvedInRequest(r, userId, uctx);
     const canView = uctx.isMainAdmin || canAct || wasInvolved;
     return { row: r, canAct, isMine, wasInvolved, canView };
   });
@@ -947,7 +962,7 @@ export async function GET(req, ctx) {
   } else if (view === "inbox") {
     filtered = uctx.isMainAdmin
       ? rowsWithFlags.filter((x) => !x.isMine)
-      : rowsWithFlags.filter((x) => !x.isMine && x.canAct);
+      : rowsWithFlags.filter((x) => !x.isMine && (x.canAct || x.wasInvolved));
   } else {
     filtered = rowsWithFlags.filter((x) => x.canView);
   }
@@ -1048,22 +1063,30 @@ export async function POST(req, ctx) {
 
       const nextRoleKey = chain[nextIndex];
       const workflowUsers = await findWorkflowUsersForRole(nextRoleKey);
-      const nextAssignee = workflowUsers.find((candidate) => Number(candidate.id) === targetAssigneeUserId);
-      if (!nextAssignee) return json({ error: targetAssigneeUserId ? "target_assignee_invalid" : "target_assignee_required" }, 400);
+      const isSharedFinanceStep = nextRoleKey === ROLE_KEYS.ACCOUNTING;
+      if (isSharedFinanceStep && workflowUsers.length === 0) {
+        return json({ error: "finance_users_not_found" }, 400);
+      }
+      const nextAssignee = isSharedFinanceStep
+        ? null
+        : workflowUsers.find((candidate) => Number(candidate.id) === targetAssigneeUserId);
+      if (!isSharedFinanceStep && !nextAssignee) {
+        return json({ error: targetAssigneeUserId ? "target_assignee_invalid" : "target_assignee_required" }, 400);
+      }
       history.push({
         type: "step_set",
         at: new Date().toISOString(),
         unitKind,
         roleKey: nextRoleKey,
         index: nextIndex,
-        assignedToUserId: Number(nextAssignee.id),
+        ...(nextAssignee ? { assignedToUserId: Number(nextAssignee.id) } : { assignedToUnit: "finance" }),
       });
 
       const updated = await prisma.paymentRequest.update({
         where: { id },
         data: {
           status: "pending",
-          currentAssigneeUserId: Number(nextAssignee.id),
+          currentAssigneeUserId: nextAssignee ? Number(nextAssignee.id) : null,
           historyJson: history,
         },
       });

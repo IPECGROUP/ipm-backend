@@ -238,11 +238,26 @@ function hasBeenAssignedToUser(row, userId) {
   const targetUserId = Number(userId);
   if (!targetUserId) return false;
   const history = Array.isArray(row?.historyJson) ? row.historyJson : [];
-  return history.some(
-    (entry) =>
-      entry?.type === "step_set" &&
-      Number(entry?.assignedToUserId) === targetUserId
-  );
+  return history.some((entry) => {
+    if (!entry || typeof entry !== "object") return false;
+    if (["assignedToUserId", "byUserId", "userId", "actorUserId", "createdById"].some((key) => Number(entry[key]) === targetUserId)) return true;
+    return normalizeIdList(entry.userIds).includes(String(targetUserId));
+  });
+}
+
+async function supplyActionRequestIdsForUser(userId, requestIds) {
+  const ids = Array.from(new Set((requestIds || []).map(Number).filter((id) => id > 0)));
+  if (!ids.length) return new Set();
+  try {
+    const rows = await prisma.$queryRawUnsafe(
+      `SELECT DISTINCT "request_id" FROM "supply_action_entries" WHERE "created_by"=$1 AND "request_id" = ANY($2::int[])`,
+      Number(userId),
+      ids
+    );
+    return new Set((rows || []).map((row) => Number(row.request_id)).filter(Boolean));
+  } catch {
+    return new Set();
+  }
 }
 
 function latestWorkflowMeta(row) {
@@ -708,6 +723,9 @@ export async function GET(req) {
 
     const userCtx = await userRoleAndUnitContext(userId);
     const cartableOnly = url.searchParams.get("cartable") === "1";
+    const actionParticipantRequestIds = cartableOnly
+      ? new Set()
+      : await supplyActionRequestIdsForUser(userId, rows.map((row) => row.id));
     const visibleRows = rows.filter((row) => {
       const canAct = canActOnSupplyStep({ row, userId, userCtx, mainAdmin });
       const currentStep = getCurrentStep(row.historyJson);
@@ -720,6 +738,7 @@ export async function GET(req) {
         Number(row.createdById) === Number(userId) ||
         ccUserIdsOf(row).includes(String(userId)) ||
         hasBeenAssignedToUser(row, userId) ||
+        actionParticipantRequestIds.has(Number(row.id)) ||
         isCompletedCommercialOwner ||
         (canAct && Number(row.currentAssigneeUserId) === Number(userId))
       );
