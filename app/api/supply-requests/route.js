@@ -469,22 +469,6 @@ async function findWorkflowUsers(kind, excludeUserId = null) {
     list.push(row.unit.name);
     unitNamesByRoleId.set(roleId, list);
   });
-  // Resolve each workflow stage from its configured unit first, then from the
-  // assignments (roles) mapped to that unit, and finally from users holding
-  // those assignments.
-  const workflowRoleIds = new Set(
-    unitRoleRows
-      .filter((row) => {
-        const context = { unitNames: [row.unit?.name].filter(Boolean), roleNames: [row.role?.name].filter(Boolean) };
-        if (kind === SUPPLY_STEP.PROJECT_MANAGER) return isProjectManagerContext(context);
-        if (kind === SUPPLY_STEP.COMMERCIAL) return isCommercialContext(context);
-        if (kind === "project_control_watchers") return isProjectControlContext(context);
-        if (kind === "management") return isManagementContext(context);
-        return false;
-      })
-      .map((row) => Number(row.roleId))
-      .filter(Boolean)
-  );
   const candidates = users
     .map((user) => {
       const roleIds = Array.isArray(user.roles) ? user.roles.map((row) => Number(row.roleId)).filter(Boolean) : [];
@@ -498,10 +482,9 @@ async function findWorkflowUsers(kind, excludeUserId = null) {
         ...fallbackUnitsForRoleNames(roleNames),
         ...inferredUnitNamesFromRoles(roleNames),
       ];
-      return { user, roleIds, roleNames, unitNames };
+      return { user, roleNames, unitNames };
     })
     .filter((ctx) => {
-      if (workflowRoleIds.size && !ctx.roleIds.some((roleId) => workflowRoleIds.has(roleId))) return false;
       if (kind === SUPPLY_STEP.PROJECT_MANAGER) return isProjectManagerContext(ctx);
       if (kind === SUPPLY_STEP.COMMERCIAL) return isCommercialContext(ctx);
       if (kind === "project_control_watchers") return isProjectControlContext(ctx);
