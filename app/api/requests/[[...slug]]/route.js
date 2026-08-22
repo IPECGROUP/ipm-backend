@@ -649,14 +649,14 @@ async function findWorkflowUsersForRole(roleKey, excludeUserId = null) {
   // Membership can be explicit (UserUnit) or inherited through the positions
   // assigned to a unit (UnitRoleMap -> UserRoleMap). No role-name text is read.
   const mappedMembers = await prisma.$queryRawUnsafe(`
-    SELECT DISTINCT urm."userId" AS "userId", un."name" AS "unitName"
+    SELECT DISTINCT urm."userId" AS "userId", un."name" AS "unitName", un."code" AS "unitCode"
     FROM "UserRoleMap" urm
     INNER JOIN "UnitRoleMap" unit_role ON unit_role."roleId" = urm."roleId"
     INNER JOIN "Unit" un ON un."id" = unit_role."unitId"
   `).catch(() => []);
   const mappedUserIds = new Set(
     mappedMembers
-      .filter((row) => hasWorkflowUnitForRole({ roleKey, userUnitNames: [row?.unitName] }))
+      .filter((row) => hasWorkflowUnitForRole({ roleKey, userUnitNames: [row?.unitName, row?.unitCode] }))
       .map((row) => Number(row.userId))
   );
   let users = [];
@@ -671,7 +671,7 @@ async function findWorkflowUsersForRole(roleKey, excludeUserId = null) {
   }
   return users.filter((candidate) => {
     const userUnitNames = [
-      ...(Array.isArray(candidate.units) ? candidate.units.map((row) => row.unit?.name).filter(Boolean) : []),
+      ...(Array.isArray(candidate.units) ? candidate.units.flatMap((row) => [row.unit?.name, row.unit?.code]).filter(Boolean) : []),
     ];
     return candidate.isActive !== false && (mappedUserIds.has(Number(candidate.id)) || hasWorkflowUnitForRole({ roleKey, userUnitNames }));
   });
@@ -780,10 +780,10 @@ async function getUserContext(req, userId) {
       ...unitRoleRows.map((row) => row?.unit?.name).filter(Boolean),
     ])
   );
-  const userUnitNames = Array.from(new Set((userUnits || []).map((row) => row?.unit?.name).filter(Boolean)));
+  const userUnitNames = Array.from(new Set((userUnits || []).flatMap((row) => [row?.unit?.name, row?.unit?.code]).filter(Boolean)));
   const roleUnitNames = Array.from(
     new Set([
-      ...unitRoleRows.map((row) => row?.unit?.name).filter(Boolean),
+      ...unitRoleRows.flatMap((row) => [row?.unit?.name, row?.unit?.code]).filter(Boolean),
     ])
   );
   const unitKinds = Array.from(

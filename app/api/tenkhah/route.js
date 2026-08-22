@@ -46,7 +46,7 @@ async function requests(where = "", params = []) {
 async function settlements(ids) { if (!ids.length) return []; const data = await prisma.$queryRawUnsafe(`SELECT s.id,s.tenkhah_request_id AS "tenkhahRequestId",s.created_by_id AS "createdById",s.current_assignee_user_id AS "currentAssigneeUserId",s.stage,s.status,u.name AS "currentAssigneeName",u.username AS "currentAssigneeUsername" FROM tenkhah_settlements s LEFT JOIN "User" u ON u.id=s.current_assignee_user_id WHERE s.tenkhah_request_id=ANY($1::int[]) ORDER BY s.created_at DESC`, ids); const es = await prisma.$queryRawUnsafe(`SELECT id,settlement_id AS "settlementId",expense_date AS "expenseDate",description,budget_code AS "budgetCode",amount::text AS amount,file_name AS "fileName",file_url AS "fileUrl" FROM tenkhah_settlement_entries WHERE settlement_id=ANY($1::int[]) ORDER BY id`, data.map(x => x.id)); return data.map(s => ({ ...s, entries: es.filter(e => +e.settlementId === +s.id) })); }
 const norm = (value = "") => String(value).toLowerCase().replace(/ي/g, "ی").replace(/ك/g, "ک").replace(/\s+/g, " ");
 function isWorkflowUnitMember(stage, links = []) {
-  const unitNames = (Array.isArray(links) ? links : []).map((link) => norm(link?.unit?.name)).filter(Boolean);
+  const unitNames = (Array.isArray(links) ? links : []).flatMap((link) => [norm(link?.unit?.name), norm(link?.unit?.code)]).filter(Boolean);
   const isProjectManagement = unitNames.some((name) => name.includes(norm("مدیریت پروژه")) || name.includes("project management"));
   if (stage === "project_manager") return isProjectManagement;
   // A user can legitimately belong to both project management and senior
@@ -64,14 +64,14 @@ async function settlementRecipients(stage, excludeId) {
   // A user's membership can come from a direct unit assignment or from one of
   // that unit's designated positions (UnitRoleMap -> UserRoleMap).
   const mappedMembers = await prisma.$queryRawUnsafe(`
-    SELECT DISTINCT urm."userId" AS "userId", un."name" AS "unitName"
+    SELECT DISTINCT urm."userId" AS "userId", un."name" AS "unitName", un."code" AS "unitCode"
     FROM "UserRoleMap" urm
     INNER JOIN "UnitRoleMap" unit_role ON unit_role."roleId" = urm."roleId"
     INNER JOIN "Unit" un ON un."id" = unit_role."unitId"
   `).catch(() => []);
   const mappedUserIds = new Set(
     mappedMembers
-      .filter((row) => isWorkflowUnitMember(stage, [{ unit: { name: row?.unitName } }]))
+      .filter((row) => isWorkflowUnitMember(stage, [{ unit: { name: row?.unitName, code: row?.unitCode } }]))
       .map((row) => Number(row.userId))
   );
   const users = await prisma.user.findMany({ include: { units: { include: { unit: true } }, roles: { include: { role: true } } }, orderBy: { id: "asc" } });
