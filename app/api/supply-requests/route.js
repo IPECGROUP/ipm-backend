@@ -548,6 +548,7 @@ async function nextApproveRoleKeyForRow(row, step) {
 function canActOnSupplyStep({ row, userId }) {
   const step = getCurrentStep(row?.historyJson);
   if (!step) return false;
+  const isCreator = Number(row.createdById) === Number(userId);
   if (step.roleKey === SUPPLY_STEP.REQUESTER) {
     const latestAction = latestWorkflowAction(row?.historyJson);
     if (isCreator) return Number(row.currentAssigneeUserId) === Number(userId) && latestAction?.type === "returned";
