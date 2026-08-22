@@ -24,9 +24,10 @@ async function nextSharedPaymentSerial(requestDate, projectId) {
 let ready;
 async function ensure() {
   if (!ready) ready = (async () => {
-    await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS tenkhah_requests (id SERIAL PRIMARY KEY, request_number VARCHAR(120) NOT NULL, request_date VARCHAR(20) NOT NULL, project_id INTEGER NOT NULL, requested_amount BIGINT NOT NULL, currency VARCHAR(12) NOT NULL DEFAULT 'IRR', unregistered_balance BIGINT NOT NULL DEFAULT 0, unsettled_balance BIGINT NOT NULL DEFAULT 0, created_by_id INTEGER NOT NULL, project_manager_id INTEGER NOT NULL, finance_user_id INTEGER, current_assignee_user_id INTEGER, stage VARCHAR(20) NOT NULL DEFAULT 'project_manager', status VARCHAR(20) NOT NULL DEFAULT 'pending', manager_approved_date VARCHAR(20), project_liquidity BIGINT, charged_date VARCHAR(20), charged_amount BIGINT, created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
+    await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS tenkhah_requests (id SERIAL PRIMARY KEY, request_number VARCHAR(120) NOT NULL, request_date VARCHAR(20) NOT NULL, project_id INTEGER NOT NULL, requested_amount BIGINT NOT NULL, purpose TEXT NOT NULL DEFAULT '', currency VARCHAR(12) NOT NULL DEFAULT 'IRR', unregistered_balance BIGINT NOT NULL DEFAULT 0, unsettled_balance BIGINT NOT NULL DEFAULT 0, created_by_id INTEGER NOT NULL, project_manager_id INTEGER NOT NULL, finance_user_id INTEGER, current_assignee_user_id INTEGER, stage VARCHAR(20) NOT NULL DEFAULT 'project_manager', status VARCHAR(20) NOT NULL DEFAULT 'pending', manager_approved_date VARCHAR(20), project_liquidity BIGINT, charged_date VARCHAR(20), charged_amount BIGINT, created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
     await prisma.$executeRawUnsafe("ALTER TABLE tenkhah_requests ADD COLUMN IF NOT EXISTS payment_request_id INTEGER");
     await prisma.$executeRawUnsafe("ALTER TABLE tenkhah_requests ADD COLUMN IF NOT EXISTS beneficiary_user_id INTEGER");
+    await prisma.$executeRawUnsafe("ALTER TABLE tenkhah_requests ADD COLUMN IF NOT EXISTS purpose TEXT NOT NULL DEFAULT ''");
     await prisma.$executeRawUnsafe("ALTER TABLE tenkhah_requests ADD COLUMN IF NOT EXISTS workflow_history JSONB NOT NULL DEFAULT '[]'::jsonb");
     await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS tenkhah_settlements (id SERIAL PRIMARY KEY, tenkhah_request_id INTEGER NOT NULL, created_by_id INTEGER NOT NULL, current_assignee_user_id INTEGER, stage VARCHAR(32) NOT NULL DEFAULT 'control_project', status VARCHAR(24) NOT NULL DEFAULT 'pending', created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
     await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS tenkhah_settlement_entries (id SERIAL PRIMARY KEY, settlement_id INTEGER NOT NULL, expense_date VARCHAR(20) NOT NULL, description TEXT NOT NULL DEFAULT '', budget_code VARCHAR(80) NOT NULL, amount BIGINT NOT NULL, file_name VARCHAR(255), file_url TEXT, created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP)`);
@@ -37,7 +38,7 @@ async function ensure() {
   return ready;
 }
 async function requests(where = "", params = []) {
-  return prisma.$queryRawUnsafe(`SELECT t.id,t.request_number AS "requestNumber",t.request_date AS "requestDate",t.project_id AS "projectId",t.requested_amount::text AS "requestedAmount",t.currency,
+  return prisma.$queryRawUnsafe(`SELECT t.id,t.request_number AS "requestNumber",t.request_date AS "requestDate",t.project_id AS "projectId",t.requested_amount::text AS "requestedAmount",t.purpose,t.currency,
     GREATEST(0,t.requested_amount-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id),0))::text AS "unregisteredBalance",
     GREATEST(0,t.requested_amount-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id AND s.status='completed'),0))::text AS "unsettledBalance",
     t.payment_request_id AS "paymentRequestId",t.created_by_id AS "createdById",COALESCE(t.beneficiary_user_id,t.created_by_id) AS "beneficiaryUserId",beneficiary.name AS "beneficiaryName",beneficiary.username AS "beneficiaryUsername",t.project_manager_id AS "projectManagerId",t.finance_user_id AS "financeUserId",t.current_assignee_user_id AS "currentAssigneeUserId",t.stage,t.status,t.workflow_history AS "workflowHistory",t.created_at AS "createdAt",t.manager_approved_date AS "managerApprovedDate",t.project_liquidity::text AS "projectLiquidity",t.charged_date AS "chargedDate",t.charged_amount::text AS "chargedAmount",p.code AS "projectCode",p.name AS "projectName",creator.name AS "requesterName",creator.username AS "requesterUsername",assignee.name AS "currentAssigneeName" FROM tenkhah_requests t LEFT JOIN projects p ON p.id=t.project_id LEFT JOIN "User" creator ON creator.id=t.created_by_id LEFT JOIN "User" beneficiary ON beneficiary.id=COALESCE(t.beneficiary_user_id,t.created_by_id) LEFT JOIN "User" assignee ON assignee.id=t.current_assignee_user_id ${where} ORDER BY t.created_at DESC`, ...params);
@@ -118,7 +119,7 @@ export async function POST(r) {
     const pid = +b.projectId, mid = +b.projectManagerId, beneficiaryId = +b.beneficiaryUserId, w = amount(b.amount);
     const createdByFinance = await isFinanceUser(uid);
     const beneficiary = beneficiaryId ? await prisma.user.findUnique({ where: { id: beneficiaryId }, select: { id: true } }) : null;
-    if (!String(b.requestDate || "").trim() || !pid || !mid || !beneficiary || w <= 0n) return json({ error: "invalid_input" }, 400);
+    if (!String(b.requestDate || "").trim() || !String(b.purpose || "").trim() || !pid || !mid || !beneficiary || w <= 0n) return json({ error: "invalid_input" }, 400);
     const initialAssigneeId = mid;
     const initialStage = createdByFinance ? "management" : "project_manager";
     const requestNumber = await nextSharedPaymentSerial(b.requestDate, pid);
@@ -127,11 +128,11 @@ export async function POST(r) {
     // payment-request API, so its workflow can never be mixed with tenkhah.
     const linkedPayment = await prisma.paymentRequest.create({ data: {
       serial: requestNumber, dateJalali: String(b.requestDate), scope: "tenkhah",
-      title: "تنخواه", amount: w, projectId: pid, docId: "tenkhah_request",
+      title: `تنخواه - ${String(b.purpose).trim()}`, amount: w, projectId: pid, docId: "tenkhah_request",
       createdById: uid, currentAssigneeUserId: initialAssigneeId, status: "pending",
     } });
     const history = JSON.stringify([{ type: "created", at: new Date().toISOString(), byUserId: uid }]);
-    await prisma.$executeRawUnsafe("INSERT INTO tenkhah_requests (payment_request_id,request_number,request_date,project_id,requested_amount,currency,unregistered_balance,unsettled_balance,created_by_id,beneficiary_user_id,project_manager_id,finance_user_id,current_assignee_user_id,project_liquidity,stage,workflow_history) VALUES ($1,$2,$3,$4,$5::bigint,$6,$7::bigint,$8::bigint,$9,$10,$11,$12,$13,$14::bigint,$15,$16::jsonb)", linkedPayment.id, requestNumber, String(b.requestDate), pid, String(w), String(b.currency || ""), String(w), String(w), uid, beneficiaryId, initialAssigneeId, null, initialAssigneeId, String(amount(b.projectLiquidity)), initialStage, history);
+    await prisma.$executeRawUnsafe("INSERT INTO tenkhah_requests (payment_request_id,request_number,request_date,project_id,requested_amount,purpose,currency,unregistered_balance,unsettled_balance,created_by_id,beneficiary_user_id,project_manager_id,finance_user_id,current_assignee_user_id,project_liquidity,stage,workflow_history) VALUES ($1,$2,$3,$4,$5::bigint,$6,$7,$8::bigint,$9::bigint,$10,$11,$12,$13,$14,$15::bigint,$16,$17::jsonb)", linkedPayment.id, requestNumber, String(b.requestDate), pid, String(w), String(b.purpose).trim(), String(b.currency || ""), String(w), String(w), uid, beneficiaryId, initialAssigneeId, null, initialAssigneeId, String(amount(b.projectLiquidity)), initialStage, history);
     return json({ ok: true, requestNumber }, 201);
   } catch (e) { return json({ error: "internal_error", message: String(e?.message || e) }, 500); }
 }

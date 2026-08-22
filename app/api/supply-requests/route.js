@@ -469,6 +469,22 @@ async function findWorkflowUsers(kind, excludeUserId = null) {
     list.push(row.unit.name);
     unitNamesByRoleId.set(roleId, list);
   });
+  // Resolve each workflow stage from its configured unit first, then from the
+  // assignments (roles) mapped to that unit, and finally from users holding
+  // those assignments.
+  const workflowRoleIds = new Set(
+    unitRoleRows
+      .filter((row) => {
+        const context = { unitNames: [row.unit?.name].filter(Boolean), roleNames: [row.role?.name].filter(Boolean) };
+        if (kind === SUPPLY_STEP.PROJECT_MANAGER) return isProjectManagerContext(context);
+        if (kind === SUPPLY_STEP.COMMERCIAL) return isCommercialContext(context);
+        if (kind === "project_control_watchers") return isProjectControlContext(context);
+        if (kind === "management") return isManagementContext(context);
+        return false;
+      })
+      .map((row) => Number(row.roleId))
+      .filter(Boolean)
+  );
   const candidates = users
     .map((user) => {
       const roleIds = Array.isArray(user.roles) ? user.roles.map((row) => Number(row.roleId)).filter(Boolean) : [];
@@ -482,9 +498,10 @@ async function findWorkflowUsers(kind, excludeUserId = null) {
         ...fallbackUnitsForRoleNames(roleNames),
         ...inferredUnitNamesFromRoles(roleNames),
       ];
-      return { user, roleNames, unitNames };
+      return { user, roleIds, roleNames, unitNames };
     })
     .filter((ctx) => {
+      if (workflowRoleIds.size && !ctx.roleIds.some((roleId) => workflowRoleIds.has(roleId))) return false;
       if (kind === SUPPLY_STEP.PROJECT_MANAGER) return isProjectManagerContext(ctx);
       if (kind === SUPPLY_STEP.COMMERCIAL) return isCommercialContext(ctx);
       if (kind === "project_control_watchers") return isProjectControlContext(ctx);
@@ -521,7 +538,9 @@ function serializeWorkflowUsers(users = []) {
 }
 
 async function requireWorkflowAssignee(kind, selectedUserId, excludeUserId, errorCode) {
-  const users = await findWorkflowUsers(kind, excludeUserId);
+  // A requester who has the required assignment may also be selected for the
+  // next step, including their own request.
+  const users = await findWorkflowUsers(kind);
   if (!users.length) return { error: errorCode };
   const selected = selectedUserId ? users.find((user) => Number(user.id) === Number(selectedUserId)) : null;
   if (!selected) return { error: selectedUserId ? "target_assignee_invalid" : "target_assignee_required" };
@@ -546,15 +565,11 @@ async function nextApproveRoleKeyForRow(row, step) {
 function canActOnSupplyStep({ row, userId }) {
   const step = getCurrentStep(row?.historyJson);
   if (!step) return false;
-  const isCreator = Number(row.createdById) === Number(userId);
   if (step.roleKey === SUPPLY_STEP.REQUESTER) {
     const latestAction = latestWorkflowAction(row?.historyJson);
     if (isCreator) return Number(row.currentAssigneeUserId) === Number(userId) && latestAction?.type === "returned";
     return Number(row.currentAssigneeUserId) === Number(userId);
   }
-  // A requester normally cannot act on later stages; the exception is a
-  // requester who is explicitly assigned the commercial/supply stage.
-  if (isCreator && step.roleKey !== SUPPLY_STEP.COMMERCIAL) return false;
   if (Number(row.currentAssigneeUserId) === Number(userId)) return true;
   return false;
 }
@@ -649,7 +664,7 @@ export async function GET(req) {
       const targetRoleKey = nextRoleKeyForCreatorContext(creatorCtx);
       if (!targetRoleKey) return json({ targetRoleKey: null, users: [] });
       const project = await resolveProject(toPositiveInt(url.searchParams.get("projectId")));
-      const users = await findInitialWorkflowUsers(targetRoleKey, project, userId);
+      const users = await findInitialWorkflowUsers(targetRoleKey, project);
       return json({ targetRoleKey, users: serializeWorkflowUsers(users) });
     }
 
@@ -665,7 +680,7 @@ export async function GET(req) {
       const step = getCurrentStep(row.historyJson);
       const targetRoleKey = await nextApproveRoleKeyForRow(row, step);
       if (!targetRoleKey) return json({ targetRoleKey: null, users: [] });
-      const users = await findWorkflowUsers(targetRoleKey, targetRoleKey === SUPPLY_STEP.COMMERCIAL ? null : row.createdById);
+      const users = await findWorkflowUsers(targetRoleKey);
       return json({ targetRoleKey, users: serializeWorkflowUsers(users) });
     }
 
@@ -804,9 +819,6 @@ export async function POST(req) {
       const history = Array.isArray(row.historyJson) ? row.historyJson : [];
       const step = getCurrentStep(history);
       if (!step) return json({ error: "no_active_step" }, 400);
-      if (Number(row.createdById) === Number(userId) && step.roleKey !== SUPPLY_STEP.REQUESTER) {
-        return json({ error: "forbidden" }, 403);
-      }
       if (step.roleKey === SUPPLY_STEP.REQUESTER && latestWorkflowAction(history)?.type !== "returned") {
         return json({ error: "forbidden" }, 403);
       }
@@ -942,7 +954,7 @@ export async function POST(req) {
     const initialTargetRoleKey = nextRoleKeyForCreatorContext(creatorCtxForRouting);
     const initialAssignee = initialTargetRoleKey
       ? await (async () => {
-          const users = await findInitialWorkflowUsers(initialTargetRoleKey, project, userId);
+          const users = await findInitialWorkflowUsers(initialTargetRoleKey, project);
           const selected = users.find((user) => Number(user.id) === Number(targetAssigneeUserId));
           if (!users.length) return { error: "workflow_user_not_found" };
           if (!selected) return { error: targetAssigneeUserId ? "target_assignee_invalid" : "target_assignee_required" };
