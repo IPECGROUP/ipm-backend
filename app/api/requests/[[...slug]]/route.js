@@ -568,7 +568,7 @@ function getCurrentStep(historyJson) {
   return null;
 }
 
-function wasInvolvedInRequest(row, userId, { userUnitNames = [], roleUnitNames = [] } = {}) {
+function wasInvolvedInRequest(row, userId, { userUnitNames = [], roleUnitNames = [], isFinanceAppointmentMember = false } = {}) {
   const targetId = Number(userId);
   if (!Number.isFinite(targetId) || !row) return false;
   if (Number(row.createdById) === targetId || Number(row.currentAssigneeUserId) === targetId) return true;
@@ -585,11 +585,7 @@ function wasInvolvedInRequest(row, userId, { userUnitNames = [], roleUnitNames =
 
   // Shared finance recipients remain involved after the request advances, so
   // every finance member keeps the request in their history/cartable.
-  return history.some((entry) => entry?.assignedToUnit === "finance") && hasWorkflowUnitForRole({
-    roleKey: ROLE_KEYS.ACCOUNTING,
-    userUnitNames,
-    roleUnitNames,
-  });
+  return history.some((entry) => entry?.assignedToUnit === "finance") && isFinanceAppointmentMember;
 }
 
 function canRejectAtStep(roleKey) {
@@ -623,14 +619,14 @@ function hasWorkflowUnitForRole({ roleKey, userUnitNames, roleUnitNames = [] }) 
   return false;
 }
 
-function canActOnStep({ row, userId, userUnitNames, roleUnitNames }) {
+function canActOnStep({ row, userId, userUnitNames, roleUnitNames, isFinanceAppointmentMember = false }) {
   const step = getCurrentStep(row.historyJson);
   if (!step) return false;
 
   // Accounting is deliberately a shared queue.  A legacy assignee value must
   // never hide a financial request from the rest of the finance unit.
   if (step.roleKey === ROLE_KEYS.ACCOUNTING) {
-    return hasWorkflowUnitForRole({ roleKey: ROLE_KEYS.ACCOUNTING, userUnitNames, roleUnitNames });
+    return isFinanceAppointmentMember;
   }
 
   // ارجاعِ مشخص به کاربر، اولویت دارد و کارتابل را فقط برای همان فرد می‌سازد.
@@ -673,7 +669,10 @@ async function findWorkflowUsersForRole(roleKey, excludeUserId = null) {
     const userUnitNames = [
       ...(Array.isArray(candidate.units) ? candidate.units.flatMap((row) => [row.unit?.name, row.unit?.code]).filter(Boolean) : []),
     ];
-    return candidate.isActive !== false && (mappedUserIds.has(Number(candidate.id)) || hasWorkflowUnitForRole({ roleKey, userUnitNames }));
+    const hasUnitAppointment = mappedUserIds.has(Number(candidate.id));
+    return candidate.isActive !== false && (roleKey === ROLE_KEYS.ACCOUNTING
+      ? hasUnitAppointment
+      : hasUnitAppointment || hasWorkflowUnitForRole({ roleKey, userUnitNames }));
   });
 }
 
@@ -786,6 +785,8 @@ async function getUserContext(req, userId) {
       ...unitRoleRows.flatMap((row) => [row?.unit?.name, row?.unit?.code]).filter(Boolean),
     ])
   );
+  const isFinanceAppointmentMember = (await findWorkflowUsersForRole(ROLE_KEYS.ACCOUNTING))
+    .some((candidate) => Number(candidate.id) === Number(userId));
   const unitKinds = Array.from(
     new Set([
       ...mappedUnits.map((x) => x.kind).filter(Boolean),
@@ -829,6 +830,7 @@ async function getUserContext(req, userId) {
     unitNames,
     userUnitNames,
     roleUnitNames,
+    isFinanceAppointmentMember,
     roleNames,
     roleKeys: detectUserRoleKeys(roleNames),
   };
@@ -878,7 +880,7 @@ export async function GET(req, ctx) {
   if (slug.length === 0 && Number.isFinite(nextRecipientsForItem) && nextRecipientsForItem > 0) {
     const row = await prisma.paymentRequest.findUnique({ where: { id: nextRecipientsForItem } });
     if (!row || isSupplyRequest(row)) return json({ error: "not_found" }, 404);
-    const canAct = canActOnStep({ row, userId, userRoleKeys: uctx.roleKeys, userUnitNames: uctx.userUnitNames, roleUnitNames: uctx.roleUnitNames, roleNames: uctx.roleNames });
+    const canAct = canActOnStep({ row, userId, userRoleKeys: uctx.roleKeys, userUnitNames: uctx.userUnitNames, roleUnitNames: uctx.roleUnitNames, isFinanceAppointmentMember: uctx.isFinanceAppointmentMember });
     if (!canAct) return json({ error: "forbidden" }, 403);
     const step = getCurrentStep(row.historyJson);
     const chain = getWorkflowChainForUnit(row.scope);
@@ -910,7 +912,7 @@ export async function GET(req, ctx) {
       userRoleKeys: uctx.roleKeys,
       userUnitNames: uctx.userUnitNames,
       roleUnitNames: uctx.roleUnitNames,
-      roleNames: uctx.roleNames,
+      isFinanceAppointmentMember: uctx.isFinanceAppointmentMember,
     });
     const canView = uctx.isMainAdmin || canAct || wasInvolvedInRequest(row, userId, uctx);
     if (!canView) return json({ error: "forbidden" }, 403);
@@ -954,7 +956,7 @@ export async function GET(req, ctx) {
       userRoleKeys: uctx.roleKeys,
       userUnitNames: uctx.userUnitNames,
       roleUnitNames: uctx.roleUnitNames,
-      roleNames: uctx.roleNames,
+      isFinanceAppointmentMember: uctx.isFinanceAppointmentMember,
     });
     const isMine = r.createdById === userId;
     const wasInvolved = wasInvolvedInRequest(r, userId, uctx);
@@ -1024,7 +1026,7 @@ export async function POST(req, ctx) {
       userRoleKeys: uctx.roleKeys,
       userUnitNames: uctx.userUnitNames,
       roleUnitNames: uctx.roleUnitNames,
-      roleNames: uctx.roleNames,
+      isFinanceAppointmentMember: uctx.isFinanceAppointmentMember,
     })) {
       return json({ error: "forbidden" }, 403);
     }
