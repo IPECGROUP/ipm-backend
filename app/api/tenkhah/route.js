@@ -1,4 +1,5 @@
 import { prisma } from "../../../lib/prisma";
+import { nextSharedPaymentSerial } from "../../../lib/paymentSerial";
 
 export const runtime = "nodejs";
 const json = (data, status = 200) => Response.json(data, { status });
@@ -6,20 +7,6 @@ const cookie = (r, n) => String(r.headers.get("cookie") || "").match(new RegExp(
 async function userIdOf(r) { const raw = r.headers.get("x-user-id") || cookie(r, "user_id"); if (/^\d+$/.test(raw)) return +raw; const sid = cookie(r, "ipm_session"); const s = sid && await prisma.session.findUnique({ where: { id: sid } }).catch(() => null); return s?.userId || (process.env.NODE_ENV !== "production" ? 1 : null); }
 const amount = (v) => { const x = String(v ?? "").replace(/[۰-۹]/g, d => "۰۱۲۳۴۵۶۷۸۹".indexOf(d)).replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/[^\d]/g, ""); return x ? BigInt(x) : 0n; };
 const englishDigits = (value = "") => String(value).replace(/[۰-۹]/g, d => "۰۱۲۳۴۵۶۷۸۹".indexOf(d)).replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d));
-
-async function nextSharedPaymentSerial(requestDate, projectId) {
-  const year = englishDigits(requestDate).match(/^(\d{4})/)?.[1]?.slice(-2) || "00";
-  const project = await prisma.project.findUnique({ where: { id: Number(projectId) }, select: { code: true } });
-  const projectCode = String(project?.code || "").replace(/\D/g, "");
-  if (!projectCode) throw new Error("project_not_found");
-  const rows = await prisma.paymentRequest.findMany({ select: { serial: true } });
-  const pattern = new RegExp(`^${year}/(?:\\d{3}/)?(\\d{4})$`);
-  const max = rows.reduce((highest, row) => {
-    const match = englishDigits(row?.serial || "").trim().match(pattern);
-    return match ? Math.max(highest, Number(match[1]) || 0) : highest;
-  }, 0);
-  return `${year}/${projectCode}/${String(max + 1).padStart(4, "0")}`;
-}
 
 let ready;
 async function ensure() {
@@ -132,7 +119,7 @@ export async function POST(r) {
     if (!String(b.requestDate || "").trim() || !String(b.purpose || "").trim() || !pid || !mid || !beneficiary || w <= 0n) return json({ error: "invalid_input" }, 400);
     const initialAssigneeId = mid;
     const initialStage = createdByFinance ? "management" : "project_manager";
-    const requestNumber = await nextSharedPaymentSerial(b.requestDate, pid);
+    const requestNumber = await nextSharedPaymentSerial(prisma, { dateJalali: b.requestDate, projectId: pid });
     // A tenkhah remains in its own tables and workflow.  The linked payment
     // request is a tracking identity only and is excluded from the normal
     // payment-request API, so its workflow can never be mixed with tenkhah.

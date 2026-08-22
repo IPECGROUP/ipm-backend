@@ -4,6 +4,7 @@ import { fallbackUnitsForRoleNames } from "../../../../lib/orgStructureFallback"
 import { unlink } from "node:fs/promises";
 import path from "node:path";
 import { requirePagePermission } from "../../../../lib/pagePermissions";
+import { nextSharedPaymentSerial } from "../../../../lib/paymentSerial";
 
 export const runtime = "nodejs";
 
@@ -180,47 +181,6 @@ function normalizeDigits(value = "") {
   return String(value ?? "")
     .replace(/[\u06F0-\u06F9]/g, (d) => String(d.charCodeAt(0) - 0x06F0))
     .replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660));
-}
-
-function jalaliYY(value) {
-  const fromValue = normalizeDigits(String(value || "")).match(/^(\d{4})/)?.[1];
-  if (fromValue) return fromValue.slice(-2);
-  try {
-    const year = new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric" }).format(new Date());
-    return normalizeDigits(year).slice(-2);
-  } catch {
-    return "00";
-  }
-}
-
-function normalizeProjectCode(value = "") {
-  const raw = normalizeDigits(value).trim();
-  if (/^\d{3}$/.test(raw)) return raw;
-  return raw.match(/^(\d{3})/)?.[1] || "";
-}
-
-async function makePaymentSerial({ dateJalali, projectCode = "" }) {
-  const yy = jalaliYY(dateJalali);
-  const prefix = `${yy}/`;
-  const rows = await prisma.paymentRequest.findMany({
-    where: {
-      serial: { startsWith: prefix },
-      ...paymentRequestOnlyWhere,
-    },
-    select: { serial: true },
-    take: 1000,
-  });
-
-  let maxSeq = 0;
-  const re = new RegExp(`^${yy}/(?:\\d{3}/)?(\\d{4})$`);
-  for (const row of rows) {
-    const m = normalizeDigits(row?.serial || "").match(re);
-    if (m) maxSeq = Math.max(maxSeq, Number(m[1]) || 0);
-  }
-
-  const sequence = String(maxSeq + 1).padStart(4, "0");
-  const normalizedProjectCode = normalizeProjectCode(projectCode);
-  return normalizedProjectCode ? `${prefix}${normalizedProjectCode}/${sequence}` : `${prefix}${sequence}`;
 }
 
 function bigintToJson(v) {
@@ -1175,8 +1135,7 @@ export async function POST(req, ctx) {
   if (!initialAssignee) return json({ error: targetAssigneeUserId ? "target_assignee_invalid" : "target_assignee_required" }, 400);
 
   const enforcedScope = "projects";
-  const projectForSerial = await prisma.project.findUnique({ where: { id: data.projectId }, select: { code: true } });
-  const generatedSerial = await makePaymentSerial({ dateJalali: data.dateJalali, projectCode: projectForSerial?.code });
+  const generatedSerial = await nextSharedPaymentSerial(prisma, { dateJalali: data.dateJalali, projectId: data.projectId });
   if (!generatedSerial) return json({ error: "serial_generation_failed" }, 400);
 
   const now = new Date();
