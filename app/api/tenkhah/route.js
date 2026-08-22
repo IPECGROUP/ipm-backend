@@ -89,7 +89,9 @@ export async function GET(r) {
     if (balanceProjectId && balanceBeneficiaryId) { const rows = await prisma.$queryRawUnsafe(`SELECT COALESCE(SUM(GREATEST(0,t.requested_amount-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id),0))),0)::text AS "unregisteredBalance",COALESCE(SUM(GREATEST(0,t.requested_amount-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id AND s.status='completed'),0))),0)::text AS "unsettledBalance",COALESCE(SUM(CASE WHEN t.status='charged' THEN COALESCE(t.charged_amount,0) ELSE 0 END),0)::text AS "receivedAmount" FROM tenkhah_requests t WHERE t.project_id=$1 AND COALESCE(t.beneficiary_user_id,t.created_by_id)=$2`, balanceProjectId, balanceBeneficiaryId); return json(rows[0] || { unregisteredBalance: "0", unsettledBalance: "0", receivedAmount: "0" }); }
     const inbox = url.searchParams.get("inbox") === "1";
     const financeMember = await isFinanceUser(uid);
-    const sharedFinanceWhere = financeMember ? " OR (t.stage='finance' AND t.current_assignee_user_id IS NULL AND t.status='pending')" : "";
+    // Finance is a shared queue.  Do not let an old individual assignee hide
+    // the request from the other members of the finance unit.
+    const sharedFinanceWhere = financeMember ? " OR (t.stage='finance' AND t.status='pending')" : "";
     const historicalFinanceWhere = financeMember ? " OR COALESCE(t.workflow_history,'[]'::jsonb) @> '[{\"assignedToUnit\":\"finance\"}]'::jsonb" : "";
     const items = await requests(inbox
       ? `WHERE t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${sharedFinanceWhere}${historicalFinanceWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND s.current_assignee_user_id=$1)`
@@ -97,7 +99,7 @@ export async function GET(r) {
     const all = await settlements(items.map(x => x.id)); const shown = inbox ? all.filter(s => +s.currentAssigneeUserId === uid && s.status === "pending") : all.filter(s => +s.createdById === uid || +s.currentAssigneeUserId === uid);
     return json({ items: items.map(x => ({
       ...x,
-      canAct: x.status === "pending" && (+x.currentAssigneeUserId === uid || (financeMember && x.stage === "finance" && x.currentAssigneeUserId == null)),
+      canAct: x.status === "pending" && (x.stage === "finance" ? financeMember : +x.currentAssigneeUserId === uid),
       settlements: all.filter(s => +s.tenkhahRequestId === +x.id),
     })), settlements: shown });
   } catch (e) { return json({ error: "internal_error", message: String(e?.message || e) }, 500); }
@@ -151,7 +153,9 @@ export async function PATCH(r) {
       return json({ ok: true });
     }
     const row = (await requests("WHERE t.id=$1", [+b.id]))[0];
-    const canActOnSharedFinance = row?.stage === "finance" && row?.currentAssigneeUserId == null && await isFinanceUser(uid);
+    // The financial stage is shared by all finance members, including for
+    // legacy rows that still have an individual assignee value.
+    const canActOnSharedFinance = row?.stage === "finance" && await isFinanceUser(uid);
     if (!uid || !row || (+row.currentAssigneeUserId !== uid && !canActOnSharedFinance) || row.status !== "pending") return json({ error: "not_allowed" }, 403);
     const decision = ["approve", "return", "reject"].includes(b.action) ? b.action : "approve";
     const history = Array.isArray(row.workflowHistory) ? row.workflowHistory : [];

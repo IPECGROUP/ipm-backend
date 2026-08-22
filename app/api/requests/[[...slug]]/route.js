@@ -627,6 +627,12 @@ function canActOnStep({ row, userId, userUnitNames, roleUnitNames }) {
   const step = getCurrentStep(row.historyJson);
   if (!step) return false;
 
+  // Accounting is deliberately a shared queue.  A legacy assignee value must
+  // never hide a financial request from the rest of the finance unit.
+  if (step.roleKey === ROLE_KEYS.ACCOUNTING) {
+    return hasWorkflowUnitForRole({ roleKey: ROLE_KEYS.ACCOUNTING, userUnitNames, roleUnitNames });
+  }
+
   // ارجاعِ مشخص به کاربر، اولویت دارد و کارتابل را فقط برای همان فرد می‌سازد.
   if (row.currentAssigneeUserId != null) return Number(row.currentAssigneeUserId) === Number(userId);
 
