@@ -546,6 +546,8 @@ model PaymentRequest {
   description String?
 
   amount         BigInt
+  exchangeRate   BigInt?
+  rialAmount     BigInt?
   cashAmount     BigInt?
   cashDateJalali String?
 

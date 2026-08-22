@@ -163,13 +163,13 @@ async function getProjectLiquidityRemaining(projectId) {
     ),
     prisma.paymentRequest.findMany({
       where: { projectId: Number(projectId) },
-      select: { amount: true, historyJson: true },
+      select: { amount: true, rialAmount: true, historyJson: true },
     }),
   ]);
   const allocated = toBigIntSafe(allocatedRows?.[0]?.amount) ?? 0n;
   const committed = requests.reduce(
     (sum, request) => approvedByProjectManager(request.historyJson)
-      ? sum + (toBigIntSafe(request.amount) ?? 0n)
+      ? sum + (toBigIntSafe(request.rialAmount ?? request.amount) ?? 0n)
       : sum,
     0n
   );
@@ -341,6 +341,8 @@ function normalizeOut(row, userNamesById = null) {
     description: row.description,
 
     amount: bigintToJson(row.amount),
+    exchangeRate: bigintToJson(row.exchangeRate),
+    rialAmount: bigintToJson(row.rialAmount ?? row.amount),
     cashText: bigintToJson(row.cashAmount),
     cashDate: row.cashDateJalali,
     creditSection: bigintToJson(row.creditAmount),
@@ -400,6 +402,8 @@ function pickUpdatable(body) {
     description: body?.description ?? body?.descInput ?? undefined,
 
     amount: toBigIntSafe(body?.amount ?? body?.amountStr) ?? undefined,
+    exchangeRate: toBigIntSafe(body?.exchangeRate) ?? undefined,
+    rialAmount: toBigIntSafe(body?.rialAmount) ?? undefined,
     cashAmount: toBigIntSafe(body?.cashAmount ?? body?.cashText) ?? undefined,
     cashDateJalali: body?.cashDateJalali ?? body?.cashDate ?? undefined,
 
@@ -1153,8 +1157,12 @@ export async function POST(req, ctx) {
   if (!data.budgetCode) return json({ error: "budget_code_required" }, 400);
   if (amountBI <= 0n) return json({ error: "amount_must_be_positive" }, 400);
 
+  const exchangeRateBI = data.currencyTypeId == null ? 1n : data.exchangeRate;
+  if (exchangeRateBI == null || exchangeRateBI <= 0n) return json({ error: "exchange_rate_required" }, 400);
+  const rialAmountBI = amountBI * exchangeRateBI;
+
   const liquidityRemaining = await getProjectLiquidityRemaining(data.projectId);
-  if (amountBI > liquidityRemaining) {
+  if (rialAmountBI > liquidityRemaining) {
     return json({ error: "amount_exceeds_project_liquidity", liquidityRemaining: liquidityRemaining.toString() }, 400);
   }
 
@@ -1191,6 +1199,8 @@ export async function POST(req, ctx) {
       description: data.description ?? null,
 
       amount: amountBI,
+      exchangeRate: exchangeRateBI,
+      rialAmount: rialAmountBI,
       cashAmount: data.cashAmount ?? null,
       cashDateJalali: data.cashDateJalali ?? null,
 
@@ -1270,6 +1280,8 @@ export async function PATCH(req, ctx) {
   // A requester may edit their own request, but its approved/requested amount
   // is immutable after creation. Enforce this server-side as well as in the UI.
   delete data.amount;
+  delete data.exchangeRate;
+  delete data.rialAmount;
   if (data.cashAmount == null) delete data.cashAmount;
   if (data.creditAmount == null) delete data.creditAmount;
 
