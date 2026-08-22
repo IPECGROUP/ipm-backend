@@ -146,7 +146,7 @@ export async function GET(request) {
         : prisma.$queryRawUnsafe("SELECT DISTINCT project_id AS \"projectId\" FROM liquidity_allocations WHERE project_id IS NOT NULL"),
       prisma.paymentRequest.findMany({
         where: { projectId: { not: null }, ...(resetAt ? { createdAt: { gt: resetAt } } : {}) },
-        select: { projectId: true, amount: true, rialAmount: true, cashAmount: true, creditAmount: true, status: true, historyJson: true },
+        select: { projectId: true, amount: true, cashAmount: true, creditAmount: true, status: true, historyJson: true },
       }),
       prisma.$queryRawUnsafe(`
         SELECT id, batch_id AS "batchId", allocation_date AS "allocationDate", source,
@@ -168,7 +168,8 @@ export async function GET(request) {
     }
     for (const request of requests) {
       const key = mapKey(request.projectId);
-      const amount = BigInt(request.rialAmount ?? request.amount ?? 0);
+      const createdMeta = Array.isArray(request.historyJson) ? request.historyJson.find((entry) => entry?.type === "created") : null;
+      const amount = BigInt(createdMeta?.rialAmount ?? request.amount ?? 0);
       if (projectManagerApproved(request.historyJson)) {
         result.committed[key] = amountText(BigInt(result.committed[key] || 0) + amount);
       }

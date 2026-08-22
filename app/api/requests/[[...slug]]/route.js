@@ -164,13 +164,13 @@ async function getProjectLiquidityRemaining(projectId) {
     ),
     prisma.paymentRequest.findMany({
       where: { projectId: Number(projectId) },
-      select: { amount: true, rialAmount: true, historyJson: true },
+      select: { amount: true, historyJson: true },
     }),
   ]);
   const allocated = toBigIntSafe(allocatedRows?.[0]?.amount) ?? 0n;
   const committed = requests.reduce(
     (sum, request) => approvedByProjectManager(request.historyJson)
-      ? sum + (toBigIntSafe(request.rialAmount ?? request.amount) ?? 0n)
+      ? sum + (toBigIntSafe((Array.isArray(request.historyJson) ? request.historyJson.find((entry) => entry?.type === "created")?.rialAmount : null) ?? request.amount) ?? 0n)
       : sum,
     0n
   );
@@ -301,8 +301,8 @@ function normalizeOut(row, userNamesById = null) {
     description: row.description,
 
     amount: bigintToJson(row.amount),
-    exchangeRate: bigintToJson(row.exchangeRate),
-    rialAmount: bigintToJson(row.rialAmount ?? row.amount),
+    exchangeRate: createdMeta.exchangeRate ?? null,
+    rialAmount: createdMeta.rialAmount ?? bigintToJson(row.amount),
     cashText: bigintToJson(row.cashAmount),
     cashDate: row.cashDateJalali,
     creditSection: bigintToJson(row.creditAmount),
@@ -1158,8 +1158,6 @@ export async function POST(req, ctx) {
       description: data.description ?? null,
 
       amount: amountBI,
-      exchangeRate: exchangeRateBI,
-      rialAmount: rialAmountBI,
       cashAmount: data.cashAmount ?? null,
       cashDateJalali: data.cashDateJalali ?? null,
 
@@ -1200,6 +1198,8 @@ export async function POST(req, ctx) {
           supplyRequestId: body?.hasSupplyRequest === "yes" ? String(body?.supplyRequestId || "") : null,
           relatedLetterIds: normalizeIdList(body?.relatedLetterIds ?? body?.related_letter_ids),
           registrationInfo,
+          exchangeRate: exchangeRateBI.toString(),
+          rialAmount: rialAmountBI.toString(),
         },
         {
           type: "step_set",
