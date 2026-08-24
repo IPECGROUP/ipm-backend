@@ -121,13 +121,12 @@ export async function POST(r) {
       return json({ ok: true }, 201);
     }
     const pid = +b.projectId, mid = +b.projectManagerId, beneficiaryId = +b.beneficiaryUserId, w = amount(b.amount);
-    const createdByFinance = await isFinanceUser(uid);
     const beneficiary = beneficiaryId ? await prisma.user.findUnique({ where: { id: beneficiaryId }, select: { id: true } }) : null;
-    if (!String(b.requestDate || "").trim() || !String(b.purpose || "").trim() || !pid || (!createdByFinance && !mid) || !beneficiary || w <= 0n) return json({ error: "invalid_input" }, 400);
-    const managementUsers = createdByFinance ? await settlementRecipients("management", uid) : [];
-    if (createdByFinance && !managementUsers.length) return json({ error: "management_users_not_found" }, 400);
-    const initialAssigneeId = createdByFinance ? null : mid;
-    const initialStage = createdByFinance ? "management" : "project_manager";
+    if (!String(b.requestDate || "").trim() || !String(b.purpose || "").trim() || !pid || !mid || !beneficiary || w <= 0n) return json({ error: "invalid_input" }, 400);
+    const projectManagers = await settlementRecipients("project_manager", uid);
+    if (!projectManagers.some((user) => +user.id === mid)) return json({ error: "invalid_project_manager_user" }, 400);
+    const initialAssigneeId = mid;
+    const initialStage = "project_manager";
     const requestNumber = await nextSharedPaymentSerial(prisma, { dateJalali: b.requestDate, projectId: pid });
     // A tenkhah remains in its own tables and workflow.  The linked payment
     // request is a tracking identity only and is excluded from the normal
@@ -137,7 +136,7 @@ export async function POST(r) {
       title: `تنخواه - ${String(b.purpose).trim()}`, amount: w, projectId: pid, docId: "tenkhah_request",
       createdById: uid, currentAssigneeUserId: initialAssigneeId, status: "pending",
     } });
-    const history = JSON.stringify([{ type: "created", at: new Date().toISOString(), byUserId: uid }, ...(createdByFinance ? [{ type: "step_set", stage: "management", assignedToUnit: "management", at: new Date().toISOString() }] : [])]);
+    const history = JSON.stringify([{ type: "created", at: new Date().toISOString(), byUserId: uid }, { type: "step_set", stage: "project_manager", assignedToUserId: mid, at: new Date().toISOString() }]);
     await prisma.$executeRawUnsafe("INSERT INTO tenkhah_requests (payment_request_id,request_number,request_date,project_id,requested_amount,purpose,currency,unregistered_balance,unsettled_balance,created_by_id,beneficiary_user_id,project_manager_id,finance_user_id,current_assignee_user_id,project_liquidity,stage,workflow_history) VALUES ($1,$2,$3,$4,$5::bigint,$6,$7,$8::bigint,$9::bigint,$10,$11,$12,$13,$14,$15::bigint,$16,$17::jsonb)", linkedPayment.id, requestNumber, String(b.requestDate), pid, String(w), String(b.purpose).trim(), String(b.currency || ""), String(w), String(w), uid, beneficiaryId, initialAssigneeId, null, initialAssigneeId, String(amount(b.projectLiquidity)), initialStage, history);
     return json({ ok: true, requestNumber }, 201);
   } catch (e) { return json({ error: "internal_error", message: String(e?.message || e) }, 500); }
