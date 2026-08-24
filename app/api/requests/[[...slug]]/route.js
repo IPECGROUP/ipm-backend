@@ -532,7 +532,7 @@ function getCurrentStep(historyJson) {
   return null;
 }
 
-function wasInvolvedInRequest(row, userId, { userUnitNames = [], roleUnitNames = [], isFinanceAppointmentMember = false } = {}) {
+function wasInvolvedInRequest(row, userId, { userUnitNames = [], roleUnitNames = [], isFinanceAppointmentMember = false, actorName = "", userName = "" } = {}) {
   const targetId = Number(userId);
   if (!Number.isFinite(targetId) || !row) return false;
   if (Number(row.createdById) === targetId || Number(row.currentAssigneeUserId) === targetId) return true;
@@ -563,6 +563,21 @@ function wasInvolvedInRequest(row, userId, { userUnitNames = [], roleUnitNames =
     entry?.performedBy?.id,
   ].some((value) => Number(value) === targetId));
   if (involvedByUser) return true;
+
+  // Some pre-workflow records kept only the actor's name. Match it against
+  // the logged-in user's persisted name/username after Persian normalization
+  // so those requests are restored without granting access to unrelated users.
+  const knownNames = new Set([actorName, userName].map(normalizeFaText).filter(Boolean));
+  const involvedByLegacyName = knownNames.size && history.some((entry) => [
+    entry?.actorName,
+    entry?.userName,
+    entry?.performedByName,
+    entry?.approvedByName,
+    entry?.handledByName,
+    entry?.actor?.name,
+    entry?.user?.name,
+  ].some((value) => knownNames.has(normalizeFaText(value))));
+  if (involvedByLegacyName) return true;
 
   // Shared finance recipients remain involved after the request advances, so
   // every finance member keeps the request in their history/cartable.
@@ -927,7 +942,10 @@ export async function GET(req, ctx) {
     where,
     include: { createdBy: { select: { name: true, username: true, email: true } } },
     orderBy: { id: "desc" },
-    take: 500,
+    // Historical cartables must include older requests too; the former 500-row
+    // cap could hide a user's earlier workflow items before involvement was
+    // evaluated.
+    take: 5000,
   });
 
   const rowsWithFlags = rows.map((r) => {
