@@ -912,7 +912,9 @@ export async function GET(req, ctx) {
       roleUnitNames: uctx.roleUnitNames,
       isFinanceAppointmentMember: uctx.isFinanceAppointmentMember,
     });
-    const canView = uctx.isMainAdmin || canAct || wasInvolvedInRequest(row, userId, uctx);
+    // دسترسی مدیریتی نباید کارتابل مرحله‌ای را دور بزند. مشاهدهٔ درخواست
+    // فقط برای عضو مرحلهٔ جاری یا فردی است که قبلاً در همان درخواست درگیر بوده.
+    const canView = canAct || wasInvolvedInRequest(row, userId, uctx);
     if (!canView) return json({ error: "forbidden" }, 403);
 
     const userNamesById = await userNameMapForRows([row]);
@@ -961,7 +963,7 @@ export async function GET(req, ctx) {
     });
     const isMine = r.createdById === userId;
     const wasInvolved = wasInvolvedInRequest(r, userId, uctx);
-    const canView = uctx.isMainAdmin || canAct || wasInvolved;
+    const canView = canAct || wasInvolved;
     return { row: r, canAct, isMine, wasInvolved, canView };
   });
 
@@ -969,9 +971,7 @@ export async function GET(req, ctx) {
   if (view === "mine") {
     filtered = rowsWithFlags.filter((x) => x.isMine);
   } else if (view === "inbox") {
-    filtered = uctx.isMainAdmin
-      ? rowsWithFlags.filter((x) => !x.isMine)
-      : rowsWithFlags.filter((x) => !x.isMine && (x.canAct || x.wasInvolved));
+    filtered = rowsWithFlags.filter((x) => !x.isMine && (x.canAct || x.wasInvolved));
   } else {
     filtered = rowsWithFlags.filter((x) => x.canView);
   }
