@@ -576,6 +576,8 @@ function serializeItem(row) {
     description: row.description,
     needDateJalali: row.docDateJalali,
     amount: bigintToJson(row.amount),
+    currencyTypeId: row.currencyTypeId,
+    currencyName: row.currencyType?.title || "ریال",
     attachments: row.attachments,
     relatedLetterIds: normalizeIdList(created.relatedLetterIds),
     status: row.status,
@@ -703,6 +705,7 @@ export async function GET(req) {
         include: {
           createdBy: { select: { name: true, username: true, email: true } },
           currentAssigneeUser: { select: { name: true, username: true, email: true } },
+          currencyType: { select: { id: true, title: true } },
         },
         orderBy: { id: "desc" },
         skip: (page - 1) * pageSize,
@@ -792,6 +795,7 @@ export async function POST(req) {
         include: {
           createdBy: { select: { name: true, username: true, email: true } },
           currentAssigneeUser: { select: { name: true, username: true, email: true } },
+          currencyType: { select: { id: true, title: true } },
         },
       });
       if (!row) return json({ error: "not_found" }, 404);
@@ -909,6 +913,7 @@ export async function POST(req) {
         include: {
           createdBy: { select: { name: true, username: true, email: true } },
           currentAssigneeUser: { select: { name: true, username: true, email: true } },
+          currencyType: { select: { id: true, title: true } },
         },
       });
       return json({ ok: true, item: serializeItem({
@@ -928,11 +933,13 @@ export async function POST(req) {
     const needDateJalali = cleanText(body.needDateJalali ?? body.need_date_jalali, 20);
     const description = cleanText(body.description, 2000);
     const amount = toBigIntAmount(body.amount);
+    const currencyTypeId = toPositiveInt(body.currencyTypeId ?? body.currency_type_id);
     const targetAssigneeUserId = toPositiveInt(body.targetAssigneeUserId ?? body.target_assignee_user_id ?? body.assigneeUserId ?? body.assignee_user_id);
 
     if (!title) return json({ error: "title_required" }, 400);
     if (!budgetCode) return json({ error: "budget_code_required" }, 400);
     if (amount <= 0n) return json({ error: "amount_must_be_positive" }, 400);
+    if (currencyTypeId && !await prisma.currencyType.findUnique({ where: { id: currencyTypeId }, select: { id: true } })) return json({ error: "invalid_currency_type" }, 400);
 
     const creatorCtxForRouting = await userRoleAndUnitContext(userId);
     const initialTargetRoleKey = nextRoleKeyForCreatorContext(creatorCtxForRouting);
@@ -1014,7 +1021,7 @@ export async function POST(req) {
         docOther: "درخواست تامین",
         docNumber: null,
         docDateJalali: needDateJalali || null,
-        currencyTypeId: null,
+        currencyTypeId: currencyTypeId || null,
         currencySourceId: null,
         projectId,
         budgetCode,
@@ -1024,9 +1031,10 @@ export async function POST(req) {
         status: initialTargetRoleKey ? "pending" : "approved",
         historyJson,
       },
-      include: {
-        createdBy: { select: { name: true, username: true, email: true } },
-        currentAssigneeUser: { select: { name: true, username: true, email: true } },
+        include: {
+          createdBy: { select: { name: true, username: true, email: true } },
+          currentAssigneeUser: { select: { name: true, username: true, email: true } },
+          currencyType: { select: { id: true, title: true } },
       },
     });
 
@@ -1062,9 +1070,11 @@ export async function PATCH(req) {
     const title = cleanText(body.title, 255);
     const budgetCode = cleanText(body.budgetCode ?? body.budget_code, 80);
     const amount = toBigIntAmount(body.amount);
+    const currencyTypeId = toPositiveInt(body.currencyTypeId ?? body.currency_type_id);
     if (!title) return json({ error: "title_required" }, 400);
     if (!budgetCode) return json({ error: "budget_code_required" }, 400);
     if (amount <= 0n) return json({ error: "amount_must_be_positive" }, 400);
+    if (currencyTypeId && !await prisma.currencyType.findUnique({ where: { id: currencyTypeId }, select: { id: true } })) return json({ error: "invalid_currency_type" }, 400);
 
     const updated = await prisma.paymentRequest.update({
       where: { id },
@@ -1074,12 +1084,14 @@ export async function PATCH(req) {
         title,
         description: cleanText(body.description, 2000) || null,
         amount,
+        currencyTypeId: currencyTypeId || null,
         docDateJalali: cleanText(body.needDateJalali ?? body.need_date_jalali, 20).replaceAll("-", "/") || null,
         ...(Array.isArray(body.attachments) ? { attachments: body.attachments } : {}),
       },
-      include: {
-        createdBy: { select: { name: true, username: true, email: true } },
-        currentAssigneeUser: { select: { name: true, username: true, email: true } },
+        include: {
+          createdBy: { select: { name: true, username: true, email: true } },
+          currentAssigneeUser: { select: { name: true, username: true, email: true } },
+          currencyType: { select: { id: true, title: true } },
       },
     });
     const { mainAdmin } = await userContext(userId);
