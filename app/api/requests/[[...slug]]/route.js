@@ -538,12 +538,29 @@ function wasInvolvedInRequest(row, userId, { userUnitNames = [], roleUnitNames =
   if (Number(row.createdById) === targetId || Number(row.currentAssigneeUserId) === targetId) return true;
 
   const history = Array.isArray(row.historyJson) ? row.historyJson : [];
+  // Keep old requests visible too. Earlier workflow versions used several
+  // different field names for the actor/assignee in historyJson, so only
+  // checking the current names made historical requests disappear from the
+  // tables of people who had already acted on them.
   const involvedByUser = history.some((entry) => [
     entry?.byUserId,
     entry?.assignedToUserId,
     entry?.targetAssigneeUserId,
     entry?.assigneeUserId,
     entry?.userId,
+    entry?.actorId,
+    entry?.actorUserId,
+    entry?.performedByUserId,
+    entry?.approvedByUserId,
+    entry?.handledByUserId,
+    entry?.assigned_to_user_id,
+    entry?.target_assignee_user_id,
+    entry?.user_id,
+    entry?.actor?.id,
+    entry?.user?.id,
+    entry?.assignee?.id,
+    entry?.assignedTo?.id,
+    entry?.performedBy?.id,
   ].some((value) => Number(value) === targetId));
   if (involvedByUser) return true;
 
