@@ -238,54 +238,6 @@ function normalizeFaText(value = "") {
     .replace(/\s+/g, " ");
 }
 
-function inferredUnitNamesFromRoles(roleNames = []) {
-  const units = new Set();
-  for (const raw of Array.isArray(roleNames) ? roleNames : []) {
-    const role = normalizeFaText(raw);
-    if (!role) continue;
-
-    if (
-      role === "admin" ||
-      role.includes("مدیریت ارشد") ||
-      role.includes("رئیس هیات مدیره") ||
-      role.includes("رییس هیات مدیره") ||
-      role.includes("هیات مدیره") ||
-      role.includes("مدیرعامل") ||
-      role.includes("مدیر عامل")
-    ) {
-      units.add("مدیریت");
-    }
-
-    if (
-      role.includes("مسئول اداری") ||
-      role.includes("مسوول اداری") ||
-      role.includes("اداری") ||
-      role.includes("منابع انسانی") ||
-      role.includes("hr")
-    ) {
-      units.add("منابع انسانی و اداری");
-    }
-
-    if (
-      role.includes("برنامه ریزی") ||
-      role.includes("برنامه‌ریزی") ||
-      role.includes("کنترل پروژه") ||
-      role.includes("مدیر برنامه")
-    ) {
-      units.add("برنامه ریزی و کنترل پروژه");
-    }
-
-    if (role.includes("مالی") || role.includes("حسابدار") || role.includes("حسابداری")) {
-      units.add("مالی");
-    }
-
-    if (role.includes("تامین") || role.includes("تأمین") || role.includes("بازرگانی")) {
-      units.add("تامین و پشتیبانی");
-    }
-  }
-  return Array.from(units);
-}
-
 function normalizeOut(row, userNamesById = null) {
   if (!row) return row;
   const history = Array.isArray(row.historyJson) ? row.historyJson : [];
@@ -764,35 +716,38 @@ async function getUserContext(req, userId) {
   }
   const roleNames = (roleMaps || []).map((rm) => rm?.role?.name).filter(Boolean);
   if (user?.role && user.role !== "user" && !roleNames.includes(user.role)) roleNames.push(user.role);
-  const roleIds = (roleMaps || []).map((rm) => Number(rm?.roleId)).filter(Boolean);
   let unitRoleRows = [];
-  if (roleIds.length) {
-    try {
-      unitRoleRows = await prisma.unitRoleMap.findMany({
-          where: { roleId: { in: roleIds } },
-          include: { unit: true, role: true },
-          orderBy: [{ unitId: "asc" }, { roleId: "asc" }],
-        });
-    } catch (err) {
-      console.warn("requests_unit_roles_warn", err?.message || err);
-    }
+  try {
+      // منبع قطعی عضویت سازمانی:
+      // UserRoleMap (انتصاب کاربر) -> UnitRoleMap (واحد انتصاب) -> Unit
+      // این کوئری عمداً بر پایهٔ شناسه‌هاست و هیچ حدس متنی در عضویت ندارد.
+      const rows = await prisma.$queryRawUnsafe(`
+        SELECT DISTINCT
+          un."id" AS "unitId",
+          un."name" AS "unitName",
+          un."code" AS "unitCode",
+          role."id" AS "roleId",
+          role."name" AS "roleName"
+        FROM "UserRoleMap" user_role
+        INNER JOIN "UnitRoleMap" unit_role ON unit_role."roleId" = user_role."roleId"
+        INNER JOIN "Unit" un ON un."id" = unit_role."unitId"
+        INNER JOIN "UserRole" role ON role."id" = user_role."roleId"
+        WHERE user_role."userId" = $1
+        ORDER BY un."id" ASC, role."id" ASC
+      `, Number(userId));
+      unitRoleRows = rows.map((row) => ({
+        unitId: Number(row.unitId),
+        roleId: Number(row.roleId),
+        unit: { id: Number(row.unitId), name: row.unitName, code: row.unitCode },
+        role: { id: Number(row.roleId), name: row.roleName },
+      }));
+  } catch (err) {
+    console.warn("requests_unit_roles_warn", err?.message || err);
   }
-  if (roleNames.length) {
-    try {
-      const byNameRows = await prisma.unitRoleMap.findMany({
-        where: { role: { name: { in: roleNames } } },
-        include: { unit: true, role: true },
-        orderBy: [{ unitId: "asc" }, { roleId: "asc" }],
-      });
-      const seen = new Set(unitRoleRows.map((row) => `${row.unitId}:${row.roleId}`));
-      byNameRows.forEach((row) => {
-        const key = `${row.unitId}:${row.roleId}`;
-        if (!seen.has(key)) unitRoleRows.push(row);
-      });
-    } catch (err) {
-      console.warn("requests_unit_roles_by_name_warn", err?.message || err);
-    }
-  }
+  unitRoleRows.forEach((row) => {
+    const mappedRoleName = row?.role?.name;
+    if (mappedRoleName && !roleNames.includes(mappedRoleName)) roleNames.push(mappedRoleName);
+  });
   const roleDerivedUnitKinds = Array.from(
     new Set(
       roleNames
