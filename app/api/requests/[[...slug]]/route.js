@@ -538,12 +538,38 @@ function getCurrentStep(historyJson) {
   return null;
 }
 
+function legacyHistoryMentionsUser(entry, userId, knownNames) {
+  const seen = new Set();
+  const personKey = /(user|actor|assignee|approved|handled|performed|createdby|byuser|requester|owner)/i;
+  const idKey = /(^id$|_id$|id$)/i;
+  const nameKey = /(name|username|full_name|fullName)/i;
+
+  function scan(value, key = "", insidePerson = false) {
+    if (value == null) return false;
+    if (typeof value !== "object") {
+      if (insidePerson && idKey.test(key) && Number(value) === userId) return true;
+      return insidePerson && nameKey.test(key) && knownNames.has(normalizeFaText(value));
+    }
+    if (seen.has(value)) return false;
+    seen.add(value);
+    return Object.entries(value).some(([childKey, childValue]) =>
+      scan(childValue, childKey, insidePerson || personKey.test(childKey))
+    );
+  }
+
+  return scan(entry);
+}
+
 function wasInvolvedInRequest(row, userId, { userUnitNames = [], roleUnitNames = [], isFinanceAppointmentMember = false, actorName = "", userName = "" } = {}) {
   const targetId = Number(userId);
   if (!Number.isFinite(targetId) || !row) return false;
   if (Number(row.createdById) === targetId || Number(row.currentAssigneeUserId) === targetId) return true;
 
-  const history = Array.isArray(row.historyJson) ? row.historyJson : [];
+  // The first version of the workflow saved a JSON object for some rows,
+  // whereas newer rows save an array.  Treat both as history records.
+  const history = Array.isArray(row.historyJson)
+    ? row.historyJson
+    : (row.historyJson && typeof row.historyJson === "object" ? [row.historyJson] : []);
   // Keep old requests visible too. Earlier workflow versions used several
   // different field names for the actor/assignee in historyJson, so only
   // checking the current names made historical requests disappear from the
@@ -584,6 +610,11 @@ function wasInvolvedInRequest(row, userId, { userUnitNames = [], roleUnitNames =
     entry?.user?.name,
   ].some((value) => knownNames.has(normalizeFaText(value))));
   if (involvedByLegacyName) return true;
+
+  // Some early records used nested, snake_case action objects.  Scan only
+  // user/actor-like branches, so a project or document id can never grant
+  // visibility accidentally.
+  if (history.some((entry) => legacyHistoryMentionsUser(entry, targetId, knownNames))) return true;
 
   // Shared finance recipients remain involved after the request advances, so
   // every finance member keeps the request in their history/cartable.
