@@ -17,7 +17,13 @@ if (process.env.NODE_ENV !== "production") globalThis.__prisma_requests = prisma
 const SUPPLY_REQUEST_DOC_ID = "supply_request";
 const TENKHAH_REQUEST_DOC_ID = "tenkhah_request";
 const paymentRequestOnlyWhere = {
-  NOT: { docId: { in: [SUPPLY_REQUEST_DOC_ID, TENKHAH_REQUEST_DOC_ID] } },
+  // `NOT IN` by itself excludes NULL in SQL.  The older payment requests did
+  // not have a docId at all, so that condition made their historical
+  // cartables disappear as well.  Keep null as a valid payment-request type.
+  OR: [
+    { docId: null },
+    { docId: { notIn: [SUPPLY_REQUEST_DOC_ID, TENKHAH_REQUEST_DOC_ID] } },
+  ],
 };
 
 function isSupplyRequest(row) {
