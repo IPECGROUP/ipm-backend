@@ -53,6 +53,10 @@ async function isFinanceUser(userId) {
   const financeUsers = await settlementRecipients("finance", null);
   return financeUsers.some((user) => Number(user.id) === Number(userId));
 }
+async function isManagementUser(userId) {
+  const users = await settlementRecipients("management", null);
+  return users.some((user) => Number(user.id) === Number(userId));
+}
 async function settlementRecipients(stage, excludeId) {
   // A user's membership can come from a direct unit assignment or from one of
   // that unit's designated positions (UnitRoleMap -> UserRoleMap).
@@ -86,15 +90,18 @@ export async function GET(r) {
     const financeMember = await isFinanceUser(uid);
     // Finance is a shared queue.  Do not let an old individual assignee hide
     // the request from the other members of the finance unit.
+    const managementMember = await isManagementUser(uid);
     const sharedFinanceWhere = financeMember ? " OR (t.stage='finance' AND t.status='pending')" : "";
+    const sharedManagementWhere = managementMember ? " OR (t.stage='management' AND t.status='pending')" : "";
     const historicalFinanceWhere = financeMember ? " OR COALESCE(t.workflow_history,'[]'::jsonb) @> '[{\"assignedToUnit\":\"finance\"}]'::jsonb" : "";
+    const historicalManagementWhere = managementMember ? " OR COALESCE(t.workflow_history,'[]'::jsonb) @> '[{\"assignedToUnit\":\"management\"}]'::jsonb" : "";
     const items = await requests(inbox
-      ? `WHERE t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${sharedFinanceWhere}${historicalFinanceWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND s.current_assignee_user_id=$1)`
-      : `WHERE t.created_by_id=$1 OR t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${sharedFinanceWhere}${historicalFinanceWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND (s.current_assignee_user_id=$1 OR s.created_by_id=$1))`, [uid]);
+      ? `WHERE t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${sharedFinanceWhere}${sharedManagementWhere}${historicalFinanceWhere}${historicalManagementWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND s.current_assignee_user_id=$1)`
+      : `WHERE t.created_by_id=$1 OR t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${sharedFinanceWhere}${sharedManagementWhere}${historicalFinanceWhere}${historicalManagementWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND (s.current_assignee_user_id=$1 OR s.created_by_id=$1))`, [uid]);
     const all = await settlements(items.map(x => x.id)); const shown = inbox ? all.filter(s => +s.currentAssigneeUserId === uid && s.status === "pending") : all.filter(s => +s.createdById === uid || +s.currentAssigneeUserId === uid);
     return json({ items: items.map(x => ({
       ...x,
-      canAct: x.status === "pending" && (x.stage === "finance" ? financeMember : +x.currentAssigneeUserId === uid),
+      canAct: x.status === "pending" && (x.stage === "finance" ? financeMember : x.stage === "management" ? managementMember : +x.currentAssigneeUserId === uid),
       settlements: all.filter(s => +s.tenkhahRequestId === +x.id),
     })), settlements: shown });
   } catch (e) { return json({ error: "internal_error", message: String(e?.message || e) }, 500); }
@@ -116,8 +123,10 @@ export async function POST(r) {
     const pid = +b.projectId, mid = +b.projectManagerId, beneficiaryId = +b.beneficiaryUserId, w = amount(b.amount);
     const createdByFinance = await isFinanceUser(uid);
     const beneficiary = beneficiaryId ? await prisma.user.findUnique({ where: { id: beneficiaryId }, select: { id: true } }) : null;
-    if (!String(b.requestDate || "").trim() || !String(b.purpose || "").trim() || !pid || !mid || !beneficiary || w <= 0n) return json({ error: "invalid_input" }, 400);
-    const initialAssigneeId = mid;
+    if (!String(b.requestDate || "").trim() || !String(b.purpose || "").trim() || !pid || (!createdByFinance && !mid) || !beneficiary || w <= 0n) return json({ error: "invalid_input" }, 400);
+    const managementUsers = createdByFinance ? await settlementRecipients("management", uid) : [];
+    if (createdByFinance && !managementUsers.length) return json({ error: "management_users_not_found" }, 400);
+    const initialAssigneeId = createdByFinance ? null : mid;
     const initialStage = createdByFinance ? "management" : "project_manager";
     const requestNumber = await nextSharedPaymentSerial(prisma, { dateJalali: b.requestDate, projectId: pid });
     // A tenkhah remains in its own tables and workflow.  The linked payment
@@ -128,7 +137,7 @@ export async function POST(r) {
       title: `تنخواه - ${String(b.purpose).trim()}`, amount: w, projectId: pid, docId: "tenkhah_request",
       createdById: uid, currentAssigneeUserId: initialAssigneeId, status: "pending",
     } });
-    const history = JSON.stringify([{ type: "created", at: new Date().toISOString(), byUserId: uid }]);
+    const history = JSON.stringify([{ type: "created", at: new Date().toISOString(), byUserId: uid }, ...(createdByFinance ? [{ type: "step_set", stage: "management", assignedToUnit: "management", at: new Date().toISOString() }] : [])]);
     await prisma.$executeRawUnsafe("INSERT INTO tenkhah_requests (payment_request_id,request_number,request_date,project_id,requested_amount,purpose,currency,unregistered_balance,unsettled_balance,created_by_id,beneficiary_user_id,project_manager_id,finance_user_id,current_assignee_user_id,project_liquidity,stage,workflow_history) VALUES ($1,$2,$3,$4,$5::bigint,$6,$7,$8::bigint,$9::bigint,$10,$11,$12,$13,$14,$15::bigint,$16,$17::jsonb)", linkedPayment.id, requestNumber, String(b.requestDate), pid, String(w), String(b.purpose).trim(), String(b.currency || ""), String(w), String(w), uid, beneficiaryId, initialAssigneeId, null, initialAssigneeId, String(amount(b.projectLiquidity)), initialStage, history);
     return json({ ok: true, requestNumber }, 201);
   } catch (e) { return json({ error: "internal_error", message: String(e?.message || e) }, 500); }
@@ -151,7 +160,8 @@ export async function PATCH(r) {
     // The financial stage is shared by all finance members, including for
     // legacy rows that still have an individual assignee value.
     const canActOnSharedFinance = row?.stage === "finance" && await isFinanceUser(uid);
-    if (!uid || !row || (+row.currentAssigneeUserId !== uid && !canActOnSharedFinance) || row.status !== "pending") return json({ error: "not_allowed" }, 403);
+    const canActOnSharedManagement = row?.stage === "management" && await isManagementUser(uid);
+    if (!uid || !row || (+row.currentAssigneeUserId !== uid && !canActOnSharedFinance && !canActOnSharedManagement) || row.status !== "pending") return json({ error: "not_allowed" }, 403);
     const decision = ["approve", "return", "reject"].includes(b.action) ? b.action : "approve";
     const history = Array.isArray(row.workflowHistory) ? row.workflowHistory : [];
     history.push({ type: decision, stage: row.stage, at: new Date().toISOString(), byUserId: uid, note: String(b.note || "").slice(0, 1000) });
@@ -163,7 +173,7 @@ export async function PATCH(r) {
       await prisma.$executeRawUnsafe("UPDATE tenkhah_requests SET status='returned',stage='returned',current_assignee_user_id=created_by_id,workflow_history=$1::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$2", JSON.stringify(history), row.id);
       return json({ ok: true });
     }
-    if (row.stage === "project_manager") { if (!+b.managementUserId || !String(b.approvedDate || "").trim()) return json({ error: "invalid_input" }, 400); const managers = await settlementRecipients("management", row.createdById); if (!managers.some((user) => +user.id === +b.managementUserId)) return json({ error: "invalid_management_user" }, 400); await prisma.$executeRawUnsafe("UPDATE tenkhah_requests SET current_assignee_user_id=$1,stage='management',manager_approved_date=$2,workflow_history=$3::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$4", +b.managementUserId, String(b.approvedDate), JSON.stringify(history), row.id); }
+    if (row.stage === "project_manager") { if (!String(b.approvedDate || "").trim()) return json({ error: "invalid_input" }, 400); const managers = await settlementRecipients("management", row.createdById); if (!managers.length) return json({ error: "management_users_not_found" }, 400); history.push({ type: "step_set", stage: "management", assignedToUnit: "management", at: new Date().toISOString() }); await prisma.$executeRawUnsafe("UPDATE tenkhah_requests SET current_assignee_user_id=NULL,stage='management',manager_approved_date=$1,workflow_history=$2::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$3", String(b.approvedDate), JSON.stringify(history), row.id); }
     else if (row.stage === "management") { const finances = await settlementRecipients("finance", row.createdById); if (!finances.length) return json({ error: "finance_users_not_found" }, 400); history.push({ type: "step_set", stage: "finance", assignedToUnit: "finance", at: new Date().toISOString() }); await prisma.$executeRawUnsafe("UPDATE tenkhah_requests SET finance_user_id=NULL,current_assignee_user_id=NULL,stage='finance',workflow_history=$1::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$2", JSON.stringify(history), row.id); }
     else if (row.stage === "finance") { const cashPaymentAmount = amount(b.cashPaymentAmount), creditPaymentAmount = amount(b.creditPaymentAmount); if (cashPaymentAmount <= 0n && creditPaymentAmount <= 0n) return json({ error: "payment_amount_required" }, 400); if (cashPaymentAmount > 0n && !String(b.cashPaymentMethod || "").trim()) return json({ error: "cash_payment_method_required" }, 400); if (creditPaymentAmount > 0n && !String(b.creditPaymentDescription || "").trim()) return json({ error: "credit_payment_description_required" }, 400); await prisma.$executeRawUnsafe("UPDATE tenkhah_requests SET charged_date=$1,charged_amount=$2::bigint,cash_payment_amount=$3::bigint,cash_payment_currency=$4,cash_payment_method=$5,credit_payment_amount=$6::bigint,credit_payment_currency=$7,credit_payment_description=$8,status='charged',stage='completed',current_assignee_user_id=NULL,workflow_history=$9::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$10", String(b.chargedDate || ""), String(cashPaymentAmount + creditPaymentAmount), String(cashPaymentAmount), String(b.cashPaymentCurrency || row.currency || ""), String(b.cashPaymentMethod || ""), String(creditPaymentAmount), String(b.creditPaymentCurrency || row.currency || ""), String(b.creditPaymentDescription || "").trim(), JSON.stringify(history), row.id); }
     else return json({ error: "invalid_stage" }, 400);

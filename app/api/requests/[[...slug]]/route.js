@@ -428,6 +428,15 @@ const PAYMENT_WORKFLOW_CHAIN = [
   ROLE_KEYS.ACCOUNTING,
 ];
 
+// These stages are unit queues: no previous actor chooses an individual
+// recipient.  Every eligible member of the unit can see and act on them.
+const SHARED_UNIT_ROLE_KEYS = new Set([
+  ROLE_KEYS.PROJECT_CONTROL,
+  ROLE_KEYS.MANAGEMENT,
+  ROLE_KEYS.ACCOUNTING,
+]);
+const isSharedUnitRole = (roleKey) => SHARED_UNIT_ROLE_KEYS.has(roleKey);
+
 function norm(s) {
   return String(s || "").trim();
 }
@@ -616,9 +625,8 @@ function wasInvolvedInRequest(row, userId, { userUnitNames = [], roleUnitNames =
   // visibility accidentally.
   if (history.some((entry) => legacyHistoryMentionsUser(entry, targetId, knownNames))) return true;
 
-  // Shared finance recipients remain involved after the request advances, so
-  // every finance member keeps the request in their history/cartable.
-  return history.some((entry) => entry?.assignedToUnit === "finance") && isFinanceAppointmentMember;
+  // Shared-unit recipients remain involved after the request advances.
+  return history.some((entry) => entry?.assignedToUnit === ROLE_KEYS.ACCOUNTING) && isFinanceAppointmentMember;
 }
 
 function canRejectAtStep(roleKey) {
@@ -656,8 +664,7 @@ function canActOnStep({ row, userId, userUnitNames, roleUnitNames, isFinanceAppo
   const step = getCurrentStep(row.historyJson);
   if (!step) return false;
 
-  // Accounting is deliberately a shared queue.  A legacy assignee value must
-  // never hide a financial request from the rest of the finance unit.
+  // Shared-unit queues must never be restricted to an individual assignee.
   if (step.roleKey === ROLE_KEYS.ACCOUNTING) {
     return isFinanceAppointmentMember;
   }
@@ -903,6 +910,7 @@ export async function GET(req, ctx) {
 
   if (slug.length === 0 && url.searchParams.get("nextRecipientsForCreate") === "1") {
     const targetRoleKey = initialWorkflowRoleForUser(uctx);
+    if (isSharedUnitRole(targetRoleKey)) return json({ targetRoleKey, users: [] });
     const users = targetRoleKey === ROLE_KEYS.MANAGEMENT
       ? await findWorkflowUsersForRole(targetRoleKey)
       : await findInitialWorkflowUsers(url.searchParams.get("projectId"));
@@ -920,9 +928,9 @@ export async function GET(req, ctx) {
     const nextIndex = Number(step?.index ?? -1) + 1;
     const targetRoleKey = chain?.[nextIndex] || null;
     if (!targetRoleKey) return json({ targetRoleKey: null, users: [] });
-    // Accounting is a shared unit queue; its members must not be exposed as
+    // Shared unit queues are routed directly to their unit, without exposing
     // individual recipients for the previous actor to choose from.
-    if (targetRoleKey === ROLE_KEYS.ACCOUNTING) {
+    if (isSharedUnitRole(targetRoleKey)) {
       return json({ targetRoleKey, users: [] });
     }
     const users = await findWorkflowUsersForRole(targetRoleKey);
@@ -1107,14 +1115,14 @@ export async function POST(req, ctx) {
 
       const nextRoleKey = chain[nextIndex];
       const workflowUsers = await findWorkflowUsersForRole(nextRoleKey);
-      const isSharedFinanceStep = nextRoleKey === ROLE_KEYS.ACCOUNTING;
-      if (isSharedFinanceStep && workflowUsers.length === 0) {
-        return json({ error: "finance_users_not_found" }, 400);
+      const isSharedUnitStep = isSharedUnitRole(nextRoleKey);
+      if (isSharedUnitStep && workflowUsers.length === 0) {
+        return json({ error: "workflow_unit_users_not_found" }, 400);
       }
-      const nextAssignee = isSharedFinanceStep
+      const nextAssignee = isSharedUnitStep
         ? null
         : workflowUsers.find((candidate) => Number(candidate.id) === targetAssigneeUserId);
-      if (!isSharedFinanceStep && !nextAssignee) {
+      if (!isSharedUnitStep && !nextAssignee) {
         return json({ error: targetAssigneeUserId ? "target_assignee_invalid" : "target_assignee_required" }, 400);
       }
       history.push({
@@ -1123,7 +1131,7 @@ export async function POST(req, ctx) {
         unitKind,
         roleKey: nextRoleKey,
         index: nextIndex,
-        ...(nextAssignee ? { assignedToUserId: Number(nextAssignee.id) } : { assignedToUnit: "finance" }),
+        ...(nextAssignee ? { assignedToUserId: Number(nextAssignee.id) } : { assignedToUnit: nextRoleKey }),
       });
 
       const updated = await prisma.paymentRequest.update({
@@ -1203,8 +1211,10 @@ export async function POST(req, ctx) {
   const workflowUsers = initialRoleKey === ROLE_KEYS.MANAGEMENT
     ? await findWorkflowUsersForRole(initialRoleKey)
     : await findInitialWorkflowUsers(data.projectId);
-  const initialAssignee = workflowUsers.find((candidate) => Number(candidate.id) === targetAssigneeUserId);
-  if (!initialAssignee) return json({ error: targetAssigneeUserId ? "target_assignee_invalid" : "target_assignee_required" }, 400);
+  const isSharedInitialStep = isSharedUnitRole(initialRoleKey);
+  if (isSharedInitialStep && workflowUsers.length === 0) return json({ error: "workflow_unit_users_not_found" }, 400);
+  const initialAssignee = isSharedInitialStep ? null : workflowUsers.find((candidate) => Number(candidate.id) === targetAssigneeUserId);
+  if (!isSharedInitialStep && !initialAssignee) return json({ error: targetAssigneeUserId ? "target_assignee_invalid" : "target_assignee_required" }, 400);
 
   const enforcedScope = "projects";
   const generatedSerial = await nextSharedPaymentSerial(prisma, { dateJalali: data.dateJalali, projectId: data.projectId });
@@ -1253,7 +1263,7 @@ export async function POST(req, ctx) {
       attachments: data.attachments ?? null,
 
       createdById: userId,
-      currentAssigneeUserId: Number(initialAssignee.id),
+      currentAssigneeUserId: initialAssignee ? Number(initialAssignee.id) : null,
 
       status: "pending",
       historyJson: [
@@ -1279,7 +1289,7 @@ export async function POST(req, ctx) {
           unitKind: enforcedScope,
           roleKey: initialRoleKey,
           index: PAYMENT_WORKFLOW_CHAIN.indexOf(initialRoleKey),
-          assignedToUserId: Number(initialAssignee.id),
+          ...(initialAssignee ? { assignedToUserId: Number(initialAssignee.id) } : { assignedToUnit: initialRoleKey }),
         },
       ],
     },
