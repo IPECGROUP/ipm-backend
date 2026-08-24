@@ -532,6 +532,8 @@ function getWorkflowChainForUnit(unitKind) {
 }
 
 function initialWorkflowRoleForUser(userContext) {
+  // استثنا: درخواست ثبت‌شده توسط عضوی از مالی/حسابداری، مرحلهٔ مالی را
+  // تکرار نمی‌کند و مستقیماً به مرحلهٔ مدیریت (دستور پرداخت) می‌رود.
   return hasWorkflowUnitForRole({ roleKey: ROLE_KEYS.ACCOUNTING, userUnitNames: userContext?.userUnitNames, roleUnitNames: userContext?.roleUnitNames })
     ? ROLE_KEYS.MANAGEMENT
     : ROLE_KEYS.PROJECT_CONTROL;
