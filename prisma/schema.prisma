@@ -546,6 +546,7 @@ model PaymentRequest {
   description String?
 
   amount         BigInt
+  requestedAmountDecimal Decimal? @db.Decimal(30, 2)
   cashAmount     BigInt?
   cashDateJalali String?
 

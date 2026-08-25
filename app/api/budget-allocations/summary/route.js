@@ -9,6 +9,7 @@ import {
   normalizeAmount,
   parseKindProject,
 } from "../_shared";
+import { formatMinorUnits, parseRequestedAmount } from "../../../../lib/paymentAmount";
 
 export async function GET(req) {
   try {
@@ -62,23 +63,34 @@ export async function GET(req) {
     };
     if (kind === "projects") usageWhere.projectId = projectId;
 
-    const usageRows = await prisma.paymentRequest.groupBy({
-      by: ["budgetCode"],
-      where: usageWhere,
-      _sum: { amount: true },
+    const usageRows = await prisma.paymentRequest.findMany({
+      where: {
+        ...usageWhere,
+        OR: [
+          { docId: null },
+          { docId: { notIn: ["supply_request", "tenkhah_request"] } },
+        ],
+      },
+      select: { budgetCode: true, amount: true, historyJson: true },
     });
 
     const used = {};
     for (const r of usageRows || []) {
       const code = String(r?.budgetCode || "").trim();
       if (!code) continue;
-      used[code] = normalizeAmount(r?._sum?.amount || 0);
+      const createdMeta = Array.isArray(r.historyJson)
+        ? r.historyJson.find((entry) => entry?.type === "created")
+        : null;
+      const rialAmountMinorUnits = parseRequestedAmount(createdMeta?.rialAmount ?? r.amount ?? 0, true)?.minorUnits ?? 0n;
+      const previousMinorUnits = parseRequestedAmount(used[code] || 0, true)?.minorUnits ?? 0n;
+      used[code] = formatMinorUnits(previousMinorUnits + rialAmountMinorUnits);
     }
 
     const remaining = {};
     for (const [code, total] of Object.entries(totals)) {
-      const u = Number(used[code] || 0);
-      remaining[code] = Math.max(0, Number(total || 0) - u);
+      const totalMinorUnits = parseRequestedAmount(total || 0, true)?.minorUnits ?? 0n;
+      const usedMinorUnits = parseRequestedAmount(used[code] || 0, true)?.minorUnits ?? 0n;
+      remaining[code] = formatMinorUnits(totalMinorUnits > usedMinorUnits ? totalMinorUnits - usedMinorUnits : 0n);
     }
 
     return json({ totals, used, remaining });

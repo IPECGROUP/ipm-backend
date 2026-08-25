@@ -1,5 +1,6 @@
 import { prisma } from "../../../lib/prisma";
 import { hasPagePermission, requirePagePermission } from "../../../lib/pagePermissions";
+import { formatMinorUnits, parseRequestedAmount } from "../../../lib/paymentAmount";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -169,9 +170,10 @@ export async function GET(request) {
     for (const request of requests) {
       const key = mapKey(request.projectId);
       const createdMeta = Array.isArray(request.historyJson) ? request.historyJson.find((entry) => entry?.type === "created") : null;
-      const amount = BigInt(createdMeta?.rialAmount ?? request.amount ?? 0);
+      const amountMinorUnits = parseRequestedAmount(createdMeta?.rialAmount ?? request.amount ?? 0, true)?.minorUnits ?? 0n;
       if (projectManagerApproved(request.historyJson)) {
-        result.committed[key] = amountText(BigInt(result.committed[key] || 0) + amount);
+        const previousMinorUnits = parseRequestedAmount(result.committed[key] || 0, true)?.minorUnits ?? 0n;
+        result.committed[key] = formatMinorUnits(previousMinorUnits + amountMinorUnits);
       }
       if (request.status === "approved") {
         const paid = finalPaidAmount(request);

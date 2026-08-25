@@ -5,6 +5,7 @@ import { unlink } from "node:fs/promises";
 import path from "node:path";
 import { requirePagePermission } from "../../../../lib/pagePermissions";
 import { nextSharedPaymentSerial } from "../../../../lib/paymentSerial";
+import { convertedRialMinorUnits, formatMinorUnits, parseRequestedAmount } from "../../../../lib/paymentAmount";
 
 export const runtime = "nodejs";
 
@@ -173,14 +174,17 @@ async function getProjectLiquidityRemaining(projectId) {
       select: { amount: true, historyJson: true },
     }),
   ]);
-  const allocated = toBigIntSafe(allocatedRows?.[0]?.amount) ?? 0n;
-  const committed = requests.reduce(
+  const allocatedMinorUnits = (toBigIntSafe(allocatedRows?.[0]?.amount) ?? 0n) * 100n;
+  const committedMinorUnits = requests.reduce(
     (sum, request) => approvedByProjectManager(request.historyJson)
-      ? sum + (toBigIntSafe((Array.isArray(request.historyJson) ? request.historyJson.find((entry) => entry?.type === "created")?.rialAmount : null) ?? request.amount) ?? 0n)
+      ? sum + (parseRequestedAmount(
+        (Array.isArray(request.historyJson) ? request.historyJson.find((entry) => entry?.type === "created")?.rialAmount : null) ?? request.amount,
+        true
+      )?.minorUnits ?? 0n)
       : sum,
     0n
   );
-  return allocated - committed;
+  return allocatedMinorUnits - committedMinorUnits;
 }
 
 function normalizeDigits(value = "") {
@@ -258,7 +262,9 @@ function normalizeOut(row, userNamesById = null) {
     title: row.title,
     description: row.description,
 
-    amount: bigintToJson(row.amount),
+    amount: row.requestedAmountDecimal != null
+      ? String(row.requestedAmountDecimal)
+      : (createdMeta.requestAmount ?? bigintToJson(row.amount)),
     exchangeRate: createdMeta.exchangeRate ?? null,
     rialAmount: createdMeta.rialAmount ?? bigintToJson(row.amount),
     cashText: bigintToJson(row.cashAmount),
@@ -1150,21 +1156,29 @@ export async function POST(req, ctx) {
     : (uctx.unitKind || "office");
 
   const title = data.title;
-  const amountBI = data.amount ?? toBigIntSafe(body?.amountStr) ?? BigInt(0);
+  const isForeignCurrency = data.currencyTypeId != null;
+  const requestedAmount = parseRequestedAmount(body?.amount ?? body?.amountStr, isForeignCurrency);
+  const amountBI = requestedAmount?.legacyWholeAmount ?? 0n;
 
   if ([SUPPLY_REQUEST_DOC_ID, TENKHAH_REQUEST_DOC_ID].includes(data.docId)) return json({ error: "invalid_doc_type" }, 400);
   if (!title) return json({ error: "title_required" }, 400);
   if (!data.projectId) return json({ error: "project_required" }, 400);
   if (!data.budgetCode) return json({ error: "budget_code_required" }, 400);
-  if (amountBI <= 0n) return json({ error: "amount_must_be_positive" }, 400);
+  if (!requestedAmount || requestedAmount.minorUnits <= 0n) return json({ error: "amount_must_be_positive" }, 400);
 
-  const exchangeRateBI = data.currencyTypeId == null ? 1n : data.exchangeRate;
+  const exchangeRateBI = isForeignCurrency ? data.exchangeRate : 1n;
   if (exchangeRateBI == null || exchangeRateBI <= 0n) return json({ error: "exchange_rate_required" }, 400);
-  const rialAmountBI = amountBI * exchangeRateBI;
+  // Keep the converted value in hundredths of a Rial. This preserves the
+  // exact multiplication result without floating-point math or rounding.
+  const rialAmountMinorUnits = isForeignCurrency
+    ? convertedRialMinorUnits(requestedAmount.minorUnits, exchangeRateBI)
+    : requestedAmount.minorUnits;
+  if (rialAmountMinorUnits <= 0n) return json({ error: "rial_amount_must_be_positive" }, 400);
+  const rialAmount = formatMinorUnits(rialAmountMinorUnits);
 
   const liquidityRemaining = await getProjectLiquidityRemaining(data.projectId);
-  if (rialAmountBI > liquidityRemaining) {
-    return json({ error: "amount_exceeds_project_liquidity", liquidityRemaining: liquidityRemaining.toString() }, 400);
+  if (rialAmountMinorUnits > liquidityRemaining) {
+    return json({ error: "amount_exceeds_project_liquidity", liquidityRemaining: formatMinorUnits(liquidityRemaining) }, 400);
   }
 
   const targetAssigneeUserId = Number(body?.targetAssigneeUserId ?? body?.target_assignee_user_id);
@@ -1201,6 +1215,7 @@ export async function POST(req, ctx) {
       description: data.description ?? null,
 
       amount: amountBI,
+      requestedAmountDecimal: requestedAmount.decimal,
       cashAmount: data.cashAmount ?? null,
       cashDateJalali: data.cashDateJalali ?? null,
 
@@ -1242,7 +1257,8 @@ export async function POST(req, ctx) {
           relatedLetterIds: normalizeIdList(body?.relatedLetterIds ?? body?.related_letter_ids),
           registrationInfo,
           exchangeRate: exchangeRateBI.toString(),
-          rialAmount: rialAmountBI.toString(),
+          requestAmount: requestedAmount.decimal,
+          rialAmount,
         },
         {
           type: "step_set",
