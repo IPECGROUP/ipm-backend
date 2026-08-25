@@ -262,9 +262,7 @@ function normalizeOut(row, userNamesById = null) {
     title: row.title,
     description: row.description,
 
-    amount: row.requestedAmountDecimal != null
-      ? String(row.requestedAmountDecimal)
-      : (createdMeta.requestAmount ?? bigintToJson(row.amount)),
+    amount: createdMeta.requestAmount ?? bigintToJson(row.amount),
     exchangeRate: createdMeta.exchangeRate ?? null,
     rialAmount: createdMeta.rialAmount ?? bigintToJson(row.amount),
     cashText: bigintToJson(row.cashAmount),
@@ -1215,7 +1213,6 @@ export async function POST(req, ctx) {
       description: data.description ?? null,
 
       amount: amountBI,
-      requestedAmountDecimal: requestedAmount.decimal,
       cashAmount: data.cashAmount ?? null,
       cashDateJalali: data.cashDateJalali ?? null,
 
