@@ -47,6 +47,15 @@ function projectManagerApproved(history) {
   );
 }
 
+function isProjectCommitment(request) {
+  // A completed payment is always a project commitment, even for legacy or
+  // shortened workflows that do not contain the exact project-manager step.
+  // Pending requests become commitments only after project-manager approval;
+  // returned/rejected requests must release the reserved liquidity.
+  return request?.status === "approved"
+    || (request?.status === "pending" && projectManagerApproved(request?.historyJson));
+}
+
 function normalizeDigits(value) {
   return String(value ?? "")
     .replace(/[۰-۹]/g, (digit) => "۰۱۲۳۴۵۶۷۸۹".indexOf(digit))
@@ -200,7 +209,7 @@ export async function GET(request) {
       const key = mapKey(request.projectId);
       const createdMeta = Array.isArray(request.historyJson) ? request.historyJson.find((entry) => entry?.type === "created") : null;
       const amountMinorUnits = parseRequestedAmount(createdMeta?.rialAmount ?? request.amount ?? 0, true)?.minorUnits ?? 0n;
-      if (projectManagerApproved(request.historyJson)) {
+      if (isProjectCommitment(request)) {
         const previousMinorUnits = parseRequestedAmount(result.committed[key] || 0, true)?.minorUnits ?? 0n;
         result.committed[key] = formatMinorUnits(previousMinorUnits + amountMinorUnits);
       }

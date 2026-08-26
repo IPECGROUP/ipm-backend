@@ -146,6 +146,11 @@ function approvedByProjectManager(history) {
   );
 }
 
+function isProjectCommitment(request) {
+  return request?.status === "approved"
+    || (request?.status === "pending" && approvedByProjectManager(request?.historyJson));
+}
+
 async function getProjectLiquidityRemaining(projectId) {
   // Keep this table available even when the liquidity screen has not been
   // opened yet. It is deliberately the same source used by the financial
@@ -171,12 +176,12 @@ async function getProjectLiquidityRemaining(projectId) {
     ),
     prisma.paymentRequest.findMany({
       where: { projectId: Number(projectId) },
-      select: { amount: true, historyJson: true },
+      select: { amount: true, status: true, historyJson: true },
     }),
   ]);
   const allocatedMinorUnits = (toBigIntSafe(allocatedRows?.[0]?.amount) ?? 0n) * 100n;
   const committedMinorUnits = requests.reduce(
-    (sum, request) => approvedByProjectManager(request.historyJson)
+    (sum, request) => isProjectCommitment(request)
       ? sum + (parseRequestedAmount(
         (Array.isArray(request.historyJson) ? request.historyJson.find((entry) => entry?.type === "created")?.rialAmount : null) ?? request.amount,
         true
