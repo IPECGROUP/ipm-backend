@@ -488,7 +488,7 @@ function getWorkflowChainForUnit(unitKind) {
 }
 
 function initialWorkflowRoleForUser(userContext) {
-  // استثنا: درخواست ثبت‌شده توسط عضوی از مالی/حسابداری، مرحلهٔ مالی را
+  // استثنا: درخواست ثبت‌شده توسط عضوی از واحد مالی، مرحلهٔ مالی را
   // تکرار نمی‌کند و مستقیماً به مرحلهٔ مدیریت (دستور پرداخت) می‌رود.
   return hasWorkflowUnitForRole({ roleKey: ROLE_KEYS.ACCOUNTING, userUnitNames: userContext?.userUnitNames, roleUnitNames: userContext?.roleUnitNames })
     ? ROLE_KEYS.MANAGEMENT
@@ -672,9 +672,7 @@ async function findWorkflowUsersForRole(roleKey, excludeUserId = null) {
       ...(Array.isArray(candidate.units) ? candidate.units.flatMap((row) => [row.unit?.name, row.unit?.code]).filter(Boolean) : []),
     ];
     const hasUnitAppointment = mappedUserIds.has(Number(candidate.id));
-    return candidate.isActive !== false && (roleKey === ROLE_KEYS.ACCOUNTING
-      ? hasUnitAppointment
-      : hasUnitAppointment || hasWorkflowUnitForRole({ roleKey, userUnitNames }));
+    return candidate.isActive !== false && (hasUnitAppointment || hasWorkflowUnitForRole({ roleKey, userUnitNames }));
   });
 }
 
@@ -768,7 +766,7 @@ async function getUserContext(req, userId) {
   // unitKind انتخابی:
   // اگر چندتا واحد داشت:
   // - اولویت با واحدی که قابل نگاشت باشد
-  // - اگر نقش مالی/حسابداری دارد، finance را ترجیح بده
+  // - اگر نقش واحد مالی دارد، finance را ترجیح بده
   const mappedUnits = (userUnits || [])
     .map((uu) => {
       const u = uu?.unit;
