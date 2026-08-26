@@ -424,14 +424,6 @@ export async function DELETE(req) {
 
     const url = new URL(req.url);
     const id = Number(url.searchParams.get("id") || "");
-    const projectId = Number(url.searchParams.get("projectId") || url.searchParams.get("project_id") || "");
-
-    if (Number.isFinite(projectId) && projectId > 0) {
-      const result = await withRoznegarSchema(() =>
-        prisma.roznegarEntry.deleteMany({ where: { projectId, userId } })
-      );
-      return json({ ok: true, deletedCount: result.count });
-    }
 
     if (!Number.isFinite(id) || id <= 0) return bad("invalid_id");
 
