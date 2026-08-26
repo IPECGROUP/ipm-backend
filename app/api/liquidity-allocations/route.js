@@ -66,9 +66,38 @@ function amountFromFinalNote(history) {
   return total;
 }
 
-function finalPaidAmount(request) {
+function requestedRialMinorUnits(request) {
+  const createdMeta = Array.isArray(request.historyJson)
+    ? request.historyJson.find((entry) => entry?.type === "created")
+    : null;
+  const savedRialAmount = parseRequestedAmount(createdMeta?.rialAmount, true)?.minorUnits;
+  if (savedRialAmount != null) return savedRialAmount;
+
+  const isForeignCurrency = request.currencyTypeId != null;
+  const requestedAmount = parseRequestedAmount(
+    createdMeta?.requestAmount ?? request.amount ?? 0,
+    isForeignCurrency,
+  );
+  if (!requestedAmount) return 0n;
+  if (!isForeignCurrency) return requestedAmount.minorUnits;
+
+  const exchangeRate = toBigInt(createdMeta?.exchangeRate);
+  return exchangeRate != null && exchangeRate > 0n
+    ? requestedAmount.minorUnits * exchangeRate
+    : 0n;
+}
+
+function finalPaidMinorUnits(request) {
+  // Final-payment inputs are recorded in their selected currency. For a
+  // foreign-currency request, using those raw values as Rials made (for
+  // example) USD 2 reduce project liquidity by only 2 Rials. The request's
+  // exact converted Rial amount is the canonical project expense.
+  if (request.currencyTypeId != null) return requestedRialMinorUnits(request);
+
   const saved = BigInt(request.cashAmount || 0) + BigInt(request.creditAmount || 0);
-  return saved > 0n ? saved : amountFromFinalNote(request.historyJson);
+  if (saved > 0n) return saved * 100n;
+  const noted = amountFromFinalNote(request.historyJson);
+  return noted > 0n ? noted * 100n : requestedRialMinorUnits(request);
 }
 
 async function isAdmin(userId) {
@@ -147,7 +176,7 @@ export async function GET(request) {
         : prisma.$queryRawUnsafe("SELECT DISTINCT project_id AS \"projectId\" FROM liquidity_allocations WHERE project_id IS NOT NULL"),
       prisma.paymentRequest.findMany({
         where: { projectId: { not: null }, ...(resetAt ? { createdAt: { gt: resetAt } } : {}) },
-        select: { projectId: true, amount: true, cashAmount: true, creditAmount: true, status: true, historyJson: true },
+        select: { projectId: true, currencyTypeId: true, amount: true, cashAmount: true, creditAmount: true, status: true, historyJson: true },
       }),
       prisma.$queryRawUnsafe(`
         SELECT id, batch_id AS "batchId", allocation_date AS "allocationDate", source,
@@ -176,8 +205,9 @@ export async function GET(request) {
         result.committed[key] = formatMinorUnits(previousMinorUnits + amountMinorUnits);
       }
       if (request.status === "approved") {
-        const paid = finalPaidAmount(request);
-        result.spent[key] = amountText(BigInt(result.spent[key] || 0) + paid);
+        const paidMinorUnits = finalPaidMinorUnits(request);
+        const previousMinorUnits = parseRequestedAmount(result.spent[key] || 0, true)?.minorUnits ?? 0n;
+        result.spent[key] = formatMinorUnits(previousMinorUnits + paidMinorUnits);
         result.expenseCount[key] = Number(result.expenseCount[key] || 0) + 1;
       }
     }
