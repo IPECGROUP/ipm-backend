@@ -32,6 +32,7 @@ function sectionPermission(body) {
     technical: "دامنه کار",
     financial: "مالی و تضامین",
     insurance: "تأمین اجتماعی",
+    appendices: "الحاقیه",
   }[section] || "ویرایش";
 }
 
@@ -696,6 +697,27 @@ export async function PATCH(request) {
 
     const existing = await getContractById(id);
     if (!existing) return bad("not_found", 404);
+
+    if (body.action === "delete_appendices") {
+      const appendixIds = new Set(parseStringList(body.appendixIds ?? body.appendix_ids));
+      if (!appendixIds.size) return bad("appendix_ids_required");
+      const financial = plainObject(existing.financial);
+      const currentAppendices = Array.isArray(financial.appendices) ? financial.appendices : [];
+      const nextFinancial = {
+        ...financial,
+        appendices: currentAppendices.filter((row) => !appendixIds.has(trimString(row?.id))),
+      };
+      await prisma.$executeRaw`
+        UPDATE "contract_information"
+        SET
+          "financial" = ${JSON.stringify(nextFinancial)}::jsonb,
+          "last_saved_section" = 'appendices',
+          "updated_at" = CURRENT_TIMESTAMP
+        WHERE "id" = ${id}
+      `;
+      const item = await getContractById(id);
+      return json({ ok: true, item: mapRow(item), id });
+    }
 
     const built = await buildContractData(body, id);
     if (built.error) return bad(built.error);
