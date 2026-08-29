@@ -49,3 +49,35 @@ export async function POST(request) {
     return NextResponse.json({ error: "internal_error" }, { status: 500 });
   }
 }
+
+export async function PATCH(request) {
+  try {
+    await ensureTable();
+    const { id: rawId, title: rawTitle } = await request.json();
+    const id = Number(rawId);
+    const title = String(rawTitle || "").trim();
+    if (!Number.isInteger(id) || id <= 0) return NextResponse.json({ error: "invalid_id" }, { status: 400 });
+    if (!title) return NextResponse.json({ error: "title_required" }, { status: 400 });
+    const rows = await prisma.$queryRawUnsafe("UPDATE document_classes SET title = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, title", title, id);
+    if (!rows[0]) return NextResponse.json({ error: "not_found" }, { status: 404 });
+    return NextResponse.json({ item: rows[0] });
+  } catch (error) {
+    if (error?.code === "23505") return NextResponse.json({ error: "title_exists" }, { status: 409 });
+    console.error("document_classes_patch_error", error);
+    return NextResponse.json({ error: "internal_error" }, { status: 500 });
+  }
+}
+
+export async function DELETE(request) {
+  try {
+    await ensureTable();
+    const { ids } = await request.json();
+    const selectedIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map(Number).filter((id) => Number.isInteger(id) && id > 0)));
+    if (!selectedIds.length) return NextResponse.json({ error: "ids_required" }, { status: 400 });
+    await prisma.$executeRawUnsafe("DELETE FROM document_classes WHERE id = ANY($1::int[])", selectedIds);
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    console.error("document_classes_delete_error", error);
+    return NextResponse.json({ error: "internal_error" }, { status: 500 });
+  }
+}
