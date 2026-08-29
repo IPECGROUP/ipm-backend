@@ -172,7 +172,20 @@ export async function PATCH(r) {
     }
     if (row.stage === "project_manager") { if (!String(b.approvedDate || "").trim()) return json({ error: "invalid_input" }, 400); const managers = await settlementRecipients("management", row.createdById); if (!managers.length) return json({ error: "management_users_not_found" }, 400); history.push({ type: "step_set", stage: "management", assignedToUnit: "management", at: new Date().toISOString() }); await prisma.$executeRawUnsafe("UPDATE tenkhah_requests SET current_assignee_user_id=NULL,stage='management',manager_approved_date=$1,workflow_history=$2::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$3", String(b.approvedDate), JSON.stringify(history), row.id); }
     else if (row.stage === "management") { const finances = await settlementRecipients("finance", row.createdById); if (!finances.length) return json({ error: "finance_users_not_found" }, 400); history.push({ type: "step_set", stage: "finance", assignedToUnit: "finance", at: new Date().toISOString() }); await prisma.$executeRawUnsafe("UPDATE tenkhah_requests SET finance_user_id=NULL,current_assignee_user_id=NULL,stage='finance',workflow_history=$1::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$2", JSON.stringify(history), row.id); }
-    else if (row.stage === "finance") { const cashPaymentAmount = amount(b.cashPaymentAmount), creditPaymentAmount = amount(b.creditPaymentAmount); if (cashPaymentAmount <= 0n && creditPaymentAmount <= 0n) return json({ error: "payment_amount_required" }, 400); if (cashPaymentAmount > 0n && !String(b.cashPaymentMethod || "").trim()) return json({ error: "cash_payment_method_required" }, 400); if (creditPaymentAmount > 0n && !String(b.creditPaymentDescription || "").trim()) return json({ error: "credit_payment_description_required" }, 400); await prisma.$executeRawUnsafe("UPDATE tenkhah_requests SET charged_date=$1,charged_amount=$2::bigint,cash_payment_amount=$3::bigint,cash_payment_currency=$4,cash_payment_method=$5,credit_payment_amount=$6::bigint,credit_payment_currency=$7,credit_payment_description=$8,status='charged',stage='completed',current_assignee_user_id=NULL,workflow_history=$9::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$10", String(b.chargedDate || ""), String(cashPaymentAmount + creditPaymentAmount), String(cashPaymentAmount), String(b.cashPaymentCurrency || row.currency || ""), String(b.cashPaymentMethod || ""), String(creditPaymentAmount), String(b.creditPaymentCurrency || row.currency || ""), String(b.creditPaymentDescription || "").trim(), JSON.stringify(history), row.id); }
+    else if (row.stage === "finance") {
+      const cashPaymentAmount = amount(b.cashPaymentAmount);
+      const creditPaymentAmount = amount(b.creditPaymentAmount);
+      const hasCashPayment = cashPaymentAmount > 0n;
+      const hasCreditPayment = creditPaymentAmount > 0n;
+
+      // Either payment type can finalize the request independently. Credit
+      // payment details are only required when a credit amount is entered.
+      if (!hasCashPayment && !hasCreditPayment) return json({ error: "payment_amount_required" }, 400);
+      if (hasCashPayment && !String(b.cashPaymentMethod || "").trim()) return json({ error: "cash_payment_method_required" }, 400);
+      if (hasCreditPayment && !String(b.creditPaymentDescription || "").trim()) return json({ error: "credit_payment_description_required" }, 400);
+
+      await prisma.$executeRawUnsafe("UPDATE tenkhah_requests SET charged_date=$1,charged_amount=$2::bigint,cash_payment_amount=$3::bigint,cash_payment_currency=$4,cash_payment_method=$5,credit_payment_amount=$6::bigint,credit_payment_currency=$7,credit_payment_description=$8,status='charged',stage='completed',current_assignee_user_id=NULL,workflow_history=$9::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$10", String(b.chargedDate || ""), String(cashPaymentAmount + creditPaymentAmount), String(cashPaymentAmount), String(b.cashPaymentCurrency || row.currency || ""), String(b.cashPaymentMethod || ""), String(creditPaymentAmount), String(b.creditPaymentCurrency || row.currency || ""), String(b.creditPaymentDescription || "").trim(), JSON.stringify(history), row.id);
+    }
     else return json({ error: "invalid_stage" }, 400);
     return json({ ok: true });
   } catch (e) { return json({ error: "internal_error", message: String(e?.message || e) }, 500); }
