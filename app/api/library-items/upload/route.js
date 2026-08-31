@@ -26,7 +26,6 @@ export async function POST(request) {
     const originalName = String(file.name || "file");
     const extension = path.extname(originalName).toLowerCase();
     if (!allowedExtensions.has(extension)) return json({ error: "unsupported_file_type" }, 415);
-    if (Number(file.size || 0) > 25 * 1024 * 1024) return json({ error: "file_too_large" }, 413);
     const storedName = `${crypto.randomUUID()}${extension}`;
     const directory = path.join(process.cwd(), "public", "uploads", "library-items");
     await mkdir(directory, { recursive: true });
