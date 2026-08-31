@@ -29,11 +29,13 @@ async function ensureSchema() {
         title TEXT NOT NULL,
         library_id INTEGER NOT NULL,
         related_letter_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+        tag_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
         files JSONB NOT NULL DEFAULT '[]'::jsonb,
         created_by_id INTEGER,
         created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
       )
     `);
+    await prisma.$executeRawUnsafe(`ALTER TABLE library_items ADD COLUMN IF NOT EXISTS tag_ids JSONB NOT NULL DEFAULT '[]'::jsonb`);
   })().catch((error) => { schemaPromise = null; throw error; });
   return schemaPromise;
 }
@@ -43,7 +45,7 @@ function cleanFiles(value) {
 }
 
 function mapItem(row) {
-  return { id: row.id, title: row.title, libraryId: row.library_id, libraryTitle: row.library_title || "", relatedLetterIds: Array.isArray(row.related_letter_ids) ? row.related_letter_ids : [], files: Array.isArray(row.files) ? row.files : [], createdById: row.created_by_id, createdAt: row.created_at };
+  return { id: row.id, title: row.title, libraryId: row.library_id, libraryTitle: row.library_title || "", relatedLetterIds: Array.isArray(row.related_letter_ids) ? row.related_letter_ids : [], tagIds: Array.isArray(row.tag_ids) ? row.tag_ids.map(String) : [], files: Array.isArray(row.files) ? row.files : [], createdById: row.created_by_id, createdAt: row.created_at };
 }
 
 async function findLibrary(id) {
@@ -77,10 +79,11 @@ export async function POST(request) {
     if (!library) return json({ error: "library_not_found" }, 400);
     const id = randomUUID();
     const relatedLetterIds = (Array.isArray(body.relatedLetterIds) ? body.relatedLetterIds : []).map(String).filter(Boolean).slice(0, 100);
+    const tagIds = [...new Set((Array.isArray(body.tagIds) ? body.tagIds : []).map(String).filter(Boolean))].slice(0, 100);
     const files = cleanFiles(body.files);
     const rows = await prisma.$queryRaw`
-      INSERT INTO library_items (id,title,library_id,related_letter_ids,files,created_by_id)
-      VALUES (${id},${title},${libraryId},${JSON.stringify(relatedLetterIds)}::jsonb,${JSON.stringify(files)}::jsonb,${Number(user.id)}) RETURNING *
+      INSERT INTO library_items (id,title,library_id,related_letter_ids,tag_ids,files,created_by_id)
+      VALUES (${id},${title},${libraryId},${JSON.stringify(relatedLetterIds)}::jsonb,${JSON.stringify(tagIds)}::jsonb,${JSON.stringify(files)}::jsonb,${Number(user.id)}) RETURNING *
     `;
     return json({ item: mapItem({ ...rows[0], library_title: library.title }) }, 201);
   } catch (error) {
@@ -103,9 +106,10 @@ export async function PATCH(request) {
     const library = await findLibrary(libraryId);
     if (!library) return json({ error: "library_not_found" }, 400);
     const relatedLetterIds = (Array.isArray(body.relatedLetterIds) ? body.relatedLetterIds : []).map(String).filter(Boolean).slice(0, 100);
+    const tagIds = [...new Set((Array.isArray(body.tagIds) ? body.tagIds : []).map(String).filter(Boolean))].slice(0, 100);
     const files = cleanFiles(body.files);
     const rows = await prisma.$queryRaw`
-      UPDATE library_items SET title=${title},library_id=${libraryId},related_letter_ids=${JSON.stringify(relatedLetterIds)}::jsonb,files=${JSON.stringify(files)}::jsonb
+      UPDATE library_items SET title=${title},library_id=${libraryId},related_letter_ids=${JSON.stringify(relatedLetterIds)}::jsonb,tag_ids=${JSON.stringify(tagIds)}::jsonb,files=${JSON.stringify(files)}::jsonb
       WHERE id=${id} RETURNING *
     `;
     if (!rows.length) return json({ error: "not_found" }, 404);
