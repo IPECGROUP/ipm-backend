@@ -28,16 +28,17 @@ async function ensureSchema() {
       "category" TEXT NOT NULL DEFAULT '',
       "link" TEXT NOT NULL,
       "related_letter_ids" JSONB NOT NULL DEFAULT '[]'::jsonb,
+      "tag_ids" JSONB NOT NULL DEFAULT '[]'::jsonb,
       "files" JSONB NOT NULL DEFAULT '[]'::jsonb,
       "created_by_id" INTEGER,
       "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
-  `).catch((error) => { schemaPromise = null; throw error; });
+  `).then(() => prisma.$executeRawUnsafe(`ALTER TABLE "training_resources" ADD COLUMN IF NOT EXISTS "tag_ids" JSONB NOT NULL DEFAULT '[]'::jsonb`)).catch((error) => { schemaPromise = null; throw error; });
   return schemaPromise;
 }
 
 function mapItem(row) {
-  return { id: row.id, title: row.title, category: row.category || "", link: row.link, relatedLetterIds: Array.isArray(row.related_letter_ids) ? row.related_letter_ids : [], files: Array.isArray(row.files) ? row.files : [], createdById: row.created_by_id, createdAt: row.created_at };
+  return { id: row.id, title: row.title, category: row.category || "", link: row.link, relatedLetterIds: Array.isArray(row.related_letter_ids) ? row.related_letter_ids : [], tagIds: Array.isArray(row.tag_ids) ? row.tag_ids.map(String) : [], files: Array.isArray(row.files) ? row.files : [], createdById: row.created_by_id, createdAt: row.created_at };
 }
 
 export async function GET(request) {
@@ -65,12 +66,13 @@ export async function POST(request) {
     const link = /^https?:\/\//i.test(rawLink) ? rawLink : `https://${rawLink}`;
     try { new URL(link); } catch { return json({ error: "invalid_link" }, 400); }
     const relatedLetterIds = (Array.isArray(body.relatedLetterIds) ? body.relatedLetterIds : []).map(String).filter(Boolean).slice(0, 100);
+    const tagIds = [...new Set((Array.isArray(body.tagIds) ? body.tagIds : []).map(String).filter(Boolean))].slice(0, 100);
     const files = (Array.isArray(body.files) ? body.files : []).filter((file) => file && typeof file === "object" && file.url).slice(0, 30).map((file) => ({ name: String(file.name || "file").slice(0, 255), url: String(file.url).slice(0, 1000), size: Number(file.size || 0), type: String(file.type || "").slice(0, 120) }));
     await ensureSchema();
     const id = randomUUID();
     const rows = await prisma.$queryRaw`
-      INSERT INTO "training_resources" ("id", "title", "category", "link", "related_letter_ids", "files", "created_by_id")
-      VALUES (${id}, ${title}, ${category}, ${link}, ${JSON.stringify(relatedLetterIds)}::jsonb, ${JSON.stringify(files)}::jsonb, ${Number(user.id)})
+      INSERT INTO "training_resources" ("id", "title", "category", "link", "related_letter_ids", "tag_ids", "files", "created_by_id")
+      VALUES (${id}, ${title}, ${category}, ${link}, ${JSON.stringify(relatedLetterIds)}::jsonb, ${JSON.stringify(tagIds)}::jsonb, ${JSON.stringify(files)}::jsonb, ${Number(user.id)})
       RETURNING *
     `;
     return json({ item: mapItem(rows[0]) }, 201);
@@ -95,12 +97,14 @@ export async function PATCH(request) {
     const link = /^https?:\/\//i.test(rawLink) ? rawLink : `https://${rawLink}`;
     try { new URL(link); } catch { return json({ error: "invalid_link" }, 400); }
     const relatedLetterIds = (Array.isArray(body.relatedLetterIds) ? body.relatedLetterIds : []).map(String).filter(Boolean).slice(0, 100);
+    const tagIds = [...new Set((Array.isArray(body.tagIds) ? body.tagIds : []).map(String).filter(Boolean))].slice(0, 100);
     const files = (Array.isArray(body.files) ? body.files : []).filter((file) => file && typeof file === "object" && file.url).slice(0, 30).map((file) => ({ name: String(file.name || "file").slice(0, 255), url: String(file.url).slice(0, 1000), size: Number(file.size || 0), type: String(file.type || "").slice(0, 120) }));
     await ensureSchema();
     const rows = await prisma.$queryRaw`
       UPDATE "training_resources"
       SET "title" = ${title}, "category" = ${category}, "link" = ${link},
           "related_letter_ids" = ${JSON.stringify(relatedLetterIds)}::jsonb,
+          "tag_ids" = ${JSON.stringify(tagIds)}::jsonb,
           "files" = ${JSON.stringify(files)}::jsonb
       WHERE "id" = ${id}
       RETURNING *
