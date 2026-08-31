@@ -34,7 +34,7 @@ export async function GET(request) {
   try {
     if (!await currentUser(request)) return json({ error: "unauthorized" }, 401);
     await ensureSchema();
-    const rows = await prisma.$queryRawUnsafe(`SELECT l.*, p.name AS project_name, p.code AS project_code, u.name AS author_name, u.username AS author_username, (SELECT COUNT(*) FROM project_lessons x WHERE x.created_by_id=l.created_by_id) AS author_post_count FROM project_lessons l LEFT JOIN "User" u ON u.id=l.created_by_id ORDER BY l.created_at DESC`);
+    const rows = await prisma.$queryRawUnsafe(`SELECT l.*, p.name AS project_name, p.code AS project_code, u.name AS author_name, u.username AS author_username, (SELECT COUNT(*) FROM project_lessons x WHERE x.created_by_id=l.created_by_id) AS author_post_count FROM project_lessons l LEFT JOIN projects p ON p.id=l.project_id LEFT JOIN "User" u ON u.id=l.created_by_id ORDER BY l.created_at DESC`);
     return json({ items: rows.map(mapItem) });
   } catch (error) { console.error("project_lessons_get_failed", error); return json({ error: "project_lessons_get_failed" }, 500); }
 }
