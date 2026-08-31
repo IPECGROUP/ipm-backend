@@ -137,9 +137,9 @@ async function ensureLiquidityTable() {
       `);
       await prisma.$executeRawUnsafe("ALTER TABLE liquidity_allocations ADD COLUMN IF NOT EXISTS batch_id VARCHAR(80)");
       await prisma.$executeRawUnsafe("ALTER TABLE liquidity_allocations ADD COLUMN IF NOT EXISTS row_type VARCHAR(20) NOT NULL DEFAULT 'project'");
-      // Project-less rows created by earlier versions stored the contingency
-      // balance.  Preserve them under their explicit row type.
-      await prisma.$executeRawUnsafe("UPDATE liquidity_allocations SET row_type = 'contingency_reserve' WHERE project_id IS NULL AND row_type = 'project'");
+      // The contingency reserve feature has been removed.  Clear only its
+      // legacy rows; project allocations and batch totals remain intact.
+      await prisma.$executeRawUnsafe("DELETE FROM liquidity_allocations WHERE row_type = 'contingency_reserve'");
       await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS liquidity_allocations_project_id_idx ON liquidity_allocations(project_id)");
       await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS liquidity_allocations_batch_id_idx ON liquidity_allocations(batch_id)");
       await prisma.$executeRawUnsafe(`
@@ -200,7 +200,7 @@ export async function GET(request) {
     const projectRecords = projectIds.length
       ? await prisma.project.findMany({ where: { id: { in: projectIds } }, orderBy: { code: "asc" } })
       : [];
-    const result = { allocations: {}, spent: {}, committed: {}, expenseCount: {}, projects: [], history: [], contingencyReserve: "0" };
+    const result = { allocations: {}, spent: {}, committed: {}, expenseCount: {}, projects: [], history: [] };
     for (const row of allocations) {
       const key = mapKey(row.projectId);
       if (key != null) result.allocations[key] = amountText(row.amount);
@@ -235,9 +235,6 @@ export async function GET(request) {
     const projectById = new Map(projectRecords.map((project) => [String(project.id), project]));
     const historyByBatch = new Map();
     for (const row of historyRows) {
-      if (row.rowType === "contingency_reserve") {
-        result.contingencyReserve = amountText(BigInt(result.contingencyReserve || 0) + BigInt(row.amount || 0));
-      }
       const batchId = String(row.batchId || `legacy-${row.id}`);
       if (!historyByBatch.has(batchId)) {
         historyByBatch.set(batchId, {
@@ -247,17 +244,12 @@ export async function GET(request) {
           availableAmount: amountText(row.availableAmount),
           allocatedAmount: "0",
           totalAmount: "0",
-          contingencyReserveAmount: "0",
           description: row.description || "",
           createdAt: row.createdAt,
           details: [],
         });
       }
       const batch = historyByBatch.get(batchId);
-      if (row.rowType === "contingency_reserve") {
-        batch.contingencyReserveAmount = amountText(BigInt(batch.contingencyReserveAmount || 0) + BigInt(row.amount || 0));
-        continue;
-      }
       // The total row is stored separately from project allocations so the
       // allocation total remains the sum of project-assigned amounts.
       if (row.rowType === "total" || row.projectId == null) {
@@ -286,7 +278,6 @@ export async function GET(request) {
       result.expenseCount = { [key]: result.expenseCount[key] || 0 };
       result.projects = result.projects.filter((project) => String(project.id) === key);
       result.history = [];
-      result.contingencyReserve = "0";
     }
     return json(result);
   } catch (error) {
@@ -305,13 +296,12 @@ export async function POST(request) {
     const allocationDate = String(body?.allocationDate || "").trim();
     const source = String(body?.source || "").trim();
     const availableAmount = toBigInt(body?.availableAmount);
-    const reserveAdjustment = toBigInt(body?.reserveAdjustment) ?? 0n;
     const batchId = String(body?.batchId || "").trim().slice(0, 80) || null;
     const description = String(body?.description || "").trim();
     const rows = Array.isArray(body?.rows) ? body.rows : [];
     const parsedRows = rows.map((row) => ({ projectId: Number(row?.projectId), amount: toBigInt(row?.amount) }))
       .filter((row) => Number.isInteger(row.projectId) && row.projectId > 0 && row.amount != null && row.amount !== 0n);
-    if (!allocationDate || !source || availableAmount == null || availableAmount <= 0n || (!parsedRows.length && reserveAdjustment === 0n)) {
+    if (!allocationDate || !source || availableAmount == null || availableAmount <= 0n || !parsedRows.length) {
       return json({ error: "invalid_input" }, 400);
     }
     const allocationTotal = parsedRows.reduce((total, row) => total + row.amount, 0n);
@@ -321,10 +311,6 @@ export async function POST(request) {
     const existingBatchTotal = BigInt(existingBatchRows?.[0]?.amount || 0);
     if (existingBatchTotal + allocationTotal > availableAmount) {
       return json({ error: "allocation_total_exceeds_available_amount" }, 400);
-    }
-    const contingencyReserveAmount = availableAmount - existingBatchTotal - allocationTotal + reserveAdjustment;
-    if (contingencyReserveAmount < 0n) {
-      return json({ error: "contingency_reserve_cannot_be_negative" }, 400);
     }
     await prisma.$transaction(async (tx) => {
       for (const row of parsedRows) {
@@ -347,16 +333,6 @@ export async function POST(request) {
         String(availableAmount),
         description,
         String(allocationTotal),
-        userId,
-        batchId,
-      );
-      await tx.$executeRawUnsafe(
-        "INSERT INTO liquidity_allocations (allocation_date, source, available_amount, description, project_id, amount, created_by, batch_id, row_type) VALUES ($1, $2, $3::bigint, $4, NULL, $5::bigint, $6, $7, 'contingency_reserve')",
-        allocationDate,
-        source,
-        String(availableAmount),
-        description,
-        String(contingencyReserveAmount),
         userId,
         batchId,
       );
