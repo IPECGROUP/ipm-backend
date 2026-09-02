@@ -612,3 +612,29 @@ model LiquidityAllocation {
   @@index([batchId])
   @@map("liquidity_allocations")
 }
+
+model PettyCashExpense {
+  id                     Int       @id @default(autoincrement())
+  projectId              Int       @map("project_id")
+  expenseDate            String    @map("expense_date") @db.VarChar(20)
+  description            String    @default("") @db.Text
+  budgetCode             String    @map("budget_code") @db.VarChar(80)
+  amount                 BigInt
+  createdById            Int       @map("created_by_id")
+  stage                  String    @default("planning") @db.VarChar(32)
+  planningStatus         String    @default("pending") @map("planning_status") @db.VarChar(20)
+  planningById           Int?      @map("planning_by_id")
+  planningAt             DateTime? @map("planning_at")
+  projectManagerId       Int?      @map("project_manager_id")
+  projectManagerStatus   String    @default("pending") @map("project_manager_status") @db.VarChar(20)
+  projectManagerById     Int?      @map("project_manager_by_id")
+  projectManagerAt       DateTime? @map("project_manager_at")
+  rejectedById           Int?      @map("rejected_by_id")
+  createdAt              DateTime  @default(now()) @map("created_at")
+  updatedAt              DateTime  @updatedAt @map("updated_at")
+
+  @@index([projectId])
+  @@index([projectManagerId, stage])
+  @@index([createdById])
+  @@map("petty_cash_expenses")
+}
