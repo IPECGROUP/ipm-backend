@@ -1,3 +1,2 @@
 ALTER TABLE "PaymentRequest"
-ADD COLUMN IF NOT EXISTS "docDatesJalali" JSONB;
-
+ADD COLUMN "docDatesJalali" JSONB;

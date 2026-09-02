@@ -1,5 +1,5 @@
 // app/api/requests/[[...slug]]/route.js
-import { prisma } from "../../../../lib/prisma";
+import { PrismaClient } from "@prisma/client";
 import { fallbackUnitsForRoleNames } from "../../../../lib/orgStructureFallback";
 import { unlink } from "node:fs/promises";
 import path from "node:path";
@@ -8,6 +8,9 @@ import { nextSharedPaymentSerial } from "../../../../lib/paymentSerial";
 import { convertedRialMinorUnits, formatMinorUnits, parseRequestedAmount } from "../../../../lib/paymentAmount";
 
 export const runtime = "nodejs";
+
+const prisma = globalThis.__prisma_requests || new PrismaClient();
+if (process.env.NODE_ENV !== "production") globalThis.__prisma_requests = prisma;
 
 // Supply requests deliberately share the underlying table with payment
 // requests, but belong exclusively to /api/supply-requests. Keep this
