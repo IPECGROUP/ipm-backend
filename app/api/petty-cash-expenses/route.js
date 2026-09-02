@@ -5,6 +5,14 @@ export const runtime = "nodejs";
 const json = (data, status = 200) => Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
 const cookie = (request, name) => String(request.headers.get("cookie") || "").match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`))?.[1] || "";
 
+class RouteError extends Error {
+  constructor(code, status = 400) {
+    super(code);
+    this.code = code;
+    this.status = status;
+  }
+}
+
 async function userIdOf(request) {
   const raw = request.headers.get("x-user-id") || cookie(request, "user_id");
   if (/^\d+$/.test(raw)) return Number(raw);
@@ -61,6 +69,26 @@ async function ensureTable() {
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expenses_project_idx ON petty_cash_expenses(project_id)");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expenses_assignee_idx ON petty_cash_expenses(project_manager_id, stage)");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expenses_creator_idx ON petty_cash_expenses(created_by_id)");
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS petty_cash_settlement_reports (
+        id SERIAL PRIMARY KEY,
+        report_number VARCHAR(40) NOT NULL UNIQUE,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+        created_by_id INTEGER NOT NULL,
+        prepared_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS petty_cash_settlement_report_items (
+        id SERIAL PRIMARY KEY,
+        report_id INTEGER NOT NULL REFERENCES petty_cash_settlement_reports(id) ON DELETE CASCADE,
+        expense_id INTEGER NOT NULL UNIQUE REFERENCES petty_cash_expenses(id) ON DELETE RESTRICT,
+        created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        UNIQUE(report_id, expense_id)
+      )
+    `);
+    await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_settlement_reports_project_idx ON petty_cash_settlement_reports(project_id)");
+    await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_settlement_report_items_report_idx ON petty_cash_settlement_report_items(report_id)");
   })();
   return ready;
 }
@@ -99,6 +127,17 @@ function itemFromRow(row) {
     projectManagerById: row.projectManagerById, projectManagerByName: row.projectManagerByName,
     projectManagerByUsername: row.projectManagerByUsername, projectManagerAt: row.projectManagerAt,
     createdById: row.createdById, createdByName: row.createdByName,
+    settlementReportId: row.settlementReportId ? Number(row.settlementReportId) : null,
+    settlementReportNumber: row.settlementReportNumber || null,
+  };
+}
+
+function reportFromRow(row) {
+  return {
+    id: Number(row.id), reportNumber: row.reportNumber, projectId: Number(row.projectId),
+    projectCode: row.projectCode, projectName: row.projectName, preparedAt: row.preparedAt,
+    itemCount: Number(row.itemCount || 0), createdById: Number(row.createdById),
+    createdByName: row.createdByName, createdByUsername: row.createdByUsername,
   };
 }
 
@@ -111,18 +150,58 @@ export async function GET(request) {
     const recipients = url.searchParams.get("recipients");
     if (recipients === "project_manager") return json({ users: await workflowMembers("project_manager") });
 
-    const projectId = Number(url.searchParams.get("projectId")) || 0;
     const [isPlanning, isProjectManager] = await Promise.all([isMember(userId, "planning"), isMember(userId, "project_manager")]);
+    if (url.searchParams.get("reports") === "1") {
+      const reportId = Number(url.searchParams.get("reportId")) || 0;
+      const reportRows = await prisma.$queryRawUnsafe(`
+        SELECT r.id,r.report_number AS "reportNumber",r.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",r.prepared_at AS "preparedAt",
+          r.created_by_id AS "createdById",creator.name AS "createdByName",creator.username AS "createdByUsername",COUNT(ri.id)::int AS "itemCount"
+        FROM petty_cash_settlement_reports r
+        INNER JOIN projects p ON p.id=r.project_id
+        LEFT JOIN "User" creator ON creator.id=r.created_by_id
+        LEFT JOIN petty_cash_settlement_report_items ri ON ri.report_id=r.id
+        WHERE ($3::int=0 OR r.id=$3)
+          AND (r.created_by_id=$1 OR $2::boolean OR EXISTS (
+            SELECT 1 FROM petty_cash_settlement_report_items visible_ri
+            INNER JOIN petty_cash_expenses visible_e ON visible_e.id=visible_ri.expense_id
+            WHERE visible_ri.report_id=r.id AND visible_e.project_manager_id=$1
+          ))
+        GROUP BY r.id,p.code,p.name,creator.name,creator.username
+        ORDER BY r.prepared_at DESC,r.id DESC
+      `, userId, isPlanning, reportId);
+      if (reportId && !reportRows.length) return json({ error: "report_not_found" }, 404);
+      if (!reportId) return json({ items: reportRows.map(reportFromRow) });
+      const expenseRows = await prisma.$queryRawUnsafe(`
+        SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,
+          e.stage,e.planning_status AS "planningStatus",e.planning_by_id AS "planningById",planner.name AS "planningByName",planner.username AS "planningByUsername",e.planning_at AS "planningAt",
+          e.project_manager_id AS "projectManagerId",e.project_manager_status AS "projectManagerStatus",e.project_manager_by_id AS "projectManagerById",manager.name AS "projectManagerByName",manager.username AS "projectManagerByUsername",e.project_manager_at AS "projectManagerAt",
+          e.created_by_id AS "createdById",expense_creator.name AS "createdByName",r.id AS "settlementReportId",r.report_number AS "settlementReportNumber"
+        FROM petty_cash_settlement_report_items ri
+        INNER JOIN petty_cash_settlement_reports r ON r.id=ri.report_id
+        INNER JOIN petty_cash_expenses e ON e.id=ri.expense_id
+        INNER JOIN projects p ON p.id=e.project_id
+        LEFT JOIN "User" expense_creator ON expense_creator.id=e.created_by_id
+        LEFT JOIN "User" planner ON planner.id=e.planning_by_id
+        LEFT JOIN "User" manager ON manager.id=e.project_manager_by_id
+        WHERE ri.report_id=$1
+        ORDER BY ri.id ASC
+      `, reportId);
+      return json({ report: reportFromRow(reportRows[0]), items: expenseRows.map(itemFromRow) });
+    }
+
+    const projectId = Number(url.searchParams.get("projectId")) || 0;
     const rows = await prisma.$queryRawUnsafe(`
       SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,
         e.stage,e.planning_status AS "planningStatus",e.planning_by_id AS "planningById",planner.name AS "planningByName",planner.username AS "planningByUsername",e.planning_at AS "planningAt",
         e.project_manager_id AS "projectManagerId",e.project_manager_status AS "projectManagerStatus",e.project_manager_by_id AS "projectManagerById",manager.name AS "projectManagerByName",manager.username AS "projectManagerByUsername",e.project_manager_at AS "projectManagerAt",
-        e.created_by_id AS "createdById",creator.name AS "createdByName"
+        e.created_by_id AS "createdById",creator.name AS "createdByName",report.id AS "settlementReportId",report.report_number AS "settlementReportNumber"
       FROM petty_cash_expenses e
       INNER JOIN projects p ON p.id=e.project_id
       LEFT JOIN "User" creator ON creator.id=e.created_by_id
       LEFT JOIN "User" planner ON planner.id=e.planning_by_id
       LEFT JOIN "User" manager ON manager.id=e.project_manager_by_id
+      LEFT JOIN petty_cash_settlement_report_items report_item ON report_item.expense_id=e.id
+      LEFT JOIN petty_cash_settlement_reports report ON report.id=report_item.report_id
       WHERE ($1::int=0 OR e.project_id=$1)
         AND (e.created_by_id=$2 OR e.project_manager_id=$2 OR $3::boolean)
       ORDER BY e.created_at DESC, e.id DESC
@@ -140,6 +219,38 @@ export async function POST(request) {
     const userId = await userIdOf(request);
     if (!userId) return json({ error: "unauthorized" }, 401);
     const body = await request.json().catch(() => ({}));
+    if (body.action === "create_settlement_report") {
+      const expenseIds = [...new Set((Array.isArray(body.expenseIds) ? body.expenseIds : []).map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+      if (expenseIds.length < 2) return json({ error: "at_least_two_expenses_required" }, 400);
+      const isPlanning = await isMember(userId, "planning");
+      const report = await prisma.$transaction(async (tx) => {
+        const expenses = await tx.$queryRawUnsafe(`
+          SELECT id,project_id AS "projectId",created_by_id AS "createdById",project_manager_id AS "projectManagerId"
+          FROM petty_cash_expenses
+          WHERE id=ANY($1::int[])
+          ORDER BY id
+          FOR UPDATE
+        `, expenseIds);
+        if (expenses.length !== expenseIds.length) throw new RouteError("expense_not_found", 404);
+        if (expenses.some((expense) => Number(expense.createdById) !== userId && Number(expense.projectManagerId) !== userId && !isPlanning)) throw new RouteError("not_allowed", 403);
+        const projectIds = new Set(expenses.map((expense) => Number(expense.projectId)));
+        if (projectIds.size !== 1) throw new RouteError("expenses_must_have_same_project", 400);
+        const grouped = await tx.$queryRawUnsafe("SELECT expense_id FROM petty_cash_settlement_report_items WHERE expense_id=ANY($1::int[])", expenseIds);
+        if (grouped.length) throw new RouteError("expense_already_grouped", 409);
+        const placeholder = `TMP-${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        const inserted = await tx.$queryRawUnsafe(`
+          INSERT INTO petty_cash_settlement_reports (report_number,project_id,created_by_id)
+          VALUES ($1,$2,$3)
+          RETURNING id,prepared_at AS "preparedAt"
+        `, placeholder, [...projectIds][0], userId);
+        const reportId = Number(inserted[0].id);
+        const reportNumber = `PCR-${String(reportId).padStart(6, "0")}`;
+        await tx.$executeRawUnsafe("UPDATE petty_cash_settlement_reports SET report_number=$1 WHERE id=$2", reportNumber, reportId);
+        await tx.$executeRawUnsafe("INSERT INTO petty_cash_settlement_report_items (report_id,expense_id) SELECT $1,unnest($2::int[])", reportId, expenseIds);
+        return { id: reportId, reportNumber, preparedAt: inserted[0].preparedAt, itemCount: expenseIds.length };
+      });
+      return json({ ok: true, item: report }, 201);
+    }
     const projectId = Number(body.projectId);
     const expenseDate = String(body.expenseDate || "").trim();
     const description = String(body.description || "").trim();
@@ -160,6 +271,8 @@ export async function POST(request) {
     return json({ ok: true, id: Number(rows[0].id) }, 201);
   } catch (error) {
     console.error("petty_cash_expenses_post_error", error);
+    if (error instanceof RouteError) return json({ error: error.code }, error.status);
+    if (error?.code === "P2002" || error?.code === "23505") return json({ error: "expense_already_grouped" }, 409);
     return json({ error: "internal_error" }, 500);
   }
 }

@@ -277,6 +277,7 @@ function normalizeOut(row, userNamesById = null) {
   if (!row) return row;
   const history = Array.isArray(row.historyJson) ? row.historyJson : [];
   const createdMeta = history.find((entry) => entry?.type === "created") || {};
+  const finalPayment = [...history].reverse().find((entry) => entry?.finalPayment)?.finalPayment || {};
   const currentStep = getCurrentStep(history);
   const resolvedHistory = userNamesById
     ? history.map((entry) => {
@@ -296,9 +297,9 @@ function normalizeOut(row, userNamesById = null) {
     amount: createdMeta.requestAmount ?? bigintToJson(row.amount),
     exchangeRate: createdMeta.exchangeRate ?? null,
     rialAmount: createdMeta.rialAmount ?? bigintToJson(row.amount),
-    cashText: bigintToJson(row.cashAmount),
+    cashText: finalPayment.cashAmount ?? bigintToJson(row.cashAmount),
     cashDate: row.cashDateJalali,
-    creditSection: bigintToJson(row.creditAmount),
+    creditSection: finalPayment.creditAmount ?? bigintToJson(row.creditAmount),
     creditPay: row.creditPay,
 
     beneficiaryName: row.beneficiaryName,
@@ -1097,8 +1098,29 @@ export async function POST(req, ctx) {
       if (nextIndex >= chain.length) {
         history.push({ type: "step_clear", at: new Date().toISOString() });
 
-        const finalCashAmount = toBigIntSafe(body?.cashAmount);
-        const finalCreditAmount = toBigIntSafe(body?.creditAmount);
+        const cashIsForeign = body?.cashCurrencyTypeId != null && body.cashCurrencyTypeId !== "";
+        const creditIsForeign = body?.creditCurrencyTypeId != null && body.creditCurrencyTypeId !== "";
+        const finalCashAmount = body?.cashAmount === "" || body?.cashAmount == null
+          ? null
+          : parseRequestedAmount(body.cashAmount, cashIsForeign);
+        const finalCreditAmount = body?.creditAmount === "" || body?.creditAmount == null
+          ? null
+          : parseRequestedAmount(body.creditAmount, creditIsForeign);
+        if (body?.cashAmount && !finalCashAmount) return json({ error: "cash_amount_invalid" }, 400);
+        if (body?.creditAmount && !finalCreditAmount) return json({ error: "credit_amount_invalid" }, 400);
+
+        const approvalEntryIndex = history.length - 2;
+        history[approvalEntryIndex] = {
+          ...history[approvalEntryIndex],
+          finalPayment: {
+            cashAmount: finalCashAmount ? formatMinorUnits(finalCashAmount.minorUnits) : null,
+            cashCurrencyTypeId: cashIsForeign ? Number(body.cashCurrencyTypeId) : null,
+            paymentMethod: String(body?.paymentMethod || ""),
+            creditAmount: finalCreditAmount ? formatMinorUnits(finalCreditAmount.minorUnits) : null,
+            creditCurrencyTypeId: creditIsForeign ? Number(body.creditCurrencyTypeId) : null,
+            creditDescription: String(body?.creditDescription || ""),
+          },
+        };
 
         const updated = await prisma.paymentRequest.update({
           where: { id },
@@ -1106,8 +1128,8 @@ export async function POST(req, ctx) {
             status: "approved",
             currentAssigneeUserId: null,
             historyJson: history,
-            cashAmount: finalCashAmount ?? row.cashAmount,
-            creditAmount: finalCreditAmount ?? row.creditAmount,
+            cashAmount: finalCashAmount?.legacyWholeAmount ?? row.cashAmount,
+            creditAmount: finalCreditAmount?.legacyWholeAmount ?? row.creditAmount,
           },
         });
         return json({ ok: true, item: normalizeOut(updated) });
