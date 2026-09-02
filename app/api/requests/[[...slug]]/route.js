@@ -12,6 +12,20 @@ export const runtime = "nodejs";
 const prisma = globalThis.__prisma_requests || new PrismaClient();
 if (process.env.NODE_ENV !== "production") globalThis.__prisma_requests = prisma;
 
+let paymentRequestCompatibilityReady;
+async function ensurePaymentRequestCompatibility() {
+  if (!paymentRequestCompatibilityReady) {
+    paymentRequestCompatibilityReady = prisma.$executeRawUnsafe(`
+      ALTER TABLE "PaymentRequest"
+      ADD COLUMN IF NOT EXISTS "docDatesJalali" JSONB
+    `).catch((error) => {
+      paymentRequestCompatibilityReady = null;
+      throw error;
+    });
+  }
+  await paymentRequestCompatibilityReady;
+}
+
 // Supply requests deliberately share the underlying table with payment
 // requests, but belong exclusively to /api/supply-requests. Keep this
 // boundary at every entry point of the payment-request API.
@@ -883,6 +897,7 @@ async function userNameMapForRows(rows = []) {
 
 // --- handlers
 export async function GET(req, ctx) {
+  await ensurePaymentRequestCompatibility();
   const denied = await requirePagePermission(req, "درخواست پرداخت", "نمایش منو");
   if (denied) return denied;
   const userId = await getUserId(req);
@@ -1015,6 +1030,7 @@ export async function GET(req, ctx) {
 }
 
 export async function POST(req, ctx) {
+  await ensurePaymentRequestCompatibility();
   const denied = await requirePagePermission(req, "درخواست پرداخت", "افزودن");
   if (denied) return denied;
   const userId = await getUserId(req);
@@ -1293,6 +1309,7 @@ export async function POST(req, ctx) {
 }
 
 export async function PATCH(req, ctx) {
+  await ensurePaymentRequestCompatibility();
   const userId = await getUserId(req);
   if (!userId) return json({ error: "unauthorized" }, 401);
 
@@ -1367,6 +1384,7 @@ export async function PATCH(req, ctx) {
 }
 
 export async function DELETE(req, ctx) {
+  await ensurePaymentRequestCompatibility();
   const userId = await getUserId(req);
   if (!userId) return json({ error: "unauthorized" }, 401);
 
