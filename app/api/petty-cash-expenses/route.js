@@ -225,7 +225,7 @@ export async function POST(request) {
       const isPlanning = await isMember(userId, "planning");
       const report = await prisma.$transaction(async (tx) => {
         const expenses = await tx.$queryRawUnsafe(`
-          SELECT id,project_id AS "projectId",created_by_id AS "createdById",project_manager_id AS "projectManagerId"
+          SELECT id,project_id AS "projectId",created_by_id AS "createdById",project_manager_id AS "projectManagerId",stage,project_manager_status AS "projectManagerStatus"
           FROM petty_cash_expenses
           WHERE id=ANY($1::int[])
           ORDER BY id
@@ -233,6 +233,7 @@ export async function POST(request) {
         `, expenseIds);
         if (expenses.length !== expenseIds.length) throw new RouteError("expense_not_found", 404);
         if (expenses.some((expense) => Number(expense.createdById) !== userId && Number(expense.projectManagerId) !== userId && !isPlanning)) throw new RouteError("not_allowed", 403);
+        if (expenses.some((expense) => expense.stage !== "completed" || expense.projectManagerStatus !== "approved")) throw new RouteError("expenses_not_project_manager_approved", 400);
         const projectIds = new Set(expenses.map((expense) => Number(expense.projectId)));
         if (projectIds.size !== 1) throw new RouteError("expenses_must_have_same_project", 400);
         const grouped = await tx.$queryRawUnsafe("SELECT expense_id FROM petty_cash_settlement_report_items WHERE expense_id=ANY($1::int[])", expenseIds);
