@@ -66,6 +66,9 @@ async function ensureTable() {
         updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    // CREATE TABLE IF NOT EXISTS does not add columns to installations that
+    // already have an older version of this runtime-managed table.
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS rejected_by_id INTEGER");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expenses_project_idx ON petty_cash_expenses(project_id)");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expenses_assignee_idx ON petty_cash_expenses(project_manager_id, stage)");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expenses_creator_idx ON petty_cash_expenses(created_by_id)");
@@ -308,7 +311,11 @@ export async function PATCH(request) {
       if (Number(expense.project_manager_id) !== userId) return json({ error: "not_allowed" }, 403);
       const nextStage = decision === "approve" ? "completed" : "rejected";
       const managerStatus = decision === "approve" ? "approved" : "rejected";
-      await prisma.$executeRawUnsafe("UPDATE petty_cash_expenses SET stage=$1,project_manager_status=$2,project_manager_by_id=$3,project_manager_at=CURRENT_TIMESTAMP,rejected_by_id=CASE WHEN $2='rejected' THEN $3 ELSE rejected_by_id END,updated_at=CURRENT_TIMESTAMP WHERE id=$4", nextStage, managerStatus, userId, id);
+      if (decision === "approve") {
+        await prisma.$executeRawUnsafe("UPDATE petty_cash_expenses SET stage=$1,project_manager_status=$2,project_manager_by_id=$3,project_manager_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=$4", nextStage, managerStatus, userId, id);
+      } else {
+        await prisma.$executeRawUnsafe("UPDATE petty_cash_expenses SET stage=$1,project_manager_status=$2,project_manager_by_id=$3,project_manager_at=CURRENT_TIMESTAMP,rejected_by_id=$3,updated_at=CURRENT_TIMESTAMP WHERE id=$4", nextStage, managerStatus, userId, id);
+      }
       return json({ ok: true });
     }
     return json({ error: "already_processed" }, 400);
