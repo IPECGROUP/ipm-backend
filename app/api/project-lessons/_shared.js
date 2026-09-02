@@ -1,0 +1,122 @@
+import { NextResponse } from "next/server";
+import { prisma } from "../../../lib/prisma";
+
+let schemaPromise;
+
+export function noStoreJson(data, status = 200) {
+  return NextResponse.json(data, {
+    status,
+    headers: { "Cache-Control": "no-store" },
+  });
+}
+
+export async function getCurrentUser(request) {
+  const cookie = request.headers.get("cookie") || "";
+  const token = cookie.match(/(?:^|;\s*)ipm_session=([^;]+)/)?.[1];
+
+  if (token) {
+    const session = await prisma.session
+      .findUnique({
+        where: { id: decodeURIComponent(token) },
+        include: { user: true },
+      })
+      .catch(() => null);
+
+    const isValid =
+      session?.user &&
+      (!session.expiresAt || new Date(session.expiresAt) >= new Date());
+    if (isValid) return session.user;
+  }
+
+  const developmentUserId = request.headers.get("x-user-id");
+  if (
+    process.env.NODE_ENV !== "production" &&
+    /^\d+$/.test(developmentUserId || "")
+  ) {
+    return { id: Number(developmentUserId) };
+  }
+
+  return null;
+}
+
+function normalizeUnitName(value) {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[يى]/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/\s+/g, " ");
+}
+
+export async function isManagementAppointee(userId) {
+  const appointments = await prisma.$queryRaw`
+    SELECT DISTINCT unit.id, unit.name
+    FROM "User" user_account
+    INNER JOIN "UserRoleMap" user_role
+      ON user_role."userId" = user_account.id
+    INNER JOIN "UnitRoleMap" unit_role
+      ON unit_role."roleId" = user_role."roleId"
+    INNER JOIN "Unit" unit
+      ON unit.id = unit_role."unitId"
+    WHERE user_account.id = ${Number(userId)}
+      AND user_account.is_active = TRUE
+  `.catch(() => []);
+
+  // The organizational-structure page defines appointments through the
+  // user's assigned role and that role's unit. Only the exact unit name is
+  // authoritative; a unit code must never grant management access.
+  return appointments.some(({ name }) => normalizeUnitName(name) === "مدیریت");
+}
+
+export async function ensureProjectLessonsSchema() {
+  if (!schemaPromise) {
+    schemaPromise = createProjectLessonsSchema().catch((error) => {
+      schemaPromise = null;
+      throw error;
+    });
+  }
+
+  return schemaPromise;
+}
+
+async function createProjectLessonsSchema() {
+  await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS project_lessons (
+    id TEXT PRIMARY KEY,
+    project_id INTEGER NOT NULL,
+    category TEXT NOT NULL,
+    challenge TEXT NOT NULL,
+    solution TEXT NOT NULL,
+    importance TEXT NOT NULL,
+    impacts JSONB NOT NULL DEFAULT '[]'::jsonb,
+    tag_ids JSONB NOT NULL DEFAULT '[]'::jsonb,
+    files JSONB NOT NULL DEFAULT '[]'::jsonb,
+    created_by_id INTEGER,
+    view_count INTEGER NOT NULL DEFAULT 0,
+    status TEXT NOT NULL DEFAULT 'approved',
+    reviewed_by_id INTEGER,
+    reviewed_at TIMESTAMPTZ,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+  )`);
+
+  await Promise.all([
+    prisma.$executeRawUnsafe(
+      "ALTER TABLE project_lessons ADD COLUMN IF NOT EXISTS view_count INTEGER NOT NULL DEFAULT 0",
+    ),
+    prisma.$executeRawUnsafe(
+      "ALTER TABLE project_lessons ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'approved'",
+    ),
+    prisma.$executeRawUnsafe(
+      "ALTER TABLE project_lessons ADD COLUMN IF NOT EXISTS reviewed_by_id INTEGER",
+    ),
+    prisma.$executeRawUnsafe(
+      "ALTER TABLE project_lessons ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ",
+    ),
+  ]);
+
+  await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS project_lesson_views (
+    lesson_id TEXT NOT NULL REFERENCES project_lessons(id) ON DELETE CASCADE,
+    user_id INTEGER NOT NULL,
+    viewed_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+    PRIMARY KEY (lesson_id, user_id)
+  )`);
+}
