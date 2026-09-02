@@ -564,6 +564,7 @@ model PaymentRequest {
   docOther      String?
   docNumber     String?
   docDateJalali String?
+  docDatesJalali Json?
 
   // ===== currency =====
   currencyTypeId   Int?

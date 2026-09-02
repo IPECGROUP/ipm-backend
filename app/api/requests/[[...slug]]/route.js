@@ -238,6 +238,18 @@ function normalizeIdList(value) {
   return value.map((item) => String(item ?? "").trim()).filter(Boolean);
 }
 
+function normalizeDocDateList(value, fallback = "") {
+  const raw = Array.isArray(value) ? value : [];
+  const dates = raw
+    .map((date) => normalizeDigits(String(date ?? "")).trim().replaceAll("-", "/"))
+    .filter((date) => /^\d{4}\/\d{2}\/\d{2}$/.test(date));
+  if (!dates.length) {
+    const legacy = normalizeDigits(String(fallback ?? "")).trim().replaceAll("-", "/");
+    if (/^\d{4}\/\d{2}\/\d{2}$/.test(legacy)) dates.push(legacy);
+  }
+  return [...new Set(dates)];
+}
+
 function normalizeFaText(value = "") {
   return String(value || "")
     .trim()
@@ -282,6 +294,7 @@ function normalizeOut(row, userNamesById = null) {
     docOther: row.docOther,
     docNumber: row.docNumber,
     docDate: row.docDateJalali,
+    docDatesJalali: normalizeDocDateList(row.docDatesJalali, row.docDateJalali),
 
     currencyTypeId: row.currencyTypeId,
     currencySourceId: row.currencySourceId,
@@ -344,6 +357,9 @@ function pickUpdatable(body) {
     docOther: body?.docOther ?? undefined,
     docNumber: body?.docNumber ?? undefined,
     docDateJalali: body?.docDateJalali ?? body?.docDate ?? undefined,
+    docDatesJalali: Array.isArray(body?.docDatesJalali ?? body?.docDates)
+      ? normalizeDocDateList(body?.docDatesJalali ?? body?.docDates)
+      : undefined,
 
     currencyTypeId:
       body?.currencyTypeId === "" || body?.currencyTypeId === null
@@ -1228,7 +1244,8 @@ export async function POST(req, ctx) {
       docId: data.docId ?? null,
       docOther: data.docOther ?? null,
       docNumber: data.docNumber ?? null,
-      docDateJalali: data.docDateJalali ?? null,
+      docDateJalali: data.docDatesJalali?.[0] ?? data.docDateJalali ?? null,
+      docDatesJalali: data.docDatesJalali ?? normalizeDocDateList([], data.docDateJalali),
 
       currencyTypeId: data.currencyTypeId ?? null,
       currencySourceId: data.currencySourceId ?? null,
@@ -1293,6 +1310,7 @@ export async function PATCH(req, ctx) {
 
   const body = (await readJson(req)) || {};
   const data = pickUpdatable(body);
+  if (data.docDatesJalali !== undefined) data.docDateJalali = data.docDatesJalali[0] || null;
   if ([SUPPLY_REQUEST_DOC_ID, TENKHAH_REQUEST_DOC_ID].includes(data.docId)) return json({ error: "invalid_doc_type" }, 400);
 
   // A requester may edit their own request, but its approved/requested amount
