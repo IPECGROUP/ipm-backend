@@ -49,20 +49,22 @@ function normalizeUnitName(value) {
 }
 
 export async function isManagementAppointee(userId) {
-  const user = await prisma.user.findUnique({
-    where: { id: Number(userId) },
-    select: {
-      isActive: true,
-      units: {
-        select: {
-          unit: { select: { id: true, name: true } },
-        },
-      },
-    },
-  });
-  if (!user || user.isActive === false) return false;
+  let directMemberships = [];
+  try {
+    directMemberships = await prisma.userUnit.findMany({
+      where: { userId: Number(userId) },
+      include: { unit: true },
+    });
+  } catch (error) {
+    // Some installations only use role-based appointments and do not have the
+    // direct membership table migrated yet. Role-based access must still work.
+    console.warn(
+      "project_lessons_user_units_unavailable",
+      error?.message || error,
+    );
+  }
 
-  const hasDirectManagementMembership = user.units.some(
+  const hasDirectManagementMembership = directMemberships.some(
     ({ unit }) => normalizeUnitName(unit?.name) === "مدیریت",
   );
   if (hasDirectManagementMembership) return true;
@@ -113,20 +115,18 @@ async function createProjectLessonsSchema() {
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
 
-  await Promise.all([
-    prisma.$executeRawUnsafe(
-      "ALTER TABLE project_lessons ADD COLUMN IF NOT EXISTS view_count INTEGER NOT NULL DEFAULT 0",
-    ),
-    prisma.$executeRawUnsafe(
-      "ALTER TABLE project_lessons ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'approved'",
-    ),
-    prisma.$executeRawUnsafe(
-      "ALTER TABLE project_lessons ADD COLUMN IF NOT EXISTS reviewed_by_id INTEGER",
-    ),
-    prisma.$executeRawUnsafe(
-      "ALTER TABLE project_lessons ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ",
-    ),
-  ]);
+  await prisma.$executeRawUnsafe(
+    "ALTER TABLE project_lessons ADD COLUMN IF NOT EXISTS view_count INTEGER NOT NULL DEFAULT 0",
+  );
+  await prisma.$executeRawUnsafe(
+    "ALTER TABLE project_lessons ADD COLUMN IF NOT EXISTS status TEXT NOT NULL DEFAULT 'approved'",
+  );
+  await prisma.$executeRawUnsafe(
+    "ALTER TABLE project_lessons ADD COLUMN IF NOT EXISTS reviewed_by_id INTEGER",
+  );
+  await prisma.$executeRawUnsafe(
+    "ALTER TABLE project_lessons ADD COLUMN IF NOT EXISTS reviewed_at TIMESTAMPTZ",
+  );
 
   await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS project_lesson_views (
     lesson_id TEXT NOT NULL REFERENCES project_lessons(id) ON DELETE CASCADE,
