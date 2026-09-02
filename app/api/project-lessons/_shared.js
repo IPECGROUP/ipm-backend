@@ -49,22 +49,37 @@ function normalizeUnitName(value) {
 }
 
 export async function isManagementAppointee(userId) {
+  const user = await prisma.user.findUnique({
+    where: { id: Number(userId) },
+    select: {
+      isActive: true,
+      units: {
+        select: {
+          unit: { select: { id: true, name: true } },
+        },
+      },
+    },
+  });
+  if (!user || user.isActive === false) return false;
+
+  const hasDirectManagementMembership = user.units.some(
+    ({ unit }) => normalizeUnitName(unit?.name) === "مدیریت",
+  );
+  if (hasDirectManagementMembership) return true;
+
   const appointments = await prisma.$queryRaw`
     SELECT DISTINCT unit.id, unit.name
-    FROM "User" user_account
-    INNER JOIN "UserRoleMap" user_role
-      ON user_role."userId" = user_account.id
+    FROM "UserRoleMap" user_role
     INNER JOIN "UnitRoleMap" unit_role
       ON unit_role."roleId" = user_role."roleId"
     INNER JOIN "Unit" unit
       ON unit.id = unit_role."unitId"
-    WHERE user_account.id = ${Number(userId)}
-      AND user_account.is_active = TRUE
+    WHERE user_role."userId" = ${Number(userId)}
   `.catch(() => []);
 
-  // The organizational-structure page defines appointments through the
-  // user's assigned role and that role's unit. Only the exact unit name is
-  // authoritative; a unit code must never grant management access.
+  // Match the organizational workflow used elsewhere in the application:
+  // membership may be direct (UserUnit) or inherited from an assigned role
+  // (UserRoleMap -> UnitRoleMap). Unit codes never grant management access.
   return appointments.some(({ name }) => normalizeUnitName(name) === "مدیریت");
 }
 
