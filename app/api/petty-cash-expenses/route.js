@@ -94,7 +94,10 @@ function itemFromRow(row) {
     id: Number(row.id), projectId: Number(row.projectId), projectCode: row.projectCode, projectName: row.projectName,
     expenseDate: row.expenseDate, description: row.description, budgetCode: row.budgetCode, amount: String(row.amount),
     stage: row.stage, planningStatus: row.planningStatus, planningById: row.planningById,
+    planningByName: row.planningByName, planningByUsername: row.planningByUsername, planningAt: row.planningAt,
     projectManagerId: row.projectManagerId, projectManagerStatus: row.projectManagerStatus,
+    projectManagerById: row.projectManagerById, projectManagerByName: row.projectManagerByName,
+    projectManagerByUsername: row.projectManagerByUsername, projectManagerAt: row.projectManagerAt,
     createdById: row.createdById, createdByName: row.createdByName,
   };
 }
@@ -112,10 +115,14 @@ export async function GET(request) {
     const [isPlanning, isProjectManager] = await Promise.all([isMember(userId, "planning"), isMember(userId, "project_manager")]);
     const rows = await prisma.$queryRawUnsafe(`
       SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,
-        e.stage,e.planning_status AS "planningStatus",e.planning_by_id AS "planningById",e.project_manager_id AS "projectManagerId",e.project_manager_status AS "projectManagerStatus",e.created_by_id AS "createdById",creator.name AS "createdByName"
+        e.stage,e.planning_status AS "planningStatus",e.planning_by_id AS "planningById",planner.name AS "planningByName",planner.username AS "planningByUsername",e.planning_at AS "planningAt",
+        e.project_manager_id AS "projectManagerId",e.project_manager_status AS "projectManagerStatus",e.project_manager_by_id AS "projectManagerById",manager.name AS "projectManagerByName",manager.username AS "projectManagerByUsername",e.project_manager_at AS "projectManagerAt",
+        e.created_by_id AS "createdById",creator.name AS "createdByName"
       FROM petty_cash_expenses e
       INNER JOIN projects p ON p.id=e.project_id
       LEFT JOIN "User" creator ON creator.id=e.created_by_id
+      LEFT JOIN "User" planner ON planner.id=e.planning_by_id
+      LEFT JOIN "User" manager ON manager.id=e.project_manager_by_id
       WHERE ($1::int=0 OR e.project_id=$1)
         AND (e.created_by_id=$2 OR e.project_manager_id=$2 OR $3::boolean)
       ORDER BY e.created_at DESC, e.id DESC
@@ -173,7 +180,7 @@ export async function PATCH(request) {
     if (expense.stage === "planning") {
       if (!(await isMember(userId, "planning"))) return json({ error: "not_allowed" }, 403);
       if (decision === "reject") {
-        await prisma.$executeRawUnsafe("UPDATE petty_cash_expenses SET stage='rejected',planning_status='rejected',planning_by_id=$1,rejected_by_id=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2", userId, id);
+        await prisma.$executeRawUnsafe("UPDATE petty_cash_expenses SET stage='rejected',planning_status='rejected',planning_by_id=$1,planning_at=CURRENT_TIMESTAMP,rejected_by_id=$1,updated_at=CURRENT_TIMESTAMP WHERE id=$2", userId, id);
       } else {
         const managerId = Number(body.projectManagerId);
         const managers = await workflowMembers("project_manager");
