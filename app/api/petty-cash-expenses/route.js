@@ -153,6 +153,46 @@ export async function GET(request) {
     const recipients = url.searchParams.get("recipients");
     if (recipients === "project_manager") return json({ users: await workflowMembers("project_manager") });
 
+    if (url.searchParams.get("summary") === "mine") {
+      const rows = await prisma.$queryRawUnsafe(`
+        WITH received AS (
+          SELECT t.project_id AS "projectId",
+            COALESCE(SUM(COALESCE(t.charged_amount, 0)), 0) AS "receivedAmount"
+          FROM tenkhah_requests t
+          WHERE COALESCE(t.beneficiary_user_id, t.created_by_id) = $1
+            AND t.status = 'charged'
+          GROUP BY t.project_id
+        ), expenses AS (
+          SELECT e.project_id AS "projectId",
+            COALESCE(SUM(e.amount), 0) AS "registeredExpenses",
+            COALESCE(SUM(e.amount) FILTER (
+              WHERE e.stage = 'completed'
+                AND e.project_manager_status = 'approved'
+            ), 0) AS "approvedExpenses"
+          FROM petty_cash_expenses e
+          WHERE e.created_by_id = $1
+          GROUP BY e.project_id
+        ), totals AS (
+          SELECT COALESCE(received."projectId", expenses."projectId") AS "projectId",
+            COALESCE(received."receivedAmount", 0) AS "receivedAmount",
+            COALESCE(expenses."registeredExpenses", 0) AS "registeredExpenses",
+            COALESCE(expenses."approvedExpenses", 0) AS "approvedExpenses"
+          FROM received
+          FULL OUTER JOIN expenses ON expenses."projectId" = received."projectId"
+        )
+        SELECT totals."projectId", p.code AS "projectCode", p.name AS "projectName",
+          totals."receivedAmount"::text AS "receivedAmount",
+          totals."registeredExpenses"::text AS "registeredExpenses",
+          (totals."receivedAmount" - totals."registeredExpenses")::text AS "registeredBalance",
+          totals."approvedExpenses"::text AS "approvedExpenses",
+          (totals."registeredExpenses" - totals."approvedExpenses")::text AS "unapprovedBalance"
+        FROM totals
+        INNER JOIN projects p ON p.id = totals."projectId"
+        ORDER BY p.code ASC, p.name ASC
+      `, userId);
+      return json({ items: rows.map((row) => ({ ...row, projectId: Number(row.projectId) })) });
+    }
+
     const [isPlanning, isProjectManager] = await Promise.all([isMember(userId, "planning"), isMember(userId, "project_manager")]);
     if (url.searchParams.get("reports") === "1") {
       const reportId = Number(url.searchParams.get("reportId")) || 0;
