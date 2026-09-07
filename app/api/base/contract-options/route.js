@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 
 export const runtime = "nodejs";
-const categories = new Set(["main", "sub", "status"]);
+const categories = new Set(["main", "sub", "status", "guarantee"]);
 let ready;
 async function ensureTable() {
   if (!ready) ready = prisma.$executeRawUnsafe("CREATE TABLE IF NOT EXISTS contract_base_options (id SERIAL PRIMARY KEY, category VARCHAR(20) NOT NULL, title TEXT NOT NULL, created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(category, title))");
