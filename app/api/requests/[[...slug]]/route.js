@@ -1017,8 +1017,12 @@ export async function GET(req, ctx) {
     return { row: r, canAct, isMine, wasInvolved, canView };
   });
 
+  // The super-admin's view is intentionally never narrowed by the UI's
+  // "mine" or "inbox" query parameter; it must include every request.
   let filtered = rowsWithFlags;
-  if (view === "mine") {
+  if (uctx.isSuperAdmin) {
+    filtered = rowsWithFlags;
+  } else if (view === "mine") {
     filtered = rowsWithFlags.filter((x) => x.isMine);
   } else if (view === "inbox") {
     filtered = rowsWithFlags.filter((x) => !x.isMine && (x.canAct || x.wasInvolved));
