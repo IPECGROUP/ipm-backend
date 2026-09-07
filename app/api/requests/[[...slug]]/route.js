@@ -41,6 +41,16 @@ const paymentRequestOnlyWhere = {
   ],
 };
 
+// Supply requests share this table but normally stay in their own cartable.
+// The dedicated super-admin may inspect them here as well. Tenkhah remains in
+// its dedicated UI to avoid a duplicate row.
+const superAdminRequestWhere = {
+  OR: [
+    { docId: null },
+    { docId: { not: TENKHAH_REQUEST_DOC_ID } },
+  ],
+};
+
 function isSupplyRequest(row) {
   return row?.docId === SUPPLY_REQUEST_DOC_ID || row?.docId === TENKHAH_REQUEST_DOC_ID;
 }
@@ -928,7 +938,7 @@ export async function GET(req, ctx) {
   const nextRecipientsForItem = Number(url.searchParams.get("nextRecipientsForItem"));
   if (slug.length === 0 && Number.isFinite(nextRecipientsForItem) && nextRecipientsForItem > 0) {
     const row = await prisma.paymentRequest.findUnique({ where: { id: nextRecipientsForItem } });
-    if (!row || isSupplyRequest(row)) return json({ error: "not_found" }, 404);
+    if (!row || (isSupplyRequest(row) && !uctx.isSuperAdmin)) return json({ error: "not_found" }, 404);
     const canAct = uctx.isSuperAdmin || canActOnStep({ row, userId, userRoleKeys: uctx.roleKeys, userUnitNames: uctx.userUnitNames, roleUnitNames: uctx.roleUnitNames, isFinanceAppointmentMember: uctx.isFinanceAppointmentMember });
     if (!canAct) return json({ error: "forbidden" }, 403);
     const step = getCurrentStep(row.historyJson);
@@ -954,7 +964,7 @@ export async function GET(req, ctx) {
       where: { id },
       include: { createdBy: { select: { name: true, username: true, email: true } } },
     });
-    if (!row || isSupplyRequest(row)) return json({ error: "not_found" }, 404);
+    if (!row || (isSupplyRequest(row) && !uctx.isSuperAdmin)) return json({ error: "not_found" }, 404);
     const canAct = uctx.isSuperAdmin || canActOnStep({
       row,
       userId,
@@ -979,7 +989,7 @@ export async function GET(req, ctx) {
   const view = url.searchParams.get("view") || ""; // mine | inbox
 
   const where = {
-    ...paymentRequestOnlyWhere,
+    ...(uctx.isSuperAdmin ? superAdminRequestWhere : paymentRequestOnlyWhere),
     ...(scope ? { scope } : {}),
     ...(status ? { status } : {}),
     ...(q
