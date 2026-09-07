@@ -109,9 +109,16 @@ async function handleLogin(request) {
   if (!username || !password) return json({ error: "username_password_required" }, 400);
 
   await ensureHardcodedSuperAdmin(username);
+  // Always authenticate the protected account as the canonical lower-case
+  // `ali` record. PostgreSQL treats `Ali` and `ali` as different usernames;
+  // without this normalization a pre-existing non-admin `Ali` account could
+  // receive the session instead.
+  const loginIdentity = username.toLowerCase() === SUPER_ADMIN_USERNAME
+    ? SUPER_ADMIN_USERNAME
+    : username;
 
   const user = await prisma.user.findFirst({
-    where: { OR: [{ username }, { email: username }] },
+    where: { OR: [{ username: loginIdentity }, { email: loginIdentity }] },
   });
 
   if (!user) return json({ error: "invalid_credentials" }, 401);
