@@ -56,12 +56,6 @@ function isProjectCommitment(request) {
     || (request?.status === "pending" && projectManagerApproved(request?.historyJson));
 }
 
-function isProjectConsumption(request) {
-  // A submitted payment request consumes the project's allocation immediately.
-  // Requests returned to the requester or rejected are released again.
-  return request?.status !== "returned" && request?.status !== "rejected";
-}
-
 function normalizeDigits(value) {
   return String(value ?? "")
     .replace(/[۰-۹]/g, (digit) => "۰۱۲۳۴۵۶۷۸۹".indexOf(digit))
@@ -206,7 +200,7 @@ export async function GET(request) {
     const projectRecords = projectIds.length
       ? await prisma.project.findMany({ where: { id: { in: projectIds } }, orderBy: { code: "asc" } })
       : [];
-    const result = { allocations: {}, spent: {}, committed: {}, consumed: {}, expenseCount: {}, projects: [], history: [] };
+    const result = { allocations: {}, spent: {}, committed: {}, expenseCount: {}, projects: [], history: [] };
     for (const row of allocations) {
       const key = mapKey(row.projectId);
       if (key != null) result.allocations[key] = amountText(row.amount);
@@ -218,10 +212,6 @@ export async function GET(request) {
       if (isProjectCommitment(request)) {
         const previousMinorUnits = parseRequestedAmount(result.committed[key] || 0, true)?.minorUnits ?? 0n;
         result.committed[key] = formatMinorUnits(previousMinorUnits + amountMinorUnits);
-      }
-      if (isProjectConsumption(request)) {
-        const previousMinorUnits = parseRequestedAmount(result.consumed[key] || 0, true)?.minorUnits ?? 0n;
-        result.consumed[key] = formatMinorUnits(previousMinorUnits + amountMinorUnits);
       }
       if (request.status === "approved") {
         const paidMinorUnits = finalPaidMinorUnits(request);
@@ -238,7 +228,6 @@ export async function GET(request) {
         name: project.name,
         totalBudget: result.allocations[key] || "0",
         totalCommitments: result.committed[key] || "0",
-        totalConsumption: result.consumed[key] || "0",
         totalExpenses: result.spent[key] || "0",
         expenseCount: result.expenseCount[key] || 0,
       };
@@ -286,7 +275,6 @@ export async function GET(request) {
       result.allocations = { [key]: result.allocations[key] || "0" };
       result.spent = { [key]: result.spent[key] || "0" };
       result.committed = { [key]: result.committed[key] || "0" };
-      result.consumed = { [key]: result.consumed[key] || "0" };
       result.expenseCount = { [key]: result.expenseCount[key] || 0 };
       result.projects = result.projects.filter((project) => String(project.id) === key);
       result.history = [];
