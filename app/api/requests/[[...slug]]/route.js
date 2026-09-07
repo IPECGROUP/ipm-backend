@@ -440,6 +440,12 @@ function isMainAdminObserver(user) {
   return uname === "marandi" || email === "marandi@ipecgroup.net";
 }
 
+// Only the explicitly requested hard-coded account bypasses payment-request
+// workflow ownership and final-status restrictions.
+function isHardcodedSuperAdmin(user) {
+  return String(user?.username || "").trim().toLowerCase() === "ali";
+}
+
 function unitNameToKind(unitNameOrCode) {
   const s = norm(unitNameOrCode).toLowerCase();
 
@@ -860,6 +866,7 @@ async function getUserContext(req, userId) {
 
   return {
     isMainAdmin: isMainAdminObserver(user),
+    isSuperAdmin: isHardcodedSuperAdmin(user),
     actorName: user?.name || user?.username || user?.email || `User #${userId}`,
     userName: user?.username || user?.name || user?.email || `کاربر #${userId}`,
     unitName: unitNames.join("، ") || "نامشخص",
@@ -921,7 +928,7 @@ export async function GET(req, ctx) {
   if (slug.length === 0 && Number.isFinite(nextRecipientsForItem) && nextRecipientsForItem > 0) {
     const row = await prisma.paymentRequest.findUnique({ where: { id: nextRecipientsForItem } });
     if (!row || isSupplyRequest(row)) return json({ error: "not_found" }, 404);
-    const canAct = canActOnStep({ row, userId, userRoleKeys: uctx.roleKeys, userUnitNames: uctx.userUnitNames, roleUnitNames: uctx.roleUnitNames, isFinanceAppointmentMember: uctx.isFinanceAppointmentMember });
+    const canAct = uctx.isSuperAdmin || canActOnStep({ row, userId, userRoleKeys: uctx.roleKeys, userUnitNames: uctx.userUnitNames, roleUnitNames: uctx.roleUnitNames, isFinanceAppointmentMember: uctx.isFinanceAppointmentMember });
     if (!canAct) return json({ error: "forbidden" }, 403);
     const step = getCurrentStep(row.historyJson);
     const chain = getWorkflowChainForUnit(row.scope);
@@ -947,7 +954,7 @@ export async function GET(req, ctx) {
       include: { createdBy: { select: { name: true, username: true, email: true } } },
     });
     if (!row || isSupplyRequest(row)) return json({ error: "not_found" }, 404);
-    const canAct = canActOnStep({
+    const canAct = uctx.isSuperAdmin || canActOnStep({
       row,
       userId,
       userRoleKeys: uctx.roleKeys,
@@ -957,11 +964,11 @@ export async function GET(req, ctx) {
     });
     // دسترسی مدیریتی نباید کارتابل مرحله‌ای را دور بزند. مشاهدهٔ درخواست
     // فقط برای عضو مرحلهٔ جاری یا فردی است که قبلاً در همان درخواست درگیر بوده.
-    const canView = canAct || wasInvolvedInRequest(row, userId, uctx);
+    const canView = uctx.isSuperAdmin || canAct || wasInvolvedInRequest(row, userId, uctx);
     if (!canView) return json({ error: "forbidden" }, 403);
 
     const userNamesById = await userNameMapForRows([row]);
-    return json({ item: { ...normalizeOut(row, userNamesById), canAct, canDelete: row.createdById === userId && !["approved", "rejected", "canceled", "cancelled"].includes(row.status) } });
+    return json({ item: { ...normalizeOut(row, userNamesById), canAct, canEdit: uctx.isSuperAdmin || row.createdById === userId, canDelete: uctx.isSuperAdmin || (row.createdById === userId && !["approved", "rejected", "canceled", "cancelled"].includes(row.status)) } });
   }
 
   // GET /api/requests (list)
@@ -996,7 +1003,7 @@ export async function GET(req, ctx) {
   });
 
   const rowsWithFlags = rows.map((r) => {
-    const canAct = canActOnStep({
+    const canAct = uctx.isSuperAdmin || canActOnStep({
       row: r,
       userId,
       userRoleKeys: uctx.roleKeys,
@@ -1006,7 +1013,7 @@ export async function GET(req, ctx) {
     });
     const isMine = r.createdById === userId;
     const wasInvolved = wasInvolvedInRequest(r, userId, uctx);
-    const canView = canAct || wasInvolved;
+    const canView = uctx.isSuperAdmin || canAct || wasInvolved;
     return { row: r, canAct, isMine, wasInvolved, canView };
   });
 
@@ -1024,8 +1031,8 @@ export async function GET(req, ctx) {
     items: filtered.map((x) => ({
       ...normalizeOut(x.row, userNamesById),
       canAct: x.canAct,
-      canEdit: x.isMine,
-      canDelete: x.isMine && !["approved", "rejected", "canceled", "cancelled"].includes(x.row.status),
+      canEdit: uctx.isSuperAdmin || x.isMine,
+      canDelete: uctx.isSuperAdmin || (x.isMine && !["approved", "rejected", "canceled", "cancelled"].includes(x.row.status)),
     })),
   });
 }
@@ -1058,14 +1065,14 @@ export async function POST(req, ctx) {
     const history = Array.isArray(row.historyJson) ? row.historyJson : [];
     const step = getCurrentStep(history);
     if (!step) return json({ error: "no_active_step" }, 400);
-    if (nextStatus === "rejected" && !canRejectAtStep(step.roleKey)) {
+    if (!uctx.isSuperAdmin && nextStatus === "rejected" && !canRejectAtStep(step.roleKey)) {
       return json({ error: "reject_not_allowed_for_step" }, 403);
     }
-    if (nextStatus === "returned" && !canReturnAtStep(step.roleKey)) {
+    if (!uctx.isSuperAdmin && nextStatus === "returned" && !canReturnAtStep(step.roleKey)) {
       return json({ error: "return_not_allowed_for_step" }, 403);
     }
 
-    if (!canActOnStep({
+    if (!uctx.isSuperAdmin && !canActOnStep({
       row,
       userId,
       userRoleKeys: uctx.roleKeys,
@@ -1345,7 +1352,8 @@ export async function PATCH(req, ctx) {
   if (!row || isSupplyRequest(row)) return json({ error: "not_found" }, 404);
 
   // فقط سازنده (فعلاً)
-  if (row.createdById !== userId) return json({ error: "forbidden" }, 403);
+  const uctx = await getUserContext(req, userId);
+  if (row.createdById !== userId && !uctx.isSuperAdmin) return json({ error: "forbidden" }, 403);
 
   const body = (await readJson(req)) || {};
   const data = pickUpdatable(body);
@@ -1436,8 +1444,9 @@ export async function DELETE(req, ctx) {
   if (!row || isSupplyRequest(row)) return json({ error: "not_found" }, 404);
 
   // فقط سازنده
-  if (row.createdById !== userId) return json({ error: "forbidden" }, 403);
-  if (["approved", "rejected", "canceled", "cancelled"].includes(row.status)) return json({ error: "delete_not_allowed" }, 400);
+  const uctx = await getUserContext(req, userId);
+  if (row.createdById !== userId && !uctx.isSuperAdmin) return json({ error: "forbidden" }, 403);
+  if (!uctx.isSuperAdmin && ["approved", "rejected", "canceled", "cancelled"].includes(row.status)) return json({ error: "delete_not_allowed" }, 400);
 
   await prisma.paymentRequest.delete({ where: { id } });
   return json({ ok: true });

