@@ -454,7 +454,9 @@ function isMainAdminObserver(user) {
 // Only the explicitly requested hard-coded account bypasses payment-request
 // workflow ownership and final-status restrictions.
 function isHardcodedSuperAdmin(user) {
-  return String(user?.username || "").trim().toLowerCase() === "ali";
+  const access = Array.isArray(user?.access) ? user.access.map(String) : [];
+  return access.includes("system:super-admin")
+    || String(user?.username || "").trim().toLowerCase() === "ali";
 }
 
 function unitNameToKind(unitNameOrCode) {
