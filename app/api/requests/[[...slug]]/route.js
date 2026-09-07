@@ -165,21 +165,16 @@ function toBigIntSafe(v) {
   }
 }
 
-function approvedByProjectManager(history) {
-  return Array.isArray(history) && history.some(
-    (entry) => entry?.type === "approved" && entry?.roleKey === "project_manager" && Number(entry?.index) === 2
-  );
-}
-
 function isProjectCommitment(request) {
-  return request?.status === "approved"
-    || (request?.status === "pending" && approvedByProjectManager(request?.historyJson));
+  // A payment request reserves liquidity as soon as it is submitted. Only a
+  // returned or rejected request releases that reservation.
+  return request?.status !== "returned" && request?.status !== "rejected";
 }
 
 async function getProjectLiquidityRemaining(projectId) {
   // Keep this table available even when the liquidity screen has not been
   // opened yet. It is deliberately the same source used by the financial
-  // dashboard: allocated budget minus project-manager-approved commitments.
+  // dashboard: allocated budget minus active payment requests.
   await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS liquidity_allocations (
       id SERIAL PRIMARY KEY,
