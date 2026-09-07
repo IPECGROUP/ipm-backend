@@ -86,20 +86,9 @@ function readCookieValue(cookie, name) {
 
 async function getUserId(req) {
   const cookie = req.headers.get("cookie") || "";
-
-  // Legacy support: x-user-id / user_id cookie
-  const fromHeader = req.headers.get("x-user-id");
-  const fromCookie = readCookieValue(cookie, "user_id");
-  const direct = fromHeader || fromCookie;
-  if (direct && /^\d+$/.test(String(direct))) {
-    const directId = Number(direct);
-    try {
-      const user = await prisma.user.findUnique({ where: { id: directId }, select: { id: true } });
-      if (user?.id) return directId;
-    } catch {}
-  }
-
-  // Primary auth: ipm_session cookie
+  // Primary auth: always prefer the signed session over the legacy client-side
+  // user id. The frontend may retain an old x-user-id after switching users;
+  // it must never make an authenticated super-admin look like that old user.
   const sessionId = readCookieValue(cookie, "ipm_session");
   if (sessionId) {
     // 1) Current schema path: Session.id
@@ -133,6 +122,18 @@ async function getUserId(req) {
       if (sess?.userId && (!sess.expiresAt || new Date(sess.expiresAt).getTime() >= Date.now())) {
         return Number(sess.userId);
       }
+    } catch {}
+  }
+
+  // Legacy support for older clients that have no session cookie.
+  const fromHeader = req.headers.get("x-user-id");
+  const fromCookie = readCookieValue(cookie, "user_id");
+  const direct = fromHeader || fromCookie;
+  if (direct && /^\d+$/.test(String(direct))) {
+    const directId = Number(direct);
+    try {
+      const user = await prisma.user.findUnique({ where: { id: directId }, select: { id: true } });
+      if (user?.id) return directId;
     } catch {}
   }
 
