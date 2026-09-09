@@ -1082,6 +1082,13 @@ function getIdFromReq(req, ctx) {
   return Number(idRaw);
 }
 
+async function getSlug(ctx) {
+  const params = await Promise.resolve(ctx?.params || {});
+  const slug = params?.slug;
+  if (Array.isArray(slug)) return slug.map(String);
+  return slug == null || slug === "" ? [] : [String(slug)];
+}
+
 // ✅ حذف فایل‌های ضمیمه (بهترین تلاش) — اگر آدرس‌ها لوکال باشند از public حذف می‌کند
 async function tryDeleteAttachmentFiles(letters) {
   try {
@@ -1129,7 +1136,7 @@ export async function GET(req, ctx) {
   try {
     const denied = await requirePagePermission(req, "مدیریت اسناد", "نمایش منو");
     if (denied) return denied;
-    const slug = ctx?.params?.slug || [];
+    const slug = await getSlug(ctx);
     const p0 = slug[0] || "";
 
     // ✅ prefs
@@ -1248,7 +1255,7 @@ export async function GET(req, ctx) {
 
 export async function POST(req, ctx) {
   try {
-    const slug = ctx?.params?.slug || [];
+    const slug = await getSlug(ctx);
     const p0 = slug[0] || "";
 
     // ✅ allow POST /api/letters/prefs as well
@@ -1355,7 +1362,7 @@ export async function POST(req, ctx) {
 
 export async function PATCH(req, ctx) {
   try {
-    const slug = ctx?.params?.slug || [];
+    const slug = await getSlug(ctx);
     const p0 = slug[0] || "";
 
     // ✅ prefs
@@ -1530,7 +1537,7 @@ export async function PATCH(req, ctx) {
 
 export async function DELETE(req, ctx) {
   try {
-    const slug = ctx?.params?.slug || [];
+    const slug = await getSlug(ctx);
     const p0 = slug[0] || "";
 
     // ✅ حذف همه نامه‌ها + فایل‌های ضمیمه
