@@ -6,6 +6,7 @@ import path from "node:path";
 import { requirePagePermission } from "../../../../lib/pagePermissions";
 import { nextSharedPaymentSerial } from "../../../../lib/paymentSerial";
 import { convertedRialMinorUnits, formatMinorUnits, parseRequestedAmount } from "../../../../lib/paymentAmount";
+import { isProjectCommitment } from "../../../../lib/projectCommitment";
 
 export const runtime = "nodejs";
 
@@ -163,17 +164,6 @@ function toBigIntSafe(v) {
   } catch {
     return null;
   }
-}
-
-function approvedByProjectManager(history) {
-  return Array.isArray(history) && history.some(
-    (entry) => entry?.type === "approved" && entry?.roleKey === "project_manager" && Number(entry?.index) === 2
-  );
-}
-
-function isProjectCommitment(request) {
-  return request?.status === "approved"
-    || (request?.status === "pending" && approvedByProjectManager(request?.historyJson));
 }
 
 async function getProjectLiquidityRemaining(projectId) {

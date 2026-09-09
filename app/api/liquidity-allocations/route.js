@@ -1,6 +1,7 @@
 import { prisma } from "../../../lib/prisma";
 import { hasPagePermission, requirePagePermission } from "../../../lib/pagePermissions";
 import { formatMinorUnits, parseRequestedAmount } from "../../../lib/paymentAmount";
+import { isProjectCommitment } from "../../../lib/projectCommitment";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -39,21 +40,6 @@ function amountText(value) {
 
 function mapKey(projectId) {
   return projectId == null ? null : String(projectId);
-}
-
-function projectManagerApproved(history) {
-  return Array.isArray(history) && history.some((entry) =>
-    entry?.type === "approved" && entry?.roleKey === "project_manager" && Number(entry?.index) === 2
-  );
-}
-
-function isProjectCommitment(request) {
-  // A completed payment is always a project commitment, even for legacy or
-  // shortened workflows that do not contain the exact project-manager step.
-  // Pending requests become commitments only after project-manager approval;
-  // returned/rejected requests must release the reserved liquidity.
-  return request?.status === "approved"
-    || (request?.status === "pending" && projectManagerApproved(request?.historyJson));
 }
 
 function normalizeDigits(value) {
