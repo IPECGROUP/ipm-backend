@@ -354,6 +354,77 @@ function normalizeOut(row, userNamesById = null) {
   };
 }
 
+function relatedLetterRefsOf(row) {
+  const history = Array.isArray(row?.historyJson) ? row.historyJson : [];
+  const created = history.find((entry) => entry?.type === "created") || {};
+  return normalizeIdList(created.relatedLetterIds);
+}
+
+function serializeRelatedLetter(letter, relationRef, projectName = "") {
+  return {
+    relationRef: String(relationRef),
+    id: letter.id,
+    kind: letter.kind,
+    doc_class: letter.docClass ?? "",
+    classification: letter.classificationLabel ?? letter.docClass ?? "",
+    category: letter.category ?? "",
+    project_id: letter.projectId ?? null,
+    projectName,
+    letter_no: letter.letterNo ?? "",
+    letter_date: letter.letterDate ?? "",
+    from_name: letter.fromName ?? "",
+    to_name: letter.toName ?? "",
+    org_name: letter.orgName ?? "",
+    subject: letter.subject ?? "",
+    has_attachment: Boolean(letter.hasAttachment),
+    attachment_title: letter.attachmentTitle ?? "",
+    return_to_ids: Array.isArray(letter.returnToIds) ? letter.returnToIds : [],
+    piro_ids: Array.isArray(letter.piroIds) ? letter.piroIds : [],
+    tag_ids: Array.isArray(letter.tagIds) ? letter.tagIds : [],
+    secretariat_date: letter.secretariatDate ?? "",
+    secretariat_no: letter.secretariatNo ?? "",
+    secretariat_note: letter.secretariatNote ?? "",
+    receiver_name: letter.receiverName ?? "",
+    attachments: Array.isArray(letter.attachments) ? letter.attachments : [],
+    attachments_loaded: true,
+  };
+}
+
+async function relatedLettersForRows(rows) {
+  const requestedByRow = new Map((Array.isArray(rows) ? rows : []).map((row) => [String(row.id), relatedLetterRefsOf(row)]));
+  const refs = [...new Set([...requestedByRow.values()].flat().map((value) => String(value).trim()).filter(Boolean))];
+  if (!refs.length) return new Map();
+
+  const numericIds = refs.filter((value) => /^\d+$/.test(value)).map(Number).filter(Number.isSafeInteger);
+  const letters = await prisma.letter.findMany({
+    where: {
+      OR: [
+        ...(numericIds.length ? [{ id: { in: numericIds } }] : []),
+        { letterNo: { in: refs } },
+        { secretariatNo: { in: refs } },
+      ],
+    },
+  });
+  const projectIds = [...new Set(letters.map((letter) => Number(letter.projectId)).filter(Number.isSafeInteger))];
+  const projects = projectIds.length
+    ? await prisma.project.findMany({ where: { id: { in: projectIds } }, select: { id: true, name: true, code: true } })
+    : [];
+  const projectById = new Map(projects.map((project) => [Number(project.id), `${project.code || ""}${project.name ? `${project.code ? " - " : ""}${project.name}` : ""}`]));
+
+  const result = new Map();
+  requestedByRow.forEach((rowRefs, rowId) => {
+    result.set(rowId, rowRefs.map((ref) => {
+      // Old requests sometimes stored letterNo. Prefer an explicit number
+      // match over an id collision, otherwise use the current database id.
+      const byNumber = letters.find((letter) => String(letter.letterNo ?? "").trim() === ref || String(letter.secretariatNo ?? "").trim() === ref);
+      const byId = /^\d+$/.test(ref) ? letters.find((letter) => Number(letter.id) === Number(ref)) : null;
+      const letter = byNumber || byId;
+      return letter ? serializeRelatedLetter(letter, ref, projectById.get(Number(letter.projectId)) || "") : null;
+    }).filter(Boolean));
+  });
+  return result;
+}
+
 function pickUpdatable(body) {
   return {
     serial: body?.serial ?? body?.previewSerial ?? undefined,
@@ -981,7 +1052,8 @@ export async function GET(req, ctx) {
     if (!canView) return json({ error: "forbidden" }, 403);
 
     const userNamesById = await userNameMapForRows([row]);
-    return json({ item: { ...normalizeOut(row, userNamesById), canAct, canEdit: uctx.isSuperAdmin || row.createdById === userId, canDelete: uctx.isSuperAdmin || (row.createdById === userId && !["approved", "rejected", "canceled", "cancelled"].includes(row.status)) } });
+    const relatedLettersByRequest = await relatedLettersForRows([row]);
+    return json({ item: { ...normalizeOut(row, userNamesById), relatedLetters: relatedLettersByRequest.get(String(row.id)) || [], canAct, canEdit: uctx.isSuperAdmin || row.createdById === userId, canDelete: uctx.isSuperAdmin || (row.createdById === userId && !["approved", "rejected", "canceled", "cancelled"].includes(row.status)) } });
   }
 
   // GET /api/requests (list)
@@ -1044,9 +1116,11 @@ export async function GET(req, ctx) {
   }
 
   const userNamesById = await userNameMapForRows(filtered.map((x) => x.row));
+  const relatedLettersByRequest = await relatedLettersForRows(filtered.map((x) => x.row));
   return json({
     items: filtered.map((x) => ({
       ...normalizeOut(x.row, userNamesById),
+      relatedLetters: relatedLettersByRequest.get(String(x.row.id)) || [],
       canAct: x.canAct,
       canEdit: uctx.isSuperAdmin || x.isMine,
       canDelete: uctx.isSuperAdmin || (x.isMine && !["approved", "rejected", "canceled", "cancelled"].includes(x.row.status)),
