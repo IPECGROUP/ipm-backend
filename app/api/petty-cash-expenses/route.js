@@ -328,6 +328,13 @@ export async function PATCH(request) {
     if (!userId) return json({ error: "unauthorized" }, 401);
     const body = await request.json().catch(() => ({}));
     const id = Number(body.id);
+    if (body.action === "update") {
+      const projectId = Number(body.projectId), expenseDate = String(body.expenseDate || "").trim(), description = String(body.description || "").trim(), budgetCode = String(body.budgetCode || "").trim(), amount = asAmount(body.amount);
+      if (!id || !projectId || !expenseDate || !description || !budgetCode || amount <= 0n) return json({ error: "invalid_input" }, 400);
+      const changed = await prisma.$executeRawUnsafe("UPDATE petty_cash_expenses SET expense_date=$1,description=$2,budget_code=$3,amount=$4::bigint,updated_at=CURRENT_TIMESTAMP WHERE id=$5 AND project_id=$6 AND created_by_id=$7 AND stage='planning'", expenseDate, description, budgetCode, String(amount), id, projectId, userId);
+      if (!changed) return json({ error: "not_allowed" }, 403);
+      return json({ ok: true });
+    }
     const decision = body.decision;
     if (!id || !["approve", "reject"].includes(decision)) return json({ error: "invalid_input" }, 400);
     const expenseRows = await prisma.$queryRawUnsafe("SELECT * FROM petty_cash_expenses WHERE id=$1", id);
@@ -361,6 +368,23 @@ export async function PATCH(request) {
     return json({ error: "already_processed" }, 400);
   } catch (error) {
     console.error("petty_cash_expenses_patch_error", error);
+    return json({ error: "internal_error" }, 500);
+  }
+}
+
+export async function DELETE(request) {
+  try {
+    await ensureTable();
+    const userId = await userIdOf(request);
+    if (!userId) return json({ error: "unauthorized" }, 401);
+    const body = await request.json().catch(() => ({}));
+    const ids = [...new Set((Array.isArray(body.ids) ? body.ids : []).map(Number).filter((id) => Number.isInteger(id) && id > 0))];
+    if (!ids.length) return json({ error: "invalid_input" }, 400);
+    const deleted = await prisma.$executeRawUnsafe("DELETE FROM petty_cash_expenses WHERE id=ANY($1::int[]) AND created_by_id=$2 AND stage='planning'", ids, userId);
+    if (!deleted) return json({ error: "not_allowed" }, 403);
+    return json({ ok: true, deleted: Number(deleted) });
+  } catch (error) {
+    console.error("petty_cash_expenses_delete_error", error);
     return json({ error: "internal_error" }, 500);
   }
 }
