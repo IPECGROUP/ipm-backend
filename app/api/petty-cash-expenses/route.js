@@ -264,7 +264,7 @@ export async function POST(request) {
     const body = await request.json().catch(() => ({}));
     if (body.action === "create_settlement_report") {
       const expenseIds = [...new Set((Array.isArray(body.expenseIds) ? body.expenseIds : []).map(Number).filter((id) => Number.isInteger(id) && id > 0))];
-      if (expenseIds.length < 2) return json({ error: "at_least_two_expenses_required" }, 400);
+      if (!expenseIds.length) return json({ error: "at_least_one_expense_required" }, 400);
       const isPlanning = await isMember(userId, "planning");
       const report = await prisma.$transaction(async (tx) => {
         const expenses = await tx.$queryRawUnsafe(`
