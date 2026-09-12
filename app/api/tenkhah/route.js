@@ -5,6 +5,13 @@ export const runtime = "nodejs";
 const json = (data, status = 200) => Response.json(data, { status });
 const cookie = (r, n) => String(r.headers.get("cookie") || "").match(new RegExp(`(?:^|;\\s*)${n}=([^;]+)`))?.[1] || "";
 async function userIdOf(r) { const raw = r.headers.get("x-user-id") || cookie(r, "user_id"); if (/^\d+$/.test(raw)) return +raw; const sid = cookie(r, "ipm_session"); const s = sid && await prisma.session.findUnique({ where: { id: sid } }).catch(() => null); return s?.userId || (process.env.NODE_ENV !== "production" ? 1 : null); }
+async function isMarandiUser(userId) {
+  const user = await prisma.user.findUnique({
+    where: { id: Number(userId) },
+    select: { username: true },
+  }).catch(() => null);
+  return String(user?.username || "").trim().toLowerCase() === "marandi";
+}
 const amount = (v) => { const x = String(v ?? "").replace(/[۰-۹]/g, d => "۰۱۲۳۴۵۶۷۸۹".indexOf(d)).replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/[^\d]/g, ""); return x ? BigInt(x) : 0n; };
 const englishDigits = (value = "") => String(value).replace(/[۰-۹]/g, d => "۰۱۲۳۴۵۶۷۸۹".indexOf(d)).replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d));
 
@@ -208,7 +215,9 @@ export async function DELETE(r) {
     const history = Array.isArray(row.workflowHistory) ? row.workflowHistory : [];
     const hasWorkflowAction = history.some((event) => String(event?.type || "") !== "created");
     const isUntouchedPending = row.status === "pending" && !hasWorkflowAction;
-    if (!isUntouchedPending) return json({ error: "delete_not_allowed" }, 409);
+    // Only the marandi account may delete its own tenkhah request after a
+    // workflow action. The creator check above remains required for everyone.
+    if (!isUntouchedPending && !(await isMarandiUser(uid))) return json({ error: "delete_not_allowed" }, 409);
 
     await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(
