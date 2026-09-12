@@ -1121,12 +1121,28 @@ export async function DELETE(req) {
 
     const row = await prisma.paymentRequest.findFirst({
       where: { id, docId: REQUEST_DOC_ID },
-      select: { id: true, createdById: true },
+      select: { id: true, createdById: true, historyJson: true },
     });
     if (!row) return json({ error: "not_found" }, 404);
     if (Number(row.createdById) !== Number(userId)) return json({ error: "forbidden" }, 403);
 
-    await prisma.paymentRequest.delete({ where: { id } });
+    const { mainAdmin } = await userContext(userId);
+    const workflowHistory = Array.isArray(row.historyJson) ? row.historyJson : [];
+    const hasWorkflowAction = workflowHistory.some((entry) => ["approved", "returned", "rejected"].includes(entry?.type));
+    const actionRows = await prisma.$queryRawUnsafe(
+      `SELECT 1 FROM "supply_action_entries" WHERE "request_id" = $1 LIMIT 1`,
+      id,
+    ).catch(() => []);
+    const hasSupplyAction = actionRows.length > 0;
+
+    // Only marandi may delete an own supply request after a workflow or supply
+    // action. Other users retain the existing pre-action deletion behaviour.
+    if ((hasWorkflowAction || hasSupplyAction) && !mainAdmin) return json({ error: "delete_not_allowed" }, 409);
+
+    await prisma.$transaction(async (tx) => {
+      await tx.$executeRawUnsafe(`DELETE FROM "supply_action_entries" WHERE "request_id" = $1`, id);
+      await tx.paymentRequest.delete({ where: { id } });
+    });
     return json({ ok: true });
   } catch (e) {
     console.error("supply_requests_delete_error", e);
