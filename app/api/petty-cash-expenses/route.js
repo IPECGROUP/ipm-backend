@@ -378,6 +378,34 @@ export async function DELETE(request) {
     const userId = await userIdOf(request);
     if (!userId) return json({ error: "unauthorized" }, 401);
     const body = await request.json().catch(() => ({}));
+    if (body.action === "clear_petty_cash_page_data") {
+      // This action is deliberately scoped to the petty-cash tables and the
+      // current user's records.  In particular, it never changes
+      // tenkhah_requests or any other payment-request data.
+      const result = await prisma.$transaction(async (tx) => {
+        const expenses = await tx.$queryRawUnsafe(
+          "SELECT id FROM petty_cash_expenses WHERE created_by_id=$1",
+          userId,
+        );
+        const reports = await tx.$queryRawUnsafe(
+          "SELECT id FROM petty_cash_settlement_reports WHERE created_by_id=$1",
+          userId,
+        );
+        const expenseIds = expenses.map((row) => Number(row.id));
+        const reportIds = reports.map((row) => Number(row.id));
+        if (expenseIds.length || reportIds.length) {
+          await tx.$executeRawUnsafe(
+            "DELETE FROM petty_cash_settlement_report_items WHERE expense_id=ANY($1::int[]) OR report_id=ANY($2::int[])",
+            expenseIds,
+            reportIds,
+          );
+        }
+        if (reportIds.length) await tx.$executeRawUnsafe("DELETE FROM petty_cash_settlement_reports WHERE id=ANY($1::int[])", reportIds);
+        if (expenseIds.length) await tx.$executeRawUnsafe("DELETE FROM petty_cash_expenses WHERE id=ANY($1::int[])", expenseIds);
+        return { expenses: expenseIds.length, reports: reportIds.length };
+      });
+      return json({ ok: true, deleted: result });
+    }
     const ids = [...new Set((Array.isArray(body.ids) ? body.ids : []).map(Number).filter((id) => Number.isInteger(id) && id > 0))];
     if (!ids.length) return json({ error: "invalid_input" }, 400);
     const deleted = await prisma.$executeRawUnsafe("DELETE FROM petty_cash_expenses WHERE id=ANY($1::int[]) AND created_by_id=$2 AND stage='planning'", ids, userId);
