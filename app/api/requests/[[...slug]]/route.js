@@ -611,6 +611,15 @@ function initialWorkflowRoleForUser(userContext) {
     : ROLE_KEYS.PROJECT_CONTROL;
 }
 
+function initialWorkflowRoleFromHistory(historyJson) {
+  const history = Array.isArray(historyJson) ? historyJson : [];
+  // The first step_set is written at registration time.  Unlike the active
+  // step, it survives returns and resubmissions, so it preserves the
+  // requester’s original workflow exception even if their unit assignment
+  // changes later.
+  return history.find((entry) => entry?.type === "step_set" && entry?.roleKey)?.roleKey || null;
+}
+
 function getCurrentStep(historyJson) {
   const h = Array.isArray(historyJson) ? historyJson : [];
   for (let i = h.length - 1; i >= 0; i--) {
@@ -1170,7 +1179,17 @@ export async function POST(req, ctx) {
       if (!chain) return json({ error: "workflow_not_defined" }, 400);
 
       const curIndex = typeof step?.index === "number" ? step.index : 1;
-      const nextIndex = curIndex + 1;
+      // A returned request is temporarily assigned to its requester. When
+      // that requester originally belonged to Finance, its initial route was
+      // Finance → Management. Keep that exception on resubmission instead of
+      // advancing from requester (index 0) to Project Control.
+      const isRequesterResubmission = row.status === "returned" && step?.roleKey === ROLE_KEYS.REQUESTER;
+      const originalInitialRole = initialWorkflowRoleFromHistory(history);
+      const resumeRoleKey = isRequesterResubmission && (
+        originalInitialRole === ROLE_KEYS.MANAGEMENT ||
+        (!originalInitialRole && initialWorkflowRoleForUser(uctx) === ROLE_KEYS.MANAGEMENT)
+      ) ? ROLE_KEYS.MANAGEMENT : null;
+      const nextIndex = resumeRoleKey ? chain.indexOf(resumeRoleKey) : curIndex + 1;
 
       history.push({
         byUserId: userId,
@@ -1223,7 +1242,7 @@ export async function POST(req, ctx) {
         return json({ ok: true, item: normalizeOut(updated) });
       }
 
-      const nextRoleKey = chain[nextIndex];
+      const nextRoleKey = resumeRoleKey || chain[nextIndex];
       const workflowUsers = await findWorkflowUsersForRole(nextRoleKey);
       const isSharedUnitStep = isSharedUnitRole(nextRoleKey);
       if (isSharedUnitStep && workflowUsers.length === 0) {
