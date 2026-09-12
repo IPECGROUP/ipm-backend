@@ -1052,7 +1052,7 @@ export async function GET(req, ctx) {
 
     const userNamesById = await userNameMapForRows([row]);
     const relatedLettersByRequest = await relatedLettersForRows([row]);
-    return json({ item: { ...normalizeOut(row, userNamesById), relatedLetters: relatedLettersByRequest.get(String(row.id)) || [], canAct, canEdit: uctx.isSuperAdmin || row.createdById === userId, canDelete: uctx.isSuperAdmin || (row.createdById === userId && !["approved", "rejected", "canceled", "cancelled"].includes(row.status)) } });
+    return json({ item: { ...normalizeOut(row, userNamesById), relatedLetters: relatedLettersByRequest.get(String(row.id)) || [], canAct, canEdit: uctx.isSuperAdmin || row.createdById === userId, canDelete: uctx.isSuperAdmin || (row.createdById === userId && (uctx.isMainAdmin || !["approved", "rejected", "canceled", "cancelled"].includes(row.status))) } });
   }
 
   // GET /api/requests (list)
@@ -1122,7 +1122,7 @@ export async function GET(req, ctx) {
       relatedLetters: relatedLettersByRequest.get(String(x.row.id)) || [],
       canAct: x.canAct,
       canEdit: uctx.isSuperAdmin || x.isMine,
-      canDelete: uctx.isSuperAdmin || (x.isMine && !["approved", "rejected", "canceled", "cancelled"].includes(x.row.status)),
+      canDelete: uctx.isSuperAdmin || (x.isMine && (uctx.isMainAdmin || !["approved", "rejected", "canceled", "cancelled"].includes(x.row.status))),
     })),
   });
 }
@@ -1546,7 +1546,9 @@ export async function DELETE(req, ctx) {
   // فقط سازنده
   const uctx = await getUserContext(req, userId);
   if (row.createdById !== userId && !uctx.isSuperAdmin) return json({ error: "forbidden" }, 403);
-  if (!uctx.isSuperAdmin && ["approved", "rejected", "canceled", "cancelled"].includes(row.status)) return json({ error: "delete_not_allowed" }, 400);
+  // `isMainAdmin` is deliberately restricted to the marandi account. It only
+  // bypasses the post-workflow status lock; ownership checks above remain intact.
+  if (!uctx.isSuperAdmin && !uctx.isMainAdmin && ["approved", "rejected", "canceled", "cancelled"].includes(row.status)) return json({ error: "delete_not_allowed" }, 400);
 
   await prisma.paymentRequest.delete({ where: { id } });
   return json({ ok: true });
