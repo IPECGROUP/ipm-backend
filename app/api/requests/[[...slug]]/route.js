@@ -1173,22 +1173,6 @@ export async function POST(req, ctx) {
       return json({ error: "forbidden" }, 403);
     }
 
-    // Related documents can be adjusted by the person responsible for the
-    // current workflow action. Keep the references in the original creation
-    // metadata, which is the single source used by the request listing.
-    const relatedLettersTouched =
-      Object.prototype.hasOwnProperty.call(body, "relatedLetterIds") ||
-      Object.prototype.hasOwnProperty.call(body, "related_letter_ids");
-    if (relatedLettersTouched) {
-      const createdIndex = history.findIndex((entry) => entry?.type === "created");
-      if (createdIndex >= 0) {
-        history[createdIndex] = {
-          ...history[createdIndex],
-          relatedLetterIds: normalizeIdList(body?.relatedLetterIds ?? body?.related_letter_ids),
-        };
-      }
-    }
-
     if (nextStatus === "approved") {
       const unitKind = row.scope;
       const chain = getWorkflowChainForUnit(unitKind);
@@ -1325,6 +1309,12 @@ export async function POST(req, ctx) {
 
   // POST /api/requests (create)
   const body = (await readJson(req)) || {};
+  const relatedLettersTouched =
+    Object.prototype.hasOwnProperty.call(body, "relatedLetterIds") ||
+    Object.prototype.hasOwnProperty.call(body, "related_letter_ids");
+  // An administrator can correct the request itself, but related documents
+  // remain owned by the original requester.
+  if (relatedLettersTouched && row.createdById !== userId) return json({ error: "forbidden" }, 403);
   const data = pickUpdatable(body);
 
   const uctx = await getUserContext(req, userId);
