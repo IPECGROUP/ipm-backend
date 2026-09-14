@@ -706,9 +706,15 @@ async function computeNextAutoCodeFromDb(projectId, db = prisma) {
     }
   }
 
+  const maxAutoLetterSeq = maxAutoSeq;
+  const reportAutoSequences = reports
+    .map((report) => parseAutoLetterSequence(report?.reportNumber, yy))
+    .filter(Number.isFinite);
+  const reportSequenceLimit = Math.max(maxAutoLetterSeq, startByYear - 1) + reportAutoSequences.length;
+
   for (const report of reports) {
     const autoSeq = parseAutoLetterSequence(report?.reportNumber, yy);
-    if (Number.isFinite(autoSeq) && autoSeq > maxAutoSeq) maxAutoSeq = autoSeq;
+    if (Number.isFinite(autoSeq) && autoSeq <= reportSequenceLimit && autoSeq > maxAutoSeq) maxAutoSeq = autoSeq;
     const plainSeq = parsePlainSequence(report?.reportNumber);
     if (Number.isFinite(plainSeq) && plainSeq > maxLegacyPlainSeq) maxLegacyPlainSeq = plainSeq;
   }
