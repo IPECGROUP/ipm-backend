@@ -25,6 +25,53 @@ function normalized(value = "") {
   return String(value).toLowerCase().replace(/ي/g, "ی").replace(/ك/g, "ک").replace(/\s+/g, " ").trim();
 }
 
+function normalizeDigits(value = "") {
+  return String(value ?? "")
+    .replace(/[\u06F0-\u06F9]/g, (digit) => String(digit.charCodeAt(0) - 0x06F0))
+    .replace(/[\u0660-\u0669]/g, (digit) => String(digit.charCodeAt(0) - 0x0660));
+}
+
+function jalaliYearSuffix(date = new Date()) {
+  const year = new Intl.DateTimeFormat("fa-IR-u-ca-persian", {
+    year: "numeric",
+    timeZone: "Asia/Tehran",
+  }).format(date);
+  return normalizeDigits(year).slice(-2);
+}
+
+function parseSharedSecretariatSequence(value, year) {
+  const normalizedValue = normalizeDigits(String(value || "").trim());
+  const automatic = normalizedValue.match(/^(\d{2})\/(\d{3})\/(\d{5})$/);
+  if (automatic && automatic[1] === year) return Number(automatic[3]);
+  if (/^\d{5}$/.test(normalizedValue)) return Number(normalizedValue);
+  return null;
+}
+
+async function nextSharedSecretariatNumber(db, projectId) {
+  const project = await db.project.findUnique({
+    where: { id: Number(projectId) },
+    select: { code: true },
+  });
+  const projectCode = normalizeDigits(String(project?.code || "").trim()).split(".")[0].match(/^\d{3}/)?.[0] || "";
+  if (!projectCode) throw new RouteError("project_code_required", 400);
+
+  const year = jalaliYearSuffix();
+  const [letters, reports] = await Promise.all([
+    db.letter.findMany({ select: { letterNo: true, secretariatNo: true } }),
+    db.$queryRawUnsafe('SELECT report_number AS "reportNumber" FROM petty_cash_settlement_reports'),
+  ]);
+  const numbers = [
+    ...letters.flatMap((letter) => [letter.letterNo, letter.secretariatNo]),
+    ...reports.map((report) => report.reportNumber),
+  ];
+  const maxSequence = numbers.reduce((max, value) => {
+    const sequence = parseSharedSecretariatSequence(value, year);
+    return Number.isFinite(sequence) && sequence > max ? sequence : max;
+  }, 0);
+  const nextSequence = maxSequence >= 10000 ? maxSequence + 1 : 10000;
+  return `${year}/${projectCode}/${String(nextSequence).padStart(5, "0")}`;
+}
+
 function asAmount(value) {
   const digits = String(value ?? "")
     .replace(/[۰-۹]/g, (digit) => "۰۱۲۳۴۵۶۷۸۹".indexOf(digit))
@@ -267,6 +314,9 @@ export async function POST(request) {
       if (!expenseIds.length) return json({ error: "at_least_one_expense_required" }, 400);
       const isPlanning = await isMember(userId, "planning");
       const report = await prisma.$transaction(async (tx) => {
+        // This lock makes the registry number atomic across both letters and
+        // settlement reports, even when they are registered simultaneously.
+        await tx.$queryRawUnsafe("SELECT pg_advisory_xact_lock(91827461)");
         const expenses = await tx.$queryRawUnsafe(`
           SELECT id,project_id AS "projectId",created_by_id AS "createdById",project_manager_id AS "projectManagerId",stage,project_manager_status AS "projectManagerStatus"
           FROM petty_cash_expenses
@@ -281,15 +331,13 @@ export async function POST(request) {
         if (projectIds.size !== 1) throw new RouteError("expenses_must_have_same_project", 400);
         const grouped = await tx.$queryRawUnsafe("SELECT expense_id FROM petty_cash_settlement_report_items WHERE expense_id=ANY($1::int[])", expenseIds);
         if (grouped.length) throw new RouteError("expense_already_grouped", 409);
-        const placeholder = `TMP-${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+        const reportNumber = await nextSharedSecretariatNumber(tx, [...projectIds][0]);
         const inserted = await tx.$queryRawUnsafe(`
           INSERT INTO petty_cash_settlement_reports (report_number,project_id,created_by_id)
           VALUES ($1,$2,$3)
           RETURNING id,prepared_at AS "preparedAt"
-        `, placeholder, [...projectIds][0], userId);
+        `, reportNumber, [...projectIds][0], userId);
         const reportId = Number(inserted[0].id);
-        const reportNumber = `PCR-${String(reportId).padStart(6, "0")}`;
-        await tx.$executeRawUnsafe("UPDATE petty_cash_settlement_reports SET report_number=$1 WHERE id=$2", reportNumber, reportId);
         await tx.$executeRawUnsafe("INSERT INTO petty_cash_settlement_report_items (report_id,expense_id) SELECT $1,unnest($2::int[])", reportId, expenseIds);
         return { id: reportId, reportNumber, preparedAt: inserted[0].preparedAt, itemCount: expenseIds.length };
       });

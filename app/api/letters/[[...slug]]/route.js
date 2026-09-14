@@ -360,9 +360,9 @@ async function safeLetterFindUnique(args = {}) {
   }
 }
 
-async function safeLetterCreate(data) {
+async function safeLetterCreate(data, db = prisma) {
   try {
-    return await prisma.letter.create({
+    return await db.letter.create({
       data,
       include: LETTER_CLASSIFICATION_INCLUDE,
     });
@@ -370,7 +370,7 @@ async function safeLetterCreate(data) {
     if (!isLettersClassificationCompatError(err)) throw err;
     console.warn("[letters] create fallback without classification relation");
     try {
-      return await prisma.letter.create({
+      return await db.letter.create({
         data: stripClassificationRelationFields(data),
       });
     } catch (err2) {
@@ -378,18 +378,18 @@ async function safeLetterCreate(data) {
       if (hasClassificationWriteData(data)) {
         try {
           await ensureLettersClassificationInfra();
-          return await prisma.letter.create({
+          return await db.letter.create({
             data: stripClassificationRelationFields(data),
           });
         } catch (infraErr) {
           console.warn("[letters] create fallback using docClass classification store");
-          return await prisma.letter.create({
+          return await db.letter.create({
             data: moveClassificationToDocClassFallback(data),
           });
         }
       }
       console.warn("[letters] create fallback without classification fields");
-      return await prisma.letter.create({
+      return await db.letter.create({
         data: stripClassificationWriteFields(data),
       });
     }
@@ -645,11 +645,11 @@ function parseAutoLetterSequence(s, yy) {
   return Number.isFinite(parsed.seq) ? parsed.seq : null;
 }
 
-async function getProjectBaseCode(projectId) {
+async function getProjectBaseCode(projectId, db = prisma) {
   const pid = Number(projectId);
   if (!Number.isFinite(pid) || pid <= 0) return "";
 
-  const project = await prisma.project.findUnique({
+  const project = await db.project.findUnique({
     where: { id: pid },
     select: { code: true },
   });
@@ -661,20 +661,30 @@ async function getProjectBaseCode(projectId) {
   return m ? m[1] : "";
 }
 
-async function computeNextAutoCodeFromDb(projectId) {
+async function computeNextAutoCodeFromDb(projectId, db = prisma) {
   const yy = getJalaliYY(new Date());
   const pid = Number(projectId);
-  const pcode = await getProjectBaseCode(pid);
+  const pcode = await getProjectBaseCode(pid, db);
   if (!pcode) return "";
 
   const startByYear = 10000;
 
-  const items = await prisma.letter.findMany({
+  const settlementTable = await db.$queryRawUnsafe(
+    "SELECT to_regclass('public.petty_cash_settlement_reports') AS table_name"
+  );
+  const [items, reports] = await Promise.all([
+    db.letter.findMany({
     select: {
       letterNo: true,
       secretariatNo: true,
     },
-  });
+    }),
+    // The petty-cash tables are created on first use, so older installations
+    // without that module continue to allocate letter numbers normally.
+    settlementTable?.[0]?.table_name
+      ? db.$queryRawUnsafe('SELECT report_number AS "reportNumber" FROM petty_cash_settlement_reports')
+      : [],
+  ]);
 
   let maxAutoSeq = 0;
   let maxLegacyPlainSeq = 0;
@@ -696,21 +706,28 @@ async function computeNextAutoCodeFromDb(projectId) {
     }
   }
 
+  for (const report of reports) {
+    const autoSeq = parseAutoLetterSequence(report?.reportNumber, yy);
+    if (Number.isFinite(autoSeq) && autoSeq > maxAutoSeq) maxAutoSeq = autoSeq;
+    const plainSeq = parsePlainSequence(report?.reportNumber);
+    if (Number.isFinite(plainSeq) && plainSeq > maxLegacyPlainSeq) maxLegacyPlainSeq = plainSeq;
+  }
+
   const maxSeq = maxAutoSeq || maxLegacyPlainSeq;
   const nextSeq = maxSeq >= startByYear ? (maxSeq + 1) : startByYear;
   return `${yy}/${pcode}/${pad5(nextSeq)}`;
 }
 
-async function computeNextLetterCodeFromDb(projectId) {
-  return await computeNextAutoCodeFromDb(projectId);
+async function computeNextLetterCodeFromDb(projectId, db = prisma) {
+  return await computeNextAutoCodeFromDb(projectId, db);
 }
 
-async function resolveSecretariatNoForCreate(payload) {
+async function resolveSecretariatNoForCreate(payload, db = prisma) {
   const raw = String(payload?.secretariatNo || "").trim();
   // A manually entered suffix distinguishes letters that share a registry number.
   // Preserve it verbatim instead of replacing it with the generated next code.
   if (raw) return raw;
-  return await computeNextLetterCodeFromDb(payload?.projectId);
+  return await computeNextLetterCodeFromDb(payload?.projectId, db);
 }
 
 // تلاش برای گرفتن userId از Session (اگر session cookie دارید)
@@ -1320,11 +1337,15 @@ export async function POST(req, ctx) {
     if (isConfidentialLabel(resolvedClassification.classificationLabel) && !(await hasPagePermission(req, "مدیریت اسناد", "اسناد محرمانه"))) {
       return bad("forbidden", 403);
     }
-    const resolvedSecretariatNo = await resolveSecretariatNoForCreate(payload);
-    const resolvedLetterNo = String(resolvedSecretariatNo || payload.letterNo || "").trim();
+    const created = await prisma.$transaction(async (tx) => {
+      // Settlement reports use this same registry sequence. Serializing the
+      // allocation prevents a letter and a report from receiving one number.
+      await tx.$queryRawUnsafe("SELECT pg_advisory_xact_lock(91827461)");
+      const resolvedSecretariatNo = await resolveSecretariatNoForCreate(payload, tx);
+      const resolvedLetterNo = String(resolvedSecretariatNo || payload.letterNo || "").trim();
 
-    const created = await safeLetterCreate({
-      kind: payload.kind,
+      return await safeLetterCreate({
+        kind: payload.kind,
 
       docClass: payload.docClass ? String(payload.docClass) : null,
       classificationLabel: resolvedClassification.classificationLabel ?? null,
@@ -1350,7 +1371,8 @@ export async function POST(req, ctx) {
       receiverName: payload.receiverName || null,
       attachments: payload.attachments ?? [],
 
-      createdBy: userId ? String(userId) : null,
+        createdBy: userId ? String(userId) : null,
+      }, tx);
     });
 
     return json({ item: toSnakeLetter(created) }, 201);
