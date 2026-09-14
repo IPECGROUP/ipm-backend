@@ -1216,39 +1216,11 @@ export async function GET(req, ctx) {
     if (p0 === "mine") {
       const viewer = await getViewerAccessInfo(req);
       if (!viewer.userId) return bad("unauthorized", 401);
-      let itemsRaw = [];
-
-      if (viewer.isMainAdmin) {
-        itemsRaw = await listLetters({ createdBy: null });
-      } else {
-        if (viewer.canSeeConfidential) {
-          // A confidential-capable user needs their own/public letters plus
-          // confidential letters from others. One complete read is faster
-          // than the former pair of overlapping full-table reads.
-          const allItems = await listLetters({ createdBy: null });
-          itemsRaw = allItems.filter((it) => {
-            const isMineOrPublic =
-              String(it?.created_by ?? "") === String(viewer.userId) ||
-              it?.created_by == null ||
-              it?.created_by === "";
-            const isConfidential = isConfidentialLabel(
-              it?.classification ??
-              it?.classification_label ??
-              it?.confidentiality ??
-              it?.doc_classification ??
-              ""
-            );
-            return isMineOrPublic || isConfidential;
-          });
-        } else {
-          itemsRaw = await listLetters({
-            createdBy: String(viewer.userId),
-            includePublic: true,
-          });
-        }
-      }
-
-      const items = itemsRaw.filter((it) => canViewConfidentialLetter(it, viewer.canSeeConfidential));
+      // مدیریت اسناد یک مخزن مشترک است؛ کاربران مجاز باید تمام اسناد
+      // غیرمحرمانه را در جست‌وجو ببینند، نه فقط اسناد ثبت‌شده توسط خودشان.
+      const items = (await listLetters({ createdBy: null })).filter((it) =>
+        canViewConfidentialLetter(it, viewer.canSeeConfidential)
+      );
       return json({ items });
     }
 
