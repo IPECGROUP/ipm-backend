@@ -1340,7 +1340,7 @@ export async function POST(req, ctx) {
     const created = await prisma.$transaction(async (tx) => {
       // Settlement reports use this same registry sequence. Serializing the
       // allocation prevents a letter and a report from receiving one number.
-      await tx.$queryRawUnsafe("SELECT pg_advisory_xact_lock(91827461)");
+      await tx.$executeRawUnsafe("SELECT pg_advisory_xact_lock(91827461)");
       const resolvedSecretariatNo = await resolveSecretariatNoForCreate(payload, tx);
       const resolvedLetterNo = String(resolvedSecretariatNo || payload.letterNo || "").trim();
 

@@ -316,7 +316,7 @@ export async function POST(request) {
       const report = await prisma.$transaction(async (tx) => {
         // This lock makes the registry number atomic across both letters and
         // settlement reports, even when they are registered simultaneously.
-        await tx.$queryRawUnsafe("SELECT pg_advisory_xact_lock(91827461)");
+        await tx.$executeRawUnsafe("SELECT pg_advisory_xact_lock(91827461)");
         const expenses = await tx.$queryRawUnsafe(`
           SELECT id,project_id AS "projectId",created_by_id AS "createdById",project_manager_id AS "projectManagerId",stage,project_manager_status AS "projectManagerStatus"
           FROM petty_cash_expenses
