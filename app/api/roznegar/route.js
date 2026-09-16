@@ -202,6 +202,18 @@ async function ensureRoznegarSchema() {
       CREATE INDEX IF NOT EXISTS "roznegar_entries_confirmed_idx"
       ON "roznegar_entries"("confirmed");
     `);
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS "roznegar_entry_audit" (
+        "id" SERIAL PRIMARY KEY,
+        "entry_id" INTEGER NOT NULL,
+        "edited_by_user_id" INTEGER NOT NULL,
+        "before_json" JSONB,
+        "after_json" JSONB,
+        "edited_at" TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      );
+    `);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "roznegar_entry_audit_entry_id_idx" ON "roznegar_entry_audit"("entry_id")`);
+    await prisma.$executeRawUnsafe(`CREATE INDEX IF NOT EXISTS "roznegar_entry_audit_edited_at_idx" ON "roznegar_entry_audit"("edited_at")`);
 
     await prisma.$executeRawUnsafe(`
       DO $$
@@ -382,6 +394,7 @@ export async function PATCH(req) {
     if (denied) return denied;
     const userId = await getUserIdFromReq(req);
     if (!userId) return bad("unauthorized", 401);
+    await ensureRoznegarSchema();
 
     const b = await readJsonSafely(req);
     const id = Number(b.id);
@@ -399,7 +412,7 @@ export async function PATCH(req) {
     }
 
     const exists = await withRoznegarSchema(() =>
-      prisma.roznegarEntry.findFirst({ where: { id, userId }, select: { id: true } })
+      prisma.roznegarEntry.findUnique({ where: { id } })
     );
     if (!exists) return bad("not_found", 404);
 
@@ -409,6 +422,11 @@ export async function PATCH(req) {
         data,
       })
     );
+
+    await prisma.$executeRaw`
+      INSERT INTO "roznegar_entry_audit" ("entry_id", "edited_by_user_id", "before_json", "after_json")
+      VALUES (${id}, ${userId}, ${JSON.stringify(mapEntry(exists))}::jsonb, ${JSON.stringify(mapEntry(item))}::jsonb)
+    `;
 
     return json({ item: mapEntry(item) });
   } catch (e) {
