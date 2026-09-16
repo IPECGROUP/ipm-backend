@@ -282,6 +282,7 @@ function mapEntry(row) {
     confirmed_at: row.confirmedAt,
     created_at: row.createdAt,
     updated_at: row.updatedAt,
+    user_name: row.user?.name || row.user?.username || row.user?.email || `کاربر #${row.userId}`,
   };
 }
 
@@ -301,7 +302,6 @@ export async function GET(req) {
     if (dateYmd && !validDateYmd(dateYmd)) return bad("invalid_date_ymd");
 
     const where = {
-      userId,
       projectId,
       ...(dateYmd ? { dateYmd } : {}),
       ...(confirmedParam != null ? { confirmed: parseBool(confirmedParam, false) } : {}),
@@ -311,6 +311,7 @@ export async function GET(req) {
       prisma.roznegarEntry.findMany({
         where,
         orderBy: [{ dateYmd: "desc" }, { id: "desc" }],
+        include: { user: { select: { name: true, username: true, email: true } } },
       })
     );
 
