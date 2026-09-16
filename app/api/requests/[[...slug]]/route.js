@@ -1309,12 +1309,6 @@ export async function POST(req, ctx) {
 
   // POST /api/requests (create)
   const body = (await readJson(req)) || {};
-  const relatedLettersTouched =
-    Object.prototype.hasOwnProperty.call(body, "relatedLetterIds") ||
-    Object.prototype.hasOwnProperty.call(body, "related_letter_ids");
-  // An administrator can correct the request itself, but related documents
-  // remain owned by the original requester.
-  if (relatedLettersTouched && row.createdById !== userId) return json({ error: "forbidden" }, 403);
   const data = pickUpdatable(body);
 
   const uctx = await getUserContext(req, userId);
