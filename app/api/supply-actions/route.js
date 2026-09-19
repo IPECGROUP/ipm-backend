@@ -267,12 +267,11 @@ function isSupplyParticipant(row, userId) {
   if (!targetUserId) return false;
   if (Number(row?.createdById) === targetUserId || Number(row?.currentAssigneeUserId) === targetUserId) return true;
   const history = historyOf(row);
-  const hasHistoryInvolvement = history.some((entry) => {
-    if (!entry || typeof entry !== "object") return false;
-    if (["assignedToUserId", "byUserId", "userId", "actorUserId", "createdById"].some((key) => Number(entry[key]) === targetUserId)) return true;
-    return Array.isArray(entry.userIds) && entry.userIds.map(String).includes(String(targetUserId));
-  });
-  if (hasHistoryInvolvement) return true;
+  const hasWorkflowAction = history.some((entry) =>
+    ["approved", "returned", "rejected"].includes(entry?.type) &&
+    Number(entry?.byUserId) === targetUserId
+  );
+  if (hasWorkflowAction) return true;
   const actions = Array.isArray(row?.supplyActions) ? row.supplyActions : supplyActionsOf(history);
   return actions.some((action) => Number(action?.byUserId) === targetUserId);
 }

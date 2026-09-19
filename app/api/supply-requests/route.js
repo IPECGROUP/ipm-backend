@@ -245,6 +245,18 @@ function hasBeenAssignedToUser(row, userId) {
   });
 }
 
+// Being named in an assignment record only means a request passed through a
+// user's queue; it does not establish that they actually handled it.  Keep
+// the request detail visible to people who performed a workflow action.
+function hasPerformedWorkflowAction(row, userId) {
+  const targetUserId = Number(userId);
+  if (!targetUserId) return false;
+  return (Array.isArray(row?.historyJson) ? row.historyJson : []).some((entry) =>
+    ["approved", "returned", "rejected"].includes(entry?.type) &&
+    Number(entry?.byUserId) === targetUserId
+  );
+}
+
 async function supplyActionRequestIdsForUser(userId, requestIds) {
   const ids = Array.from(new Set((requestIds || []).map(Number).filter((id) => id > 0)));
   if (!ids.length) return new Set();
@@ -738,8 +750,7 @@ export async function GET(req) {
       if (cartableOnly) return canAct && Number(row.currentAssigneeUserId) === Number(userId);
       return (
         Number(row.createdById) === Number(userId) ||
-        ccUserIdsOf(row).includes(String(userId)) ||
-        hasBeenAssignedToUser(row, userId) ||
+        hasPerformedWorkflowAction(row, userId) ||
         actionParticipantRequestIds.has(Number(row.id)) ||
         isCompletedCommercialOwner ||
         (canAct && Number(row.currentAssigneeUserId) === Number(userId))
