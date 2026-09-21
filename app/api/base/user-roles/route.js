@@ -3,6 +3,8 @@ export const runtime = "nodejs";
 
 import { prisma } from "../../../../lib/prisma";
 import { isDbConnectionError, readOrgStore, writeOrgStore } from "../../../../lib/orgStructureFallback";
+import { requireAdmin } from "../../../../lib/security";
+import { writeAuditLog } from "../../../../lib/auditLog";
 
 // کمک‌تابع برای خوندن body امن
 async function readJson(request) {
@@ -16,7 +18,9 @@ async function readJson(request) {
 }
 
 // GET /api/base/user-roles  => لیست نقش‌ها
-export async function GET() {
+export async function GET(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   try {
     const items = await prisma.userRole.findMany({
       orderBy: { id: "asc" },
@@ -40,6 +44,8 @@ export async function GET() {
 
 // POST /api/base/user-roles  => افزودن نقش
 export async function POST(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   const body = await readJson(request);
   try {
     const name = String(body.name || "").trim();
@@ -58,6 +64,7 @@ export async function POST(request) {
       data: { name },
     });
 
+    await writeAuditLog({ request, actor: auth.user, action: "role.create", entityType: "role", entityId: item.id, severity: "warning", details: { name: item.name } });
     return Response.json({ item });
   } catch (e) {
     console.error("user_roles_post_error", e);
@@ -93,6 +100,8 @@ export async function POST(request) {
 
 // PATCH /api/base/user-roles  => ویرایش (id و name در body)
 export async function PATCH(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   const body = await readJson(request);
   try {
     const id = Number(body.id);
@@ -123,6 +132,7 @@ export async function PATCH(request) {
       data: { name },
     });
 
+    await writeAuditLog({ request, actor: auth.user, action: "role.update", entityType: "role", entityId: item.id, severity: "warning", details: { name: item.name } });
     return Response.json({ item });
   } catch (e) {
     console.error("user_roles_patch_error", e);
@@ -185,6 +195,8 @@ export async function PATCH(request) {
 
 // DELETE /api/base/user-roles  => حذف (id در body یا query)
 export async function DELETE(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   const url = new URL(request.url);
   const fromQuery = url.searchParams.get("id");
   const body = fromQuery ? {} : await readJson(request);
@@ -210,6 +222,7 @@ export async function DELETE(request) {
       where: { id },
     });
 
+    await writeAuditLog({ request, actor: auth.user, action: "role.delete", entityType: "role", entityId: item.id, severity: "warning", details: { name: item.name } });
     return Response.json({ ok: true, item });
   } catch (e) {
     console.error("user_roles_delete_error", e);

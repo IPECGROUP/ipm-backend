@@ -3,6 +3,8 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { prisma } from "../../../../../lib/prisma";
+import { requireAdmin } from "../../../../../lib/security";
+import { writeAuditLog } from "../../../../../lib/auditLog";
 
 function pickIdFromParams(params) {
   const raw = Array.isArray(params?.id) ? params.id[0] : params?.id;
@@ -57,6 +59,8 @@ function normalizeTabInput(v) {
 
 // GET /api/admin/unit-access?unit_id=1
 export async function GET(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   try {
     const url = new URL(request.url);
     const unitId = Number(url.searchParams.get("unit_id") || 0);
@@ -85,6 +89,8 @@ export async function GET(request) {
 
 // POST /api/admin/unit-access
 export async function POST(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   try {
     const body = await request.json();
 
@@ -121,6 +127,7 @@ export async function POST(request) {
       data: { unitId, page, tab, permitted },
     });
 
+    await writeAuditLog({ request, actor: auth.user, action: "unit.access_update", entityType: "unit", entityId: unitId, severity: "warning", details: { page, tab, permitted } });
     return Response.json({ ok: true, item: mapRow(item) });
   } catch (e) {
     console.error("unit_access_post_error", e);
@@ -134,6 +141,8 @@ export async function POST(request) {
 // DELETE /api/admin/unit-access/:id
 // + DELETE /api/admin/unit-access?unit_id=1[&page=DefineBudgetCentersPage]
 export async function DELETE(request, { params }) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   try {
     const id = pickIdFromParams(params) ?? pickIdFromUrl(request);
 
@@ -157,10 +166,12 @@ export async function DELETE(request, { params }) {
       };
 
       const r = await prisma.unitAccessRule.deleteMany({ where });
+      await writeAuditLog({ request, actor: auth.user, action: "unit.access_delete", entityType: "unit", entityId: unitId, severity: "warning", details: { page, tab, deleted: r.count } });
       return Response.json({ ok: true, deleted: r.count });
     }
 
     const item = await prisma.unitAccessRule.delete({ where: { id } });
+    await writeAuditLog({ request, actor: auth.user, action: "unit.access_delete", entityType: "unit", entityId: item.unitId, severity: "warning", details: { ruleId: item.id, page: item.page, tab: item.tab } });
     return Response.json({ ok: true, item: mapRow(item) });
   } catch (e) {
     console.error("unit_access_delete_error", e);

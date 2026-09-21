@@ -4,6 +4,8 @@ export const dynamic = "force-dynamic";
 
 import { prisma } from "../../../../lib/prisma";
 import { isDbConnectionError, readOrgStore, writeOrgStore } from "../../../../lib/orgStructureFallback";
+import { requireAdmin } from "../../../../lib/security";
+import { writeAuditLog } from "../../../../lib/auditLog";
 
 function toInt(v) {
   const n = Number(v);
@@ -27,6 +29,8 @@ async function readJsonSafe(request) {
 // GET /api/admin/user-units?user_id=9
 // GET /api/admin/user-units?unit_id=1
 export async function GET(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   const url = new URL(request.url);
   const userId = toInt(url.searchParams.get("user_id") ?? url.searchParams.get("userId"));
   const unitId = toInt(url.searchParams.get("unit_id") ?? url.searchParams.get("unitId"));
@@ -104,6 +108,8 @@ export async function GET(request) {
 // 1) { user_id: 9, unit_id: 1 } => افزودن یک عضویت
 // 2) { user_id: 9, unit_ids: [1,2] } => جایگزینی کامل عضویت‌های کاربر
 export async function POST(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   const body = await readJsonSafe(request);
   try {
     const userId = toInt(body.user_id ?? body.userId);
@@ -131,6 +137,7 @@ export async function POST(request) {
       }
 
       const rows = await prisma.userUnit.findMany({ where: { userId }, orderBy: { unitId: "asc" } });
+      await writeAuditLog({ request, actor: auth.user, action: "user.units_replace", entityType: "user", entityId: userId, details: { unitIds } });
       return Response.json({ ok: true, userId, unitIds: rows.map((r) => r.unitId) });
     }
 
@@ -146,6 +153,7 @@ export async function POST(request) {
       data: { userId, unitId: singleUnitId },
     });
 
+    await writeAuditLog({ request, actor: auth.user, action: "user.unit_add", entityType: "user", entityId: userId, details: { unitId: singleUnitId } });
     return Response.json({ ok: true, userId, unitId: singleUnitId });
   } catch (e) {
     // اگر duplicate شد (قبلاً عضو بوده)، مشکلی نیست
@@ -178,6 +186,8 @@ export async function POST(request) {
 
 // DELETE /api/admin/user-units?user_id=9&unit_id=1
 export async function DELETE(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   const url = new URL(request.url);
   const userId = toInt(url.searchParams.get("user_id") ?? url.searchParams.get("userId"));
   const unitId = toInt(url.searchParams.get("unit_id") ?? url.searchParams.get("unitId"));
@@ -193,6 +203,7 @@ export async function DELETE(request) {
       where: { userId_unitId: { userId, unitId } },
     });
 
+    await writeAuditLog({ request, actor: auth.user, action: "user.unit_remove", entityType: "user", entityId: userId, severity: "warning", details: { unitId } });
     return Response.json({ ok: true });
   } catch (e) {
     // اگر نبود هم مهم نیست

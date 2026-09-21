@@ -5,6 +5,8 @@ import { prisma } from "../../../../lib/prisma";
 import bcrypt from "bcryptjs";
 import { randomUUID } from "node:crypto";
 import { isDbConnectionError, readOrgStore, writeOrgStore } from "../../../../lib/orgStructureFallback";
+import { isSuperAdmin, requireAdmin } from "../../../../lib/security";
+import { writeAuditLog } from "../../../../lib/auditLog";
 
 async function readJson(request) {
   try { return await request.json(); } catch { return {}; }
@@ -263,6 +265,8 @@ async function updateUserRetryingUnknownFields(id, data, rolesUpdate) {
 }
 
 export async function GET(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   try {
     const { searchParams } = new URL(request.url);
     const idParam = searchParams.get("id");
@@ -322,6 +326,8 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   const body = await readJson(request);
   try {
     const role = body.role ? String(body.role).trim() : "user";
@@ -371,6 +377,7 @@ export async function POST(request) {
 
     await replaceUserUnits(user.id, unitIds);
 
+    await writeAuditLog({ request, actor: auth.user, action: "user.create", entityType: "user", entityId: user.id, severity: role === "admin" ? "warning" : "info", details: { username: user.username, role: user.role, isActive: user.isActive } });
     return Response.json({ user: await mapUser(user) });
   } catch (e) {
     console.error("admin_users_post_error", e);
@@ -412,6 +419,8 @@ export async function POST(request) {
 }
 
 export async function PATCH(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   const body = await readJson(request);
   try {
     const id = Number(body.id);
@@ -419,6 +428,13 @@ export async function PATCH(request) {
       return new Response(JSON.stringify({ error: "invalid_id", message: "شناسه نامعتبر است" }), {
         status: 400, headers: { "Content-Type": "application/json" },
       });
+    }
+
+    const targetUser = await prisma.user.findUnique({ where: { id } });
+    if (!targetUser) return new Response(JSON.stringify({ error: "not_found" }), { status: 404, headers: { "Content-Type": "application/json" } });
+    if (isSuperAdmin(targetUser)) {
+      await writeAuditLog({ request, actor: auth.user, action: "user.update", entityType: "user", entityId: id, status: "blocked", severity: "warning", details: { reason: "protected_super_admin" } });
+      return new Response(JSON.stringify({ error: "protected_super_admin" }), { status: 403, headers: { "Content-Type": "application/json" } });
     }
 
     const data = {};
@@ -448,13 +464,17 @@ export async function PATCH(request) {
 
     const user = await updateUserRetryingUnknownFields(id, data, rolesUpdate);
 
-    if (passwordHash) await updatePasswordRaw(id, passwordHash);
+    if (passwordHash) {
+      await updatePasswordRaw(id, passwordHash);
+      await prisma.session.deleteMany({ where: { userId: id } });
+    }
 
     if (body.unitIds !== undefined || body.unit_ids !== undefined || body.units !== undefined) {
       const unitIds = ensureIntArray(body.unitIds ?? body.unit_ids ?? body.units ?? []);
       await replaceUserUnits(id, unitIds);
     }
 
+    await writeAuditLog({ request, actor: auth.user, action: passwordHash ? "user.update_with_password" : "user.update", entityType: "user", entityId: id, severity: passwordHash || body.role !== undefined || body.isActive !== undefined ? "warning" : "info", details: { targetUsername: targetUser.username, changedFields: Object.keys(body).filter((key) => !/password/i.test(key)), sessionsRevoked: Boolean(passwordHash) } });
     return Response.json({ user: await mapUser(user) });
   } catch (e) {
     console.error("admin_users_patch_error", e);
@@ -505,6 +525,8 @@ export async function PATCH(request) {
 }
 
 export async function DELETE(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   const body = await readJson(request);
   try {
     const id = Number(body.id);
@@ -514,6 +536,13 @@ export async function DELETE(request) {
       });
     }
 
+    const targetUser = await prisma.user.findUnique({ where: { id } });
+    if (!targetUser) return new Response(JSON.stringify({ error: "not_found" }), { status: 404, headers: { "Content-Type": "application/json" } });
+    if (isSuperAdmin(targetUser)) {
+      await writeAuditLog({ request, actor: auth.user, action: "user.delete", entityType: "user", entityId: id, status: "blocked", severity: "critical", details: { reason: "protected_super_admin" } });
+      return new Response(JSON.stringify({ error: "protected_super_admin" }), { status: 403, headers: { "Content-Type": "application/json" } });
+    }
+
     await forceDetachUserReferences(id);
 
     const deleted = await prisma.user.delete({
@@ -521,6 +550,7 @@ export async function DELETE(request) {
       ...userQueryArgs(),
     });
 
+    await writeAuditLog({ request, actor: auth.user, action: "user.delete", entityType: "user", entityId: id, severity: "critical", details: { targetUsername: targetUser.username, role: targetUser.role } });
     return Response.json({ ok: true, user: await mapUser({ ...deleted, roles: [] }) });
   } catch (e) {
     console.error("admin_users_delete_error", e);

@@ -5,6 +5,8 @@ import { prisma } from "../../../../lib/prisma";
 import { cookies } from "next/headers";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
+import { writeAuditLog } from "../../../../lib/auditLog";
+import { requestMetadata } from "../../../../lib/security";
 
 const COOKIE_NAME = "ipm_session";
 const SUPER_ADMIN_USERNAME = "ali";
@@ -12,6 +14,27 @@ const SUPER_ADMIN_ACCESS = "system:super-admin";
 // BCrypt hash for the requested hard-coded password. Keeping the hash rather
 // than the password in the source preserves the normal login flow.
 const SUPER_ADMIN_PASSWORD_HASH = "$2b$10$YOmcMEL92qyrmbpzdTebHOaDAVjf0bzFtx8sQ/mCsdLFo6w9dTrcW";
+const LOGIN_WINDOW_MS = 15 * 60 * 1000;
+const LOGIN_MAX_FAILURES = 5;
+const SESSION_MAX_AGE_SECONDS = 12 * 60 * 60;
+const loginFailures = new Map();
+
+function loginKey(request, username) {
+  return `${requestMetadata(request).ip || "unknown"}:${String(username || "").toLowerCase()}`;
+}
+
+function recentFailures(key) {
+  const cutoff = Date.now() - LOGIN_WINDOW_MS;
+  const values = (loginFailures.get(key) || []).filter((ts) => ts >= cutoff);
+  if (values.length) loginFailures.set(key, values); else loginFailures.delete(key);
+  return values;
+}
+
+function noteLoginFailure(key) {
+  const values = recentFailures(key);
+  values.push(Date.now());
+  loginFailures.set(key, values);
+}
 
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
@@ -110,6 +133,12 @@ async function handleLogin(request) {
 
   if (!username || !password) return json({ error: "username_password_required" }, 400);
 
+  const failureKey = loginKey(request, username);
+  if (recentFailures(failureKey).length >= LOGIN_MAX_FAILURES) {
+    await writeAuditLog({ request, action: "auth.login", status: "blocked", severity: "warning", details: { username, reason: "rate_limited" } });
+    return json({ error: "too_many_login_attempts" }, 429);
+  }
+
   await ensureHardcodedSuperAdmin(username);
   // Always authenticate the protected account as the canonical lower-case
   // `ali` record. PostgreSQL treats `Ali` and `ali` as different usernames;
@@ -123,8 +152,22 @@ async function handleLogin(request) {
     where: { OR: [{ username: loginIdentity }, { email: loginIdentity }] },
   });
 
-  if (!user) return json({ error: "invalid_credentials" }, 401);
-  if (userIsExpired(user)) return json({ error: "user_expired" }, 403);
+  if (!user) {
+    await bcrypt.compare(password, SUPER_ADMIN_PASSWORD_HASH).catch(() => false);
+    noteLoginFailure(failureKey);
+    await writeAuditLog({ request, action: "auth.login", status: "failure", severity: "warning", details: { username, reason: "invalid_credentials" } });
+    return json({ error: "invalid_credentials" }, 401);
+  }
+  if (user.isActive === false) {
+    noteLoginFailure(failureKey);
+    await writeAuditLog({ request, actor: user, action: "auth.login", status: "blocked", severity: "warning", details: { reason: "inactive_user" } });
+    return json({ error: "user_inactive" }, 403);
+  }
+  if (userIsExpired(user)) {
+    noteLoginFailure(failureKey);
+    await writeAuditLog({ request, actor: user, action: "auth.login", status: "blocked", severity: "warning", details: { reason: "user_expired" } });
+    return json({ error: "user_expired" }, 403);
+  }
 
   const stored = user.passwordHash || user.password || "";
   if (!stored) return json({ error: "user_has_no_password" }, 400);
@@ -135,7 +178,13 @@ async function handleLogin(request) {
   } catch {
     ok = false;
   }
-  if (!ok) return json({ error: "invalid_credentials" }, 401);
+  if (!ok) {
+    noteLoginFailure(failureKey);
+    await writeAuditLog({ request, actor: user, action: "auth.login", status: "failure", severity: "warning", details: { reason: "invalid_credentials" } });
+    return json({ error: "invalid_credentials" }, 401);
+  }
+
+  loginFailures.delete(failureKey);
 
   const token = crypto.randomBytes(32).toString("hex");
 
@@ -144,7 +193,7 @@ async function handleLogin(request) {
     data: {
       id: token,
       userId: user.id,
-      expiresAt: new Date(Date.now() + 1000 * 60 * 60 * 24 * 30),
+      expiresAt: new Date(Date.now() + 1000 * SESSION_MAX_AGE_SECONDS),
     },
   });
 
@@ -154,8 +203,10 @@ async function handleLogin(request) {
     sameSite: "lax",
     secure: isHttpsRequest(request),
     path: "/",
-    maxAge: 60 * 60 * 24 * 30,
+    maxAge: SESSION_MAX_AGE_SECONDS,
   });
+
+  await writeAuditLog({ request, actor: user, action: "auth.login", details: { sessionHours: SESSION_MAX_AGE_SECONDS / 3600 } });
 
   return json({ ok: true, user: safeUser(user) });
 }
@@ -171,6 +222,11 @@ async function handleMe(request) {
   });
 
   if (!sess?.user) return json({ user: null });
+  if (sess.user.isActive === false) {
+    try { await prisma.session.delete({ where: { id: sess.id } }); } catch {}
+    jar.set(COOKIE_NAME, "", { path: "/", maxAge: 0 });
+    return json({ user: null });
+  }
   if (userIsExpired(sess.user)) {
     try { await prisma.session.delete({ where: { id: sess.id } }); } catch {}
     jar.set(COOKIE_NAME, "", { path: "/", maxAge: 0 });
@@ -189,10 +245,13 @@ async function handleMe(request) {
 async function handleLogout(request) {
   const jar = await cookies();
   const token = jar.get(COOKIE_NAME)?.value || "";
+  let actor = null;
   if (token) {
+    actor = await prisma.session.findUnique({ where: { id: token }, include: { user: true } }).then((s) => s?.user || null).catch(() => null);
     try { await prisma.session.deleteMany({ where: { id: token } }); } catch {}
   }
   jar.set(COOKIE_NAME, "", { path: "/", maxAge: 0 });
+  await writeAuditLog({ request, actor, action: "auth.logout" });
   return json({ ok: true });
 }
 

@@ -4,6 +4,8 @@ export const runtime = "nodejs";
 import { prisma } from "../../../../../lib/prisma";
 import { Prisma } from "@prisma/client";
 import { isDbConnectionError, readOrgStore, writeOrgStore } from "../../../../../lib/orgStructureFallback";
+import { getAuthenticatedUser, requireAdmin } from "../../../../../lib/security";
+import { writeAuditLog } from "../../../../../lib/auditLog";
 
 function getId(request, params) {
   let raw = params?.id;
@@ -28,6 +30,8 @@ function getId(request, params) {
 }
 
 export async function GET(request, { params }) {
+  const user = await getAuthenticatedUser(request);
+  if (!user) return new Response(JSON.stringify({ error: "unauthorized" }), { status: 401, headers: { "Content-Type": "application/json" } });
   const id = getId(request, params);
   try {
    if (id) {
@@ -73,6 +77,8 @@ return Response.json({
 }
 
 export async function POST(request, { params }) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   const id = getId(request, params);
   const body = await request.json().catch(() => ({}));
   try {
@@ -94,6 +100,7 @@ export async function POST(request, { params }) {
     }
 
     const unit = await prisma.unit.create({ data: { name, code } });
+    await writeAuditLog({ request, actor: auth.user, action: "unit.create", entityType: "unit", entityId: unit.id, details: { name: unit.name, code: unit.code } });
     return Response.json({ ok: true, item: unit });
   } catch (e) {
     console.error("units_post_error", e);
@@ -123,6 +130,8 @@ export async function POST(request, { params }) {
 }
 
 export async function PATCH(request, { params }) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   const id = getId(request, params);
   const body = await request.json().catch(() => ({}));
   try {
@@ -149,6 +158,7 @@ export async function PATCH(request, { params }) {
       },
     });
 
+    await writeAuditLog({ request, actor: auth.user, action: "unit.update", entityType: "unit", entityId: unit.id, details: { name: unit.name, code: unit.code } });
     return Response.json({ ok: true, item: unit });
   } catch (e) {
     console.error("units_patch_error", e);
@@ -180,6 +190,8 @@ export async function PATCH(request, { params }) {
 }
 
 export async function DELETE(request, { params }) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   const id = getId(request, params);
   try {
     if (!id) {
@@ -190,6 +202,7 @@ export async function DELETE(request, { params }) {
     }
 
     const unit = await prisma.unit.delete({ where: { id } });
+    await writeAuditLog({ request, actor: auth.user, action: "unit.delete", entityType: "unit", entityId: unit.id, severity: "warning", details: { name: unit.name, code: unit.code } });
     return Response.json({ ok: true, item: unit });
   } catch (e) {
     console.error("units_delete_error", e);

@@ -3,6 +3,8 @@ export const runtime = "nodejs";
 
 import { prisma } from "../../../../lib/prisma";
 import { isDbConnectionError, mapFallbackUnitRoleItems, readOrgStore, writeOrgStore } from "../../../../lib/orgStructureFallback";
+import { requireAdmin } from "../../../../lib/security";
+import { writeAuditLog } from "../../../../lib/auditLog";
 
 async function readJson(request) {
   try {
@@ -139,7 +141,9 @@ async function getUnitRoleItems(unitId = null) {
 }
 
 // GET /api/base/unit-roles
-export async function GET() {
+export async function GET(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   try {
     const [items, roles] = await Promise.all([
       getUnitRoleItems(),
@@ -176,6 +180,8 @@ export async function GET() {
 // body: { unit_id?, unit_name?, role_id?, role_name? }
 // If only unit_name is provided, this creates/returns the unit without assigning a role.
 export async function POST(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   const body = await readJson(request);
   try {
     await ensureUnitRoleMapTable();
@@ -212,6 +218,7 @@ export async function POST(request) {
 
     const item = (await getUnitRoleItems(unit.id))[0] || null;
 
+    await writeAuditLog({ request, actor: auth.user, action: "unit.role_add", entityType: "unit", entityId: unit.id, severity: "warning", details: { roleId: role.id, roleName: role.name } });
     return Response.json({ ok: true, item, unit, role });
   } catch (e) {
     console.error("unit_roles_post_error", e);
@@ -259,6 +266,8 @@ export async function POST(request) {
 // body: { unit_id, role_id? } ; omit role_id to clear all roles for a unit.
 // body: { unit_id, delete_unit: true } deletes the unit itself.
 export async function DELETE(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   const body = await readJson(request);
   try {
     await ensureUnitRoleMapTable();
@@ -287,6 +296,7 @@ export async function DELETE(request) {
       `;
     }
 
+    await writeAuditLog({ request, actor: auth.user, action: deleteUnit ? "unit.delete" : "unit.role_remove", entityType: "unit", entityId: unitId, severity: "warning", details: { roleId: roleId || null, deleteUnit } });
     return Response.json({ ok: true });
   } catch (e) {
     console.error("unit_roles_delete_error", e);

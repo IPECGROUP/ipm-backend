@@ -3,6 +3,8 @@ export const runtime = "nodejs";
 
 import { prisma } from "../../../../../lib/prisma";
 import bcrypt from "bcryptjs";
+import { isSuperAdmin, requireAdmin } from "../../../../../lib/security";
+import { writeAuditLog } from "../../../../../lib/auditLog";
 
 async function readJson(request) {
   try { return await request.json(); } catch { return {}; }
@@ -90,24 +92,33 @@ async function updatePassword(userId, passwordHash) {
 }
 
 export async function PATCH(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   try {
     const body = await readJson(request);
     const id = Number(body.id);
     const password = String(body.password || "");
 
     if (!id || Number.isNaN(id)) return json({ error: "invalid_id" }, 400);
-    if (!password.trim()) return json({ error: "password_required" }, 400);
+    if (password.length < 6) return json({ error: "password_too_short" }, 400);
+
+    const targetUser = await prisma.user.findUnique({ where: { id } });
+    if (!targetUser) return json({ error: "user_not_found" }, 404);
+    if (isSuperAdmin(targetUser)) {
+      await writeAuditLog({ request, actor: auth.user, action: "user.password_change", entityType: "user", entityId: id, status: "blocked", severity: "warning", details: { reason: "protected_super_admin" } });
+      return json({ error: "protected_super_admin" }, 403);
+    }
 
     const passwordHash = await bcrypt.hash(password, 10);
     await updatePassword(id, passwordHash);
+    await prisma.session.deleteMany({ where: { userId: id } });
+
+    await writeAuditLog({ request, actor: auth.user, action: "user.password_change", entityType: "user", entityId: id, severity: "warning", details: { targetUsername: targetUser.username, sessionsRevoked: true } });
 
     return json({ ok: true });
   } catch (e) {
     console.error("admin_user_password_patch_error", e);
-    return json({
-      error: e?.message || "internal_error",
-      message: e?.message || "unknown_error",
-      code: e?.code || null,
-    }, e?.status || 500);
+    await writeAuditLog({ request, actor: auth.user, action: "user.password_change", status: "failure", severity: "error", details: { reason: e?.message || "internal_error" } });
+    return json({ error: e?.status === 404 ? "user_not_found" : "internal_error" }, e?.status || 500);
   }
 }

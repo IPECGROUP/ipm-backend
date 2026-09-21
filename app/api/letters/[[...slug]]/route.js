@@ -1,5 +1,7 @@
 import { prisma } from "@/lib/prisma";
 import { hasPagePermission, requirePagePermission } from "@/lib/pagePermissions";
+import { getAuthenticatedUser, requireAdmin } from "@/lib/security";
+import { writeAuditLog } from "@/lib/auditLog";
 import { NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
@@ -1353,6 +1355,9 @@ export async function POST(req, ctx) {
       }, tx);
     });
 
+    const actor = await getAuthenticatedUser(req);
+    await writeAuditLog({ request: req, actor, action: "letter.create", entityType: "letter", entityId: created.id, details: { kind: created.kind, subject: created.subject, letterNo: created.letterNo, classification: created.classificationLabel } });
+
     return json({ item: toSnakeLetter(created) }, 201);
   } catch (e) {
     if (e?.message === "invalid_json") return bad("invalid_json");
@@ -1528,6 +1533,9 @@ export async function PATCH(req, ctx) {
 
     const updated = await safeLetterUpdate(id, data);
 
+    const actor = await getAuthenticatedUser(req);
+    await writeAuditLog({ request: req, actor, action: "letter.update", entityType: "letter", entityId: id, details: { changedFields: Object.keys(data), subject: updated.subject, letterNo: updated.letterNo } });
+
     return json({ item: toSnakeLetter(updated) });
   } catch (e) {
     if (e?.message === "invalid_json") return bad("invalid_json");
@@ -1543,8 +1551,8 @@ export async function DELETE(req, ctx) {
     // ✅ حذف همه نامه‌ها + فایل‌های ضمیمه
     // مسیر: DELETE /api/letters/all
     if (p0 === "all") {
-      const userId = await getUserIdFromReq(req);
-      if (!userId) return bad("unauthorized", 401);
+      const auth = await requireAdmin(req);
+      if (auth.denied) return auth.denied;
 
       const letters = await prisma.letter.findMany({
         select: { id: true, attachments: true },
@@ -1554,8 +1562,13 @@ export async function DELETE(req, ctx) {
       await tryDeleteAttachmentFiles(letters);
 
       const r = await prisma.letter.deleteMany({});
+      await writeAuditLog({ request: req, actor: auth.user, action: "letter.delete_all", entityType: "letter", severity: "critical", details: { deleted: r.count } });
       return json({ ok: true, deleted: r.count });
     }
+
+    const denied = await requirePagePermission(req, "مدیریت اسناد", "حذف");
+    if (denied) return denied;
+    const actor = await getAuthenticatedUser(req);
 
     const id = getIdFromReq(req, ctx);
     if (!id) return bad("missing_id");
@@ -1568,6 +1581,8 @@ export async function DELETE(req, ctx) {
     if (l) await tryDeleteAttachmentFiles([l]);
 
     await prisma.letter.delete({ where: { id } });
+
+    await writeAuditLog({ request: req, actor, action: "letter.delete", entityType: "letter", entityId: id, severity: "warning", details: { attachmentCount: Array.isArray(l?.attachments) ? l.attachments.length : 0 } });
 
     return json({ ok: true });
   } catch (e) {

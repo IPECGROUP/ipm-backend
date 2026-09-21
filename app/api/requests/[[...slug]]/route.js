@@ -806,6 +806,45 @@ async function findInitialWorkflowUsers(projectId, excludeUserId = null) {
   return findWorkflowUsersForRole(ROLE_KEYS.PROJECT_CONTROL, excludeUserId);
 }
 
+async function resolveInitialWorkflowTarget(userContext, projectId) {
+  const preferredRoleKey = initialWorkflowRoleForUser(userContext);
+
+  // Requests created by Finance keep their existing shortcut to Management.
+  if (preferredRoleKey === ROLE_KEYS.MANAGEMENT) {
+    return {
+      roleKey: ROLE_KEYS.MANAGEMENT,
+      users: await findWorkflowUsersForRole(ROLE_KEYS.MANAGEMENT),
+    };
+  }
+
+  // Preserve the planning/control step when that organizational unit really
+  // exists.  The current production structure has no such unit, so treating
+  // an empty lookup as a configuration error permanently blocked creation.
+  const projectControlUsers = await findInitialWorkflowUsers(projectId);
+  if (projectControlUsers.length) {
+    return { roleKey: ROLE_KEYS.PROJECT_CONTROL, users: projectControlUsers };
+  }
+
+  const project = projectId
+    ? await prisma.project.findUnique({
+        where: { id: Number(projectId) },
+        select: { id: true, code: true, name: true },
+      })
+    : null;
+
+  // General overhead requests belong to the Management queue. Project
+  // requests go to a selected member of the Project Management unit. This
+  // mirrors the units and appointments configured in Organization Structure
+  // and skips only the organizational step that does not exist.
+  const fallbackRoleKey = isGeneralProject(project)
+    ? ROLE_KEYS.MANAGEMENT
+    : ROLE_KEYS.PROJECT_MANAGER;
+  return {
+    roleKey: fallbackRoleKey,
+    users: await findWorkflowUsersForRole(fallbackRoleKey),
+  };
+}
+
 function serializeWorkflowUsers(users = []) {
   return users.map((candidate) => ({
     id: candidate.id,
@@ -996,12 +1035,10 @@ export async function GET(req, ctx) {
   const url = new URL(req.url);
 
   if (slug.length === 0 && url.searchParams.get("nextRecipientsForCreate") === "1") {
-    const targetRoleKey = initialWorkflowRoleForUser(uctx);
+    const initialTarget = await resolveInitialWorkflowTarget(uctx, url.searchParams.get("projectId"));
+    const targetRoleKey = initialTarget.roleKey;
     if (isSharedUnitRole(targetRoleKey)) return json({ targetRoleKey, users: [] });
-    const users = targetRoleKey === ROLE_KEYS.MANAGEMENT
-      ? await findWorkflowUsersForRole(targetRoleKey)
-      : await findInitialWorkflowUsers(url.searchParams.get("projectId"));
-    return json({ targetRoleKey, users: serializeWorkflowUsers(users) });
+    return json({ targetRoleKey, users: serializeWorkflowUsers(initialTarget.users) });
   }
 
   const nextRecipientsForItem = Number(url.searchParams.get("nextRecipientsForItem"));
@@ -1341,10 +1378,9 @@ export async function POST(req, ctx) {
   }
 
   const targetAssigneeUserId = Number(body?.targetAssigneeUserId ?? body?.target_assignee_user_id);
-  const initialRoleKey = initialWorkflowRoleForUser(uctx);
-  const workflowUsers = initialRoleKey === ROLE_KEYS.MANAGEMENT
-    ? await findWorkflowUsersForRole(initialRoleKey)
-    : await findInitialWorkflowUsers(data.projectId);
+  const initialTarget = await resolveInitialWorkflowTarget(uctx, data.projectId);
+  const initialRoleKey = initialTarget.roleKey;
+  const workflowUsers = initialTarget.users;
   const isSharedInitialStep = isSharedUnitRole(initialRoleKey);
   if (isSharedInitialStep && workflowUsers.length === 0) return json({ error: "workflow_unit_users_not_found" }, 400);
   const initialAssignee = isSharedInitialStep ? null : workflowUsers.find((candidate) => Number(candidate.id) === targetAssigneeUserId);

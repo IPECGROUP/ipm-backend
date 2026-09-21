@@ -2,6 +2,9 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 import { prisma } from "@/lib/prisma";
+import { requirePagePermission } from "@/lib/pagePermissions";
+import { getAuthenticatedUser, requireAdmin } from "@/lib/security";
+import { writeAuditLog } from "@/lib/auditLog";
 import {
   ALLOWED_KINDS,
   getAllocColumnSet,
@@ -12,9 +15,6 @@ import {
   toIntOrZero,
 } from "./_shared";
 
-const ADMIN_USER = "marandi";
-const ADMIN_PASS = "1234";
-
 async function readJson(req) {
   try {
     return await req.json();
@@ -23,22 +23,9 @@ async function readJson(req) {
   }
 }
 
-function canDeleteAll(req) {
-  const auth = req.headers.get("authorization") || "";
-  if (!auth.startsWith("Basic ")) return false;
-  try {
-    const decoded = Buffer.from(auth.slice(6).trim(), "base64").toString("utf8");
-    const idx = decoded.indexOf(":");
-    if (idx < 0) return false;
-    const u = decoded.slice(0, idx);
-    const p = decoded.slice(idx + 1);
-    return u === ADMIN_USER && p === ADMIN_PASS;
-  } catch {
-    return false;
-  }
-}
-
 export async function POST(req) {
+  const denied = await requirePagePermission(req, "تخصیص نقدینگی", "افزودن");
+  if (denied) return denied;
   try {
     const body = await readJson(req);
     const kind = String(body?.kind || "").trim().toLowerCase();
@@ -119,6 +106,8 @@ export async function POST(req) {
       return prisma.$executeRawUnsafe(sql, ...values);
     }));
 
+    const actor = await getAuthenticatedUser(req);
+    await writeAuditLog({ request: req, actor, action: "budget_allocation.create", entityType: "budget_allocation", details: { serial, kind, projectId, inserted: rows.length } });
     return json({ ok: true, serial, inserted: rows.length });
   } catch (e) {
     return json(
@@ -129,13 +118,12 @@ export async function POST(req) {
 }
 
 export async function DELETE(req) {
+  const auth = await requireAdmin(req);
+  if (auth.denied) return auth.denied;
   try {
-    if (!canDeleteAll(req)) {
-      return json({ error: "unauthorized" }, 401);
-    }
-
     await getAllocColumnSet();
     const deleted = await prisma.$executeRawUnsafe(`DELETE FROM budget_allocations`);
+    await writeAuditLog({ request: req, actor: auth.user, action: "budget_allocation.delete_all", entityType: "budget_allocation", severity: "critical", details: { deleted: Number(deleted || 0) } });
     return json({ ok: true, deleted: Number(deleted || 0) });
   } catch (e) {
     return json(

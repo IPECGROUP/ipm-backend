@@ -3,6 +3,8 @@ export const runtime = "nodejs";
 
 import { prisma } from "../../../../lib/prisma";
 import { isDbConnectionError, mapFallbackAssignmentItems, readOrgStore, writeOrgStore } from "../../../../lib/orgStructureFallback";
+import { isSuperAdmin, requireAdmin } from "../../../../lib/security";
+import { writeAuditLog } from "../../../../lib/auditLog";
 
 async function readJson(request) {
   try {
@@ -112,7 +114,9 @@ async function getAssignmentItems(userId = null) {
   return mapRows(rows);
 }
 
-export async function GET() {
+export async function GET(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   try {
     await Promise.all([ensureUserRoleMapTable(), ensureUnitRoleMapTable()]);
     const [items, roles] = await Promise.all([
@@ -159,6 +163,8 @@ export async function GET() {
 }
 
 export async function POST(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   const body = await readJson(request);
   try {
     await ensureUserRoleMapTable();
@@ -188,6 +194,7 @@ export async function POST(request) {
         headers: { "Content-Type": "application/json" },
       });
     }
+    if (isSuperAdmin(user)) return new Response(JSON.stringify({ error: "protected_super_admin" }), { status: 403, headers: { "Content-Type": "application/json" } });
     if (!role) {
       return new Response(JSON.stringify({ error: "role_not_found" }), {
         status: 404,
@@ -202,6 +209,7 @@ export async function POST(request) {
     `;
 
     const item = (await getAssignmentItems(userId))[0] || null;
+    await writeAuditLog({ request, actor: auth.user, action: "user.role_add", entityType: "user", entityId: userId, severity: "warning", details: { roleId, roleName: role.name } });
     return Response.json({ ok: true, item, user, role });
   } catch (e) {
     console.error("user_role_assignments_post_error", e);
@@ -226,6 +234,8 @@ export async function POST(request) {
 }
 
 export async function DELETE(request) {
+  const auth = await requireAdmin(request);
+  if (auth.denied) return auth.denied;
   const body = await readJson(request);
   try {
     await ensureUserRoleMapTable();
@@ -239,6 +249,9 @@ export async function DELETE(request) {
       });
     }
 
+    const targetUser = await prisma.user.findUnique({ where: { id: userId } });
+    if (targetUser && isSuperAdmin(targetUser)) return new Response(JSON.stringify({ error: "protected_super_admin" }), { status: 403, headers: { "Content-Type": "application/json" } });
+
     if (roleId && Number.isFinite(roleId)) {
       await prisma.$executeRaw`
         DELETE FROM "UserRoleMap"
@@ -251,6 +264,7 @@ export async function DELETE(request) {
       `;
     }
 
+    await writeAuditLog({ request, actor: auth.user, action: "user.role_remove", entityType: "user", entityId: userId, severity: "warning", details: { roleId: roleId || null } });
     return Response.json({ ok: true });
   } catch (e) {
     console.error("user_role_assignments_delete_error", e);
