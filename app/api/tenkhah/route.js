@@ -88,6 +88,16 @@ export async function GET(r) {
   try {
     await ensure(); const uid = await userIdOf(r); if (!uid) return json({ error: "unauthorized" }, 401);
     const url = new URL(r.url), recipientStage = url.searchParams.get("recipients"), balanceProjectId = +url.searchParams.get("projectBalances"), balanceBeneficiaryId = +url.searchParams.get("beneficiaryId");
+    // Beneficiary selection is intentionally independent from administrative
+    // role-management access. Return only the profile fields needed by the
+    // request form, never users' roles or unit assignments.
+    if (url.searchParams.get("beneficiaries") === "1") {
+      const users = await prisma.user.findMany({
+        select: { id: true, name: true, username: true, email: true, isActive: true },
+        orderBy: [{ name: "asc" }, { username: "asc" }, { id: "asc" }],
+      });
+      return json({ users });
+    }
     if (url.searchParams.get("currentUserFinance") === "1") return json({ isFinance: await isFinanceUser(uid) });
     if (["control_project", "finance", "project_manager", "management"].includes(recipientStage)) return json({ users: await settlementRecipients(recipientStage, uid) });
     if (balanceProjectId && balanceBeneficiaryId) { const rows = await prisma.$queryRawUnsafe(`SELECT COALESCE(SUM(GREATEST(0,COALESCE(t.charged_amount,0)-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id),0))),0)::text AS "unregisteredBalance",COALESCE(SUM(GREATEST(0,COALESCE(t.charged_amount,0)-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id AND s.status='completed'),0))),0)::text AS "unsettledBalance",COALESCE(SUM(COALESCE(t.charged_amount,0)),0)::text AS "receivedAmount" FROM tenkhah_requests t WHERE t.project_id=$1 AND COALESCE(t.beneficiary_user_id,t.created_by_id)=$2 AND t.status='charged'`, balanceProjectId, balanceBeneficiaryId); return json(rows[0] || { unregisteredBalance: "0", unsettledBalance: "0", receivedAmount: "0" }); }
