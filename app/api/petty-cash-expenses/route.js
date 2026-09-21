@@ -227,7 +227,7 @@ function itemFromRow(row) {
     projectManagerId: row.projectManagerId, projectManagerStatus: row.projectManagerStatus,
     projectManagerById: row.projectManagerById, projectManagerByName: row.projectManagerByName,
     projectManagerByUsername: row.projectManagerByUsername, projectManagerAt: row.projectManagerAt,
-    createdById: row.createdById, createdByName: row.createdByName,
+    createdById: row.createdById, createdByName: row.createdByName, createdByUsername: row.createdByUsername,
     settlementReportId: row.settlementReportId ? Number(row.settlementReportId) : null,
     settlementReportNumber: row.settlementReportNumber || null,
   };
@@ -320,7 +320,7 @@ export async function GET(request) {
         SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,
           e.stage,e.planning_status AS "planningStatus",e.planning_by_id AS "planningById",planner.name AS "planningByName",planner.username AS "planningByUsername",e.planning_at AS "planningAt",
           e.project_manager_id AS "projectManagerId",e.project_manager_status AS "projectManagerStatus",e.project_manager_by_id AS "projectManagerById",manager.name AS "projectManagerByName",manager.username AS "projectManagerByUsername",e.project_manager_at AS "projectManagerAt",
-          e.created_by_id AS "createdById",expense_creator.name AS "createdByName",r.id AS "settlementReportId",r.report_number AS "settlementReportNumber"
+          e.created_by_id AS "createdById",expense_creator.name AS "createdByName",expense_creator.username AS "createdByUsername",r.id AS "settlementReportId",r.report_number AS "settlementReportNumber"
         FROM petty_cash_settlement_report_items ri
         INNER JOIN petty_cash_settlement_reports r ON r.id=ri.report_id
         INNER JOIN petty_cash_expenses e ON e.id=ri.expense_id
@@ -339,7 +339,7 @@ export async function GET(request) {
       SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,
         e.stage,e.planning_status AS "planningStatus",e.planning_by_id AS "planningById",planner.name AS "planningByName",planner.username AS "planningByUsername",e.planning_at AS "planningAt",
         e.project_manager_id AS "projectManagerId",e.project_manager_status AS "projectManagerStatus",e.project_manager_by_id AS "projectManagerById",manager.name AS "projectManagerByName",manager.username AS "projectManagerByUsername",e.project_manager_at AS "projectManagerAt",
-        e.created_by_id AS "createdById",creator.name AS "createdByName",report.id AS "settlementReportId",report.report_number AS "settlementReportNumber"
+        e.created_by_id AS "createdById",creator.name AS "createdByName",creator.username AS "createdByUsername",report.id AS "settlementReportId",report.report_number AS "settlementReportNumber"
       FROM petty_cash_expenses e
       INNER JOIN projects p ON p.id=e.project_id
       LEFT JOIN "User" creator ON creator.id=e.created_by_id

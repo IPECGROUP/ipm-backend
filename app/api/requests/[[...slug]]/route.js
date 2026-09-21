@@ -1,5 +1,5 @@
 // app/api/requests/[[...slug]]/route.js
-import { PrismaClient } from "@prisma/client";
+import { prisma } from "../../../../lib/prisma";
 import { fallbackUnitsForRoleNames } from "../../../../lib/orgStructureFallback";
 import { unlink } from "node:fs/promises";
 import path from "node:path";
@@ -9,9 +9,6 @@ import { convertedRialMinorUnits, formatMinorUnits, parseRequestedAmount } from 
 import { isProjectCommitment } from "../../../../lib/projectCommitment";
 
 export const runtime = "nodejs";
-
-const prisma = globalThis.__prisma_requests || new PrismaClient();
-if (process.env.NODE_ENV !== "production") globalThis.__prisma_requests = prisma;
 
 let paymentRequestCompatibilityReady;
 async function ensurePaymentRequestCompatibility() {
