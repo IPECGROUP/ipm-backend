@@ -1,7 +1,7 @@
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-import { requireAdmin } from "../../../../lib/security";
+import { requireAliSuperAdmin } from "../../../../lib/security";
 import { readAuditLogs, writeAuditLog } from "../../../../lib/auditLog";
 
 function csvCell(value) {
@@ -10,7 +10,7 @@ function csvCell(value) {
 }
 
 export async function GET(request) {
-  const auth = await requireAdmin(request);
+  const auth = await requireAliSuperAdmin(request);
   if (auth.denied) return auth.denied;
 
   try {

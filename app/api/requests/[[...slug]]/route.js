@@ -1143,7 +1143,10 @@ export async function GET(req, ctx) {
   } else if (view === "mine") {
     filtered = rowsWithFlags.filter((x) => x.isMine);
   } else if (view === "inbox") {
-    filtered = rowsWithFlags.filter((x) => !x.isMine && (x.canAct || x.wasInvolved));
+    // Returned requests are assigned back to their creator. The creator is
+    // both `isMine` and the person who must act next, so actionable rows must
+    // not be excluded from this view.
+    filtered = rowsWithFlags.filter((x) => x.canAct || (!x.isMine && x.wasInvolved));
   } else {
     filtered = rowsWithFlags.filter((x) => x.canView);
   }

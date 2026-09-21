@@ -16,7 +16,7 @@ const SUPER_ADMIN_ACCESS = "system:super-admin";
 const SUPER_ADMIN_PASSWORD_HASH = "$2b$10$YOmcMEL92qyrmbpzdTebHOaDAVjf0bzFtx8sQ/mCsdLFo6w9dTrcW";
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_FAILURES = 5;
-const SESSION_MAX_AGE_SECONDS = 12 * 60 * 60;
+const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
 const loginFailures = new Map();
 
 function loginKey(request, username) {
