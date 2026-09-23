@@ -25,7 +25,7 @@ export async function GET(request) {
     if (!await getCurrentUser(request)) return json({ error: "unauthorized" }, 401);
     await ensureKnowledgeSchemas();
     const [lessons, libraries, resources, lessonVisits, resourceVisits] = await Promise.all([
-      prisma.$queryRaw`SELECT l.project_id, l.category, l.importance, l.created_by_id, p.name AS project_name, u.name, u.username FROM project_lessons l LEFT JOIN projects p ON p.id=l.project_id LEFT JOIN "User" u ON u.id=l.created_by_id WHERE l.status='approved'`,
+      prisma.$queryRaw`SELECT l.project_id, l.category, l.importance, l.created_by_id, p.name AS project_name, u.name, u.username FROM project_lessons l LEFT JOIN projects p ON p.id=l.project_id LEFT JOIN "User" u ON u.id=l.created_by_id`,
       prisma.$queryRaw`SELECT l.title AS library_title, COUNT(i.id)::int AS count FROM base_libraries l LEFT JOIN library_items i ON i.library_id=l.id GROUP BY l.id, l.title ORDER BY l.title`,
       prisma.$queryRaw`SELECT category FROM training_resources`,
       prisma.$queryRaw`SELECT v.user_id, u.name, u.username, COUNT(*)::int AS count FROM knowledge_page_visits v LEFT JOIN "User" u ON u.id=v.user_id WHERE v.page_key='lessons' GROUP BY v.user_id, u.name, u.username ORDER BY count DESC, v.user_id ASC LIMIT 3`,
