@@ -692,13 +692,14 @@ export async function GET(req) {
     }
 
     const { mainAdmin } = await userContext(userId);
+    const dashboardView = url.searchParams.get("dashboard") === "1";
     const ownerOnly = url.searchParams.get("owner") === "me";
     const search = cleanText(url.searchParams.get("search") || "", 120);
     const requestedPage = Number(url.searchParams.get("page") || 1);
     const requestedPageSize = Number(url.searchParams.get("pageSize") || (ownerOnly ? 50 : 500));
     const page = Number.isFinite(requestedPage) && requestedPage > 0 ? Math.trunc(requestedPage) : 1;
     // Keep the picker responsive even after the request archive becomes large.
-    const pageSize = Math.min(ownerOnly ? 100 : 500, Math.max(10, Number.isFinite(requestedPageSize) ? Math.trunc(requestedPageSize) : (ownerOnly ? 50 : 500)));
+    const pageSize = Math.min(dashboardView ? 5000 : ownerOnly ? 100 : 500, Math.max(10, Number.isFinite(requestedPageSize) ? Math.trunc(requestedPageSize) : (ownerOnly ? 50 : 500)));
     const where = {
       docId: REQUEST_DOC_ID,
       ...(ownerOnly ? { createdById: Number(userId) } : {}),
@@ -734,6 +735,33 @@ export async function GET(req) {
         })
       : [];
     const projectById = new Map(projects.map((project) => [Number(project.id), project]));
+
+    // Dashboard data is read-only. It intentionally uses the same supply-page
+    // permission as the registry, while bypassing cartable filtering so the
+    // management view can calculate complete operational statistics.
+    if (dashboardView) {
+      const supplyUsers = await findWorkflowUsers(SUPPLY_STEP.COMMERCIAL);
+      const actionRows = await prisma.$queryRawUnsafe(
+        `SELECT "request_id" AS "requestId", "created_by" AS "byUserId", "created_at" AS "createdAt", "status"
+         FROM "supply_action_entries"
+         WHERE "request_id" = ANY($1::int[])
+         ORDER BY "created_at" ASC`,
+        rows.map((row) => Number(row.id)).filter(Boolean),
+      ).catch(() => []);
+      const actionsByRequestId = new Map();
+      (actionRows || []).forEach((action) => {
+        const requestId = Number(action.requestId);
+        if (!actionsByRequestId.has(requestId)) actionsByRequestId.set(requestId, []);
+        actionsByRequestId.get(requestId).push(action);
+      });
+      return json({
+        items: rows.map((row) => ({
+          ...serializeItem({ ...row, project: projectById.get(Number(row.projectId)) || null, canAct: false, canDelete: false }),
+          supplyActions: actionsByRequestId.get(Number(row.id)) || [],
+        })),
+        supplyUsers: serializeWorkflowUsers(supplyUsers),
+      });
+    }
 
     const userCtx = await userRoleAndUnitContext(userId);
     const cartableOnly = url.searchParams.get("cartable") === "1";
