@@ -280,6 +280,14 @@ function handleRequestError(e) {
 
 function mapEntry(row) {
   if (!row) return null;
+  // A user's organizational units can be assigned directly or through a role
+  // appointment (UserRoleMap -> UnitRoleMap). Return both kinds to consumers.
+  const unitNames = Array.from(new Set([
+    ...(row.user?.units || []).map((membership) => membership?.unit?.name).filter(Boolean),
+    ...(row.user?.roles || []).flatMap((appointment) =>
+      (appointment?.role?.units || []).map((membership) => membership?.unit?.name).filter(Boolean)
+    ),
+  ]));
   return {
     id: row.id,
     project_id: row.projectId,
@@ -295,6 +303,8 @@ function mapEntry(row) {
     created_at: row.createdAt,
     updated_at: row.updatedAt,
     user_name: row.user?.name || row.user?.username || row.user?.email || `کاربر #${row.userId}`,
+    user_units: unitNames,
+    user_department: unitNames.join("، ") || row.user?.department || "",
   };
 }
 
@@ -306,15 +316,16 @@ export async function GET(req) {
     if (!userId) return bad("unauthorized", 401);
 
     const url = new URL(req.url);
-    const projectId = Number(url.searchParams.get("projectId") || url.searchParams.get("project_id") || "");
+    const projectIdParam = String(url.searchParams.get("projectId") || url.searchParams.get("project_id") || "").trim();
+    const projectId = Number(projectIdParam);
     const dateYmd = String(url.searchParams.get("dateYmd") || url.searchParams.get("date_ymd") || "").trim();
     const confirmedParam = url.searchParams.get("confirmed");
 
-    if (!Number.isFinite(projectId) || projectId <= 0) return bad("invalid_project_id");
+    if (projectIdParam && (!Number.isFinite(projectId) || projectId <= 0)) return bad("invalid_project_id");
     if (dateYmd && !validDateYmd(dateYmd)) return bad("invalid_date_ymd");
 
     const where = {
-      projectId,
+      ...(projectIdParam ? { projectId } : {}),
       ...(dateYmd ? { dateYmd } : {}),
       ...(confirmedParam != null ? { confirmed: parseBool(confirmedParam, false) } : {}),
     };
@@ -323,7 +334,18 @@ export async function GET(req) {
       prisma.roznegarEntry.findMany({
         where,
         orderBy: [{ dateYmd: "desc" }, { id: "desc" }],
-        include: { user: { select: { name: true, username: true, email: true } } },
+        include: {
+          user: {
+            select: {
+              name: true,
+              username: true,
+              email: true,
+              department: true,
+              units: { select: { unit: { select: { name: true } } } },
+              roles: { select: { role: { select: { units: { select: { unit: { select: { name: true } } } } } } } },
+            },
+          },
+        },
       })
     );
 
