@@ -320,6 +320,7 @@ export async function GET(req) {
     const projectId = Number(projectIdParam);
     const dateYmd = String(url.searchParams.get("dateYmd") || url.searchParams.get("date_ymd") || "").trim();
     const confirmedParam = url.searchParams.get("confirmed");
+    const activeProjectsOnly = parseBool(url.searchParams.get("activeProjects"), false);
 
     if (projectIdParam && (!Number.isFinite(projectId) || projectId <= 0)) return bad("invalid_project_id");
     if (dateYmd && !validDateYmd(dateYmd)) return bad("invalid_date_ymd");
@@ -328,6 +329,7 @@ export async function GET(req) {
       ...(projectIdParam ? { projectId } : {}),
       ...(dateYmd ? { dateYmd } : {}),
       ...(confirmedParam != null ? { confirmed: parseBool(confirmedParam, false) } : {}),
+      ...(activeProjectsOnly ? { project: { isActive: true } } : {}),
     };
 
     const items = await withRoznegarSchema(() =>

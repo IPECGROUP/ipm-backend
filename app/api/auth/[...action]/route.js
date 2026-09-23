@@ -13,7 +13,7 @@ const SUPER_ADMIN_USERNAME = "ali";
 const SUPER_ADMIN_ACCESS = "system:super-admin";
 // BCrypt hash for the requested hard-coded password. Keeping the hash rather
 // than the password in the source preserves the normal login flow.
-const SUPER_ADMIN_PASSWORD_HASH = "$2b$10$YOmcMEL92qyrmbpzdTebHOaDAVjf0bzFtx8sQ/mCsdLFo6w9dTrcW";
+const SUPER_ADMIN_PASSWORD_HASH = "$2b$10$yccZ3Lz69i03hzeok7DPb.d5VD1pY6i8lbkLJls2yeqtgv8USnakC";
 const LOGIN_WINDOW_MS = 15 * 60 * 1000;
 const LOGIN_MAX_FAILURES = 5;
 const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;

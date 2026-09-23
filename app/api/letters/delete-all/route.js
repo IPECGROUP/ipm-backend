@@ -1,11 +1,11 @@
 export const runtime = "nodejs";
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
-import { requireAdmin } from "@/lib/security";
+import { requireAliSuperAdmin } from "@/lib/security";
 import { writeAuditLog } from "@/lib/auditLog";
 
 export async function DELETE(req) {
-  const auth = await requireAdmin(req);
+  const auth = await requireAliSuperAdmin(req);
   if (auth.denied) return auth.denied;
   try {
     const result = await prisma.letter.deleteMany({});

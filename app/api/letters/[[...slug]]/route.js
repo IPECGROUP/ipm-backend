@@ -1,6 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { hasPagePermission, requirePagePermission } from "@/lib/pagePermissions";
-import { getAuthenticatedUser, requireAdmin } from "@/lib/security";
+import { getAuthenticatedUser, requireAliSuperAdmin } from "@/lib/security";
 import { writeAuditLog } from "@/lib/auditLog";
 import { NextResponse } from "next/server";
 import fs from "fs/promises";
@@ -1551,7 +1551,7 @@ export async function DELETE(req, ctx) {
     // ✅ حذف همه نامه‌ها + فایل‌های ضمیمه
     // مسیر: DELETE /api/letters/all
     if (p0 === "all") {
-      const auth = await requireAdmin(req);
+      const auth = await requireAliSuperAdmin(req);
       if (auth.denied) return auth.denied;
 
       const letters = await prisma.letter.findMany({
@@ -1566,9 +1566,10 @@ export async function DELETE(req, ctx) {
       return json({ ok: true, deleted: r.count });
     }
 
-    const denied = await requirePagePermission(req, "مدیریت اسناد", "حذف");
-    if (denied) return denied;
-    const actor = await getAuthenticatedUser(req);
+    // حذف نامه، صرف‌نظر از مجوزهای صفحه، منحصراً برای حساب محافظت‌شده ali است.
+    const auth = await requireAliSuperAdmin(req);
+    if (auth.denied) return auth.denied;
+    const actor = auth.user;
 
     const id = getIdFromReq(req, ctx);
     if (!id) return bad("missing_id");
