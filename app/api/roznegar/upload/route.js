@@ -4,6 +4,7 @@ import { requirePagePermission } from "@/lib/pagePermissions";
 import fs from "fs/promises";
 import path from "path";
 import crypto from "crypto";
+import { safeOriginalName, validateUpload } from "@/lib/uploadSecurity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -145,12 +146,14 @@ export async function POST(req) {
 
     for (const f of files) {
       const bytes = Buffer.from(await f.arrayBuffer());
+      const checked = validateUpload({ name: f.name, size: Number(f.size || 0), buffer: bytes, profile: "payment" });
+      if (!checked.ok) return bad(checked.error, 415);
       const hash = sha256(bytes);
 
       let existing = await prisma.uploadedFile.findUnique({ where: { sha256: hash } });
 
       if (!existing) {
-        const storedName = makeFileName(f.name || "file");
+        const storedName = makeFileName(safeOriginalName(f.name));
         const absPath = path.join(uploadDir, storedName);
         await fs.writeFile(absPath, bytes);
 
@@ -158,9 +161,9 @@ export async function POST(req) {
         existing = await prisma.uploadedFile.create({
           data: {
             sha256: hash,
-            originalName: f.name || storedName,
+            originalName: checked.originalName || storedName,
             storedName,
-            mimeType: f.type || null,
+            mimeType: checked.mimeType,
             size: bytes.length,
             url,
             createdBy: userId,

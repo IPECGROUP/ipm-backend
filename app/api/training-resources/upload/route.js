@@ -3,6 +3,7 @@ import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { NextResponse } from "next/server";
 import { prisma } from "../../../../lib/prisma";
+import { validateUpload } from "../../../../lib/uploadSecurity";
 
 export const runtime = "nodejs";
 
@@ -25,14 +26,15 @@ export async function POST(request) {
     const form = await request.formData();
     const file = form.get("file");
     if (!file || typeof file.arrayBuffer !== "function") return json({ error: "no_file" }, 400);
-    const originalName = String(file.name || "file");
-    const extension = path.extname(originalName).toLowerCase();
-    if (!allowedExtensions.has(extension)) return json({ error: "unsupported_file_type" }, 415);
+    const buffer = Buffer.from(await file.arrayBuffer());
+    const checked = validateUpload({ name: file.name, size: Number(file.size || 0), buffer });
+    if (!checked.ok) return json({ error: checked.error }, 415);
+    const { originalName, extension } = checked;
     const storedName = `${crypto.randomUUID()}${extension}`;
     const directory = path.join(process.cwd(), "public", "uploads", "training-resources");
     await mkdir(directory, { recursive: true });
-    await writeFile(path.join(directory, storedName), Buffer.from(await file.arrayBuffer()));
-    return json({ file: { name: originalName, url: `/uploads/training-resources/${storedName}`, size: Number(file.size || 0), type: String(file.type || "application/octet-stream") } }, 201);
+    await writeFile(path.join(directory, storedName), buffer);
+    return json({ file: { name: originalName, url: `/uploads/training-resources/${storedName}`, size: Number(file.size || 0), type: checked.mimeType } }, 201);
   } catch (error) {
     console.error("training_resource_upload_failed", error);
     return json({ error: "upload_failed" }, 500);

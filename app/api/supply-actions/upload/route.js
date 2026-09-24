@@ -2,6 +2,7 @@ import { prisma } from "../../../../lib/prisma";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
+import { safeOriginalName, validateUpload } from "../../../../lib/uploadSecurity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -73,10 +74,12 @@ export async function POST(req) {
     await mkdir(UPLOAD_DIR, { recursive: true });
 
     const file = files[0];
-    const originalName = safeName(file.name || "file");
-    const mimeType = String(file.type || "application/octet-stream");
     const size = Number(file.size || 0);
     const buffer = Buffer.from(await file.arrayBuffer());
+    const checked = validateUpload({ name: file.name, size, buffer, profile: "payment" });
+    if (!checked.ok) return json({ error: checked.error }, 415);
+    const originalName = safeOriginalName(file.name);
+    const mimeType = checked.mimeType;
     const contentHash = crypto.createHash("sha256").update(buffer).digest("hex");
     const sha256 = `supply-actions:${contentHash}`;
     const existing = await prisma.uploadedFile.findUnique({ where: { sha256 } });
@@ -93,7 +96,7 @@ export async function POST(req) {
         },
       });
     }
-    const ext = safeExtFromName(originalName);
+    const ext = checked.extension;
     const storedName = `${crypto.randomUUID()}${ext}`;
     const url = `/uploads/supply-actions/${storedName}`;
 

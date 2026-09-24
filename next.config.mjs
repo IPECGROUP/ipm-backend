@@ -1,12 +1,14 @@
 /** @type {import('next').NextConfig} */
-const NO_UPLOAD_BODY_LIMIT = Number.MAX_SAFE_INTEGER;
+// Must match the API validation limit. Never leave an unbounded request body
+// in front of routes that parse multipart form data.
+const MAX_UPLOAD_BODY_BYTES = 25 * 1024 * 1024;
 
 const nextConfig = {
   reactCompiler: true,
   experimental: {
-    proxyClientMaxBodySize: NO_UPLOAD_BODY_LIMIT,
+    proxyClientMaxBodySize: MAX_UPLOAD_BODY_BYTES,
     serverActions: {
-      bodySizeLimit: NO_UPLOAD_BODY_LIMIT,
+      bodySizeLimit: MAX_UPLOAD_BODY_BYTES,
     },
   },
 };

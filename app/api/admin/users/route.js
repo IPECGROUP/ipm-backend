@@ -81,6 +81,13 @@ async function mapUser(u) {
 async function hashPasswordIfProvided(pw) {
   const p = String(pw || "");
   if (!p) return null;
+  // bcrypt only uses its first 72 bytes. Reject longer values instead of
+  // silently accepting a password whose suffix is ignored at login.
+  if (Buffer.byteLength(p, "utf8") > 72) {
+    const error = new Error("password_too_long");
+    error.status = 400;
+    throw error;
+  }
   return await bcrypt.hash(p, 10);
 }
 

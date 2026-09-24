@@ -3,6 +3,8 @@ import { NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
 import crypto from "crypto";
+import { requirePagePermission } from "@/lib/pagePermissions";
+import { safeOriginalName, validateUpload } from "@/lib/uploadSecurity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -43,6 +45,8 @@ function uploadRootDir() {
 
 export async function POST(req) {
   try {
+    const denied = await requirePagePermission(req, "قراردادها", "افزودن");
+    if (denied) return denied;
     const fd = await req.formData();
     const files = [...fd.getAll("files"), ...fd.getAll("file")].filter((f) => f && typeof f.arrayBuffer === "function");
     if (!files.length) return bad("missing_file");
@@ -54,20 +58,22 @@ export async function POST(req) {
 
     for (const file of files) {
       const bytes = Buffer.from(await file.arrayBuffer());
+      const checked = validateUpload({ name: file.name, size: Number(file.size || 0), buffer: bytes });
+      if (!checked.ok) return bad(checked.error, 415);
       const hash = sha256(bytes);
       let existing = await prisma.uploadedFile.findUnique({ where: { sha256: hash } });
 
       if (!existing) {
-        const storedName = makeFileName(file.name || "file");
+        const storedName = makeFileName(safeOriginalName(file.name));
         const absPath = path.join(uploadDir, storedName);
         await fs.writeFile(absPath, bytes);
 
         existing = await prisma.uploadedFile.create({
           data: {
             sha256: hash,
-            originalName: file.name || storedName,
+            originalName: checked.originalName || storedName,
             storedName,
-            mimeType: file.type || null,
+            mimeType: checked.mimeType,
             size: bytes.length,
             url: `/uploads/contracts/${storedName}`,
             createdBy: null,

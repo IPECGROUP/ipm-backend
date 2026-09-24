@@ -1,5 +1,6 @@
 import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
+import { requirePagePermission } from "@/lib/pagePermissions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -9,6 +10,8 @@ function json(data, status = 200) {
 }
 
 export async function GET(req) {
+  const denied = await requirePagePermission(req, "مدیریت اسناد", "نمایش منو");
+  if (denied) return denied;
   const { searchParams } = new URL(req.url);
   const q = (searchParams.get("q") || "").trim();
 

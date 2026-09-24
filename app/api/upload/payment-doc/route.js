@@ -4,6 +4,7 @@ import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import crypto from "node:crypto";
 import { requirePagePermission } from "../../../../lib/pagePermissions";
+import { safeOriginalName, validateUpload } from "../../../../lib/uploadSecurity";
 
 export const runtime = "nodejs";
 
@@ -62,15 +63,17 @@ export async function POST(req) {
   // این endpoint ساده است: اولین فایل رو برمی‌گردونه (اگر چندتا زدی، می‌تونی حلقه رو خروجی آرایه کنی)
   const f = files[0];
 
-  const originalName = String(f.name || "file");
-  const mimeType = String(f.type || "application/octet-stream");
   const size = Number(f.size || 0);
 
   // نام یکتا
-  const ext = safeExtFromName(originalName);
+  const buf = Buffer.from(await f.arrayBuffer());
+  const checked = validateUpload({ name: f.name, size, buffer: buf, profile: "payment" });
+  if (!checked.ok) return json({ error: checked.error }, 415);
+  const originalName = safeOriginalName(f.name);
+  const mimeType = checked.mimeType;
+  const ext = checked.extension;
   const storedName = `${crypto.randomUUID()}${ext}`;
 
-  const buf = Buffer.from(await f.arrayBuffer());
   await writeFile(path.join(UPLOAD_DIR, storedName), buf);
 
   const url = `/uploads/payment-doc/${storedName}`;

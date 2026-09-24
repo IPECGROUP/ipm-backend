@@ -101,6 +101,7 @@ export async function PATCH(request) {
 
     if (!id || Number.isNaN(id)) return json({ error: "invalid_id" }, 400);
     if (password.length < 6) return json({ error: "password_too_short" }, 400);
+    if (Buffer.byteLength(password, "utf8") > 72) return json({ error: "password_too_long" }, 400);
 
     const targetUser = await prisma.user.findUnique({ where: { id } });
     if (!targetUser) return json({ error: "user_not_found" }, 404);

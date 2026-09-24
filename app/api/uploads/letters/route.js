@@ -8,6 +8,7 @@ import crypto from "crypto";
 import { Readable } from "stream";
 import { pipeline } from "stream/promises";
 import Busboy from "next/dist/compiled/busboy/index.js";
+import { MAX_UPLOAD_BYTES, safeOriginalName, validateUpload } from "@/lib/uploadSecurity";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -104,11 +105,11 @@ function parseMultipartUpload(req, uploadDir) {
       bb = Busboy({
         headers: requestHeaders(req),
         limits: {
-          fieldSize: Number.MAX_SAFE_INTEGER,
-          fileSize: Number.MAX_SAFE_INTEGER,
-          fields: Number.MAX_SAFE_INTEGER,
-          files: Number.MAX_SAFE_INTEGER,
-          parts: Number.MAX_SAFE_INTEGER,
+          fieldSize: 64 * 1024,
+          fileSize: MAX_UPLOAD_BYTES,
+          fields: 20,
+          files: 5,
+          parts: 25,
         },
       });
     } catch (e) {
@@ -197,6 +198,12 @@ export async function POST(req) {
 
     if (!file) return cleanupAndBad("missing_file");
 
+    const content = await fs.readFile(file.tempPath);
+    const checked = validateUpload({ name: file.originalName, size: file.size, buffer: content });
+    if (!checked.ok) return cleanupAndBad(checked.error, 415);
+    file.originalName = checked.originalName;
+    file.mimeType = checked.mimeType;
+
     const letter = await prisma.letter.findUnique({ where: { id: letterId } });
     if (!letter) return cleanupAndBad("letter_not_found", 404);
 
@@ -213,7 +220,7 @@ export async function POST(req) {
       url = existing.url;
     } else {
       // 2) Save new file
-      storedName = makeFileName(file.originalName || "file");
+      storedName = makeFileName(safeOriginalName(file.originalName));
       const absPath = path.join(uploadDir, storedName);
 
       await fs.rename(file.tempPath, absPath);

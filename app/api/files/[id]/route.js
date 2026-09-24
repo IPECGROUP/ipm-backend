@@ -2,6 +2,7 @@ import { prisma } from "@/lib/prisma";
 import { NextResponse } from "next/server";
 import fs from "fs/promises";
 import path from "path";
+import { requirePagePermission } from "@/lib/pagePermissions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,6 +35,8 @@ function assertInsideRoot(root, target) {
 }
 
 export async function GET(_req, ctx) {
+  const denied = await requirePagePermission(_req, "مدیریت اسناد", "نمایش منو");
+  if (denied) return denied;
   const params = await ctx?.params;
   const id = Number(params?.id);
   if (!Number.isFinite(id) || id <= 0) return bad("invalid_file_id");
@@ -61,7 +64,8 @@ export async function GET(_req, ctx) {
     headers: {
       "Content-Type": file.mimeType || "application/octet-stream",
       "Content-Length": String(bytes.length),
-      "Content-Disposition": `inline; filename*=UTF-8''${encodedName}`,
+      "Content-Disposition": `attachment; filename*=UTF-8''${encodedName}`,
+      "X-Content-Type-Options": "nosniff",
       "Cache-Control": "private, max-age=3600",
     },
   });
