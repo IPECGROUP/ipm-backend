@@ -6,12 +6,15 @@ export const runtime = "nodejs";
 const json = (data, status = 200) => Response.json(data, { status });
 const cookie = (r, n) => String(r.headers.get("cookie") || "").match(new RegExp(`(?:^|;\\s*)${n}=([^;]+)`))?.[1] || "";
 async function userIdOf(r) { const raw = r.headers.get("x-user-id") || cookie(r, "user_id"); if (/^\d+$/.test(raw)) return +raw; const sid = cookie(r, "ipm_session"); const s = sid && await prisma.session.findUnique({ where: { id: sid } }).catch(() => null); return s?.userId || (process.env.NODE_ENV !== "production" ? 1 : null); }
-async function isMarandiUser(userId) {
+// Keep the ali account's elevated payment-request access consistent across
+// the ordinary payment-request and tenkhah APIs. This access is intentionally
+// scoped to this page's listing/deletion behavior, not to every financial operation.
+async function isTenkhahRequestAdmin(userId) {
   const user = await prisma.user.findUnique({
     where: { id: Number(userId) },
     select: { username: true },
   }).catch(() => null);
-  return String(user?.username || "").trim().toLowerCase() === "marandi";
+  return String(user?.username || "").trim().toLowerCase() === "ali";
 }
 const amount = (v) => { const x = String(v ?? "").replace(/[۰-۹]/g, d => "۰۱۲۳۴۵۶۷۸۹".indexOf(d)).replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/[^\d]/g, ""); return x ? BigInt(x) : 0n; };
 const englishDigits = (value = "") => String(value).replace(/[۰-۹]/g, d => "۰۱۲۳۴۵۶۷۸۹".indexOf(d)).replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d));
@@ -91,6 +94,7 @@ export async function GET(r) {
     const url = new URL(r.url), recipientStage = url.searchParams.get("recipients"), balanceProjectId = +url.searchParams.get("projectBalances"), balanceBeneficiaryId = +url.searchParams.get("beneficiaryId");
     const dashboardReport = url.searchParams.get("dashboard") === "1";
     if (dashboardReport) { const denied = await requirePagePermission(r, "داشبورد مدیریت مالی", "نمایش منو"); if (denied) return denied; }
+    const canViewAllRequests = dashboardReport || await isTenkhahRequestAdmin(uid);
     // Beneficiary selection is intentionally independent from administrative
     // role-management access. Return only the profile fields needed by the
     // request form, never users' roles or unit assignments.
@@ -113,9 +117,14 @@ export async function GET(r) {
     const sharedManagementWhere = managementMember ? " OR (t.stage='management' AND t.status='pending')" : "";
     const historicalFinanceWhere = financeMember ? " OR COALESCE(t.workflow_history,'[]'::jsonb) @> '[{\"assignedToUnit\":\"finance\"}]'::jsonb" : "";
     const historicalManagementWhere = managementMember ? " OR COALESCE(t.workflow_history,'[]'::jsonb) @> '[{\"assignedToUnit\":\"management\"}]'::jsonb" : "";
-    const items = await requests(dashboardReport ? "" : inbox
-      ? `WHERE t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${sharedFinanceWhere}${sharedManagementWhere}${historicalFinanceWhere}${historicalManagementWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND s.current_assignee_user_id=$1)`
-      : `WHERE t.created_by_id=$1 OR t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${sharedFinanceWhere}${sharedManagementWhere}${historicalFinanceWhere}${historicalManagementWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND (s.current_assignee_user_id=$1 OR s.created_by_id=$1))`, dashboardReport ? [] : [uid]);
+    // A beneficiary must be able to see a petty-cash request made for them,
+    // even when another user created the request and they are not part of its
+    // approval workflow.  This grants visibility only; `canAct` below keeps
+    // workflow actions restricted to the current assignee/unit.
+    const beneficiaryWhere = " OR COALESCE(t.beneficiary_user_id,t.created_by_id)=$1";
+    const items = await requests(canViewAllRequests ? "" : inbox
+      ? `WHERE t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${beneficiaryWhere}${sharedFinanceWhere}${sharedManagementWhere}${historicalFinanceWhere}${historicalManagementWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND s.current_assignee_user_id=$1)`
+      : `WHERE t.created_by_id=$1 OR t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${beneficiaryWhere}${sharedFinanceWhere}${sharedManagementWhere}${historicalFinanceWhere}${historicalManagementWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND (s.current_assignee_user_id=$1 OR s.created_by_id=$1))`, canViewAllRequests ? [] : [uid]);
     const all = dashboardReport ? [] : await settlements(items.map(x => x.id)); const shown = inbox ? all.filter(s => +s.currentAssigneeUserId === uid && s.status === "pending") : all.filter(s => +s.createdById === uid || +s.currentAssigneeUserId === uid);
     return json({ items: items.map(x => ({
       ...x,
@@ -248,14 +257,15 @@ export async function DELETE(r) {
 
     const row = (await requests("WHERE t.id=$1", [id]))[0];
     if (!row) return json({ error: "not_found" }, 404);
-    if (Number(row.createdById) !== Number(uid)) return json({ error: "forbidden" }, 403);
+    const canManageAllRequests = await isTenkhahRequestAdmin(uid);
+    if (Number(row.createdById) !== Number(uid) && !canManageAllRequests) return json({ error: "forbidden" }, 403);
 
     const history = Array.isArray(row.workflowHistory) ? row.workflowHistory : [];
     const hasWorkflowAction = history.some((event) => String(event?.type || "") !== "created");
     const isUntouchedPending = row.status === "pending" && !hasWorkflowAction;
-    // Only the marandi account may delete its own tenkhah request after a
-    // workflow action. The creator check above remains required for everyone.
-    if (!isUntouchedPending && !(await isMarandiUser(uid))) return json({ error: "delete_not_allowed" }, 409);
+    // Elevated request administrators may remove any tenkhah request,
+    // including a request that has progressed through the workflow.
+    if (!isUntouchedPending && !canManageAllRequests) return json({ error: "delete_not_allowed" }, 409);
 
     await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(
