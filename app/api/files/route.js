@@ -9,6 +9,7 @@ function json(data, status = 200) {
   return NextResponse.json(data, { status });
 }
 
+
 export async function GET(req) {
   const denied = await requirePagePermission(req, "مدیریت اسناد", "نمایش منو");
   if (denied) return denied;
