@@ -334,6 +334,27 @@ export async function GET(request) {
       return json({ report: reportFromRow(reportRows[0]), items: expenseRows.map(itemFromRow) });
     }
 
+    const inbox = url.searchParams.get("inbox") === "1";
+    const expenseId = Number(url.searchParams.get("expenseId")) || 0;
+    if (inbox) {
+      const rows = await prisma.$queryRawUnsafe(`
+        SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,
+          e.stage,e.planning_status AS "planningStatus",e.planning_by_id AS "planningById",planner.name AS "planningByName",planner.username AS "planningByUsername",e.planning_at AS "planningAt",
+          e.project_manager_id AS "projectManagerId",e.project_manager_status AS "projectManagerStatus",e.project_manager_by_id AS "projectManagerById",manager.name AS "projectManagerByName",manager.username AS "projectManagerByUsername",e.project_manager_at AS "projectManagerAt",
+          e.created_by_id AS "createdById",creator.name AS "createdByName",creator.username AS "createdByUsername",NULL::int AS "settlementReportId",NULL::text AS "settlementReportNumber"
+        FROM petty_cash_expenses e
+        INNER JOIN projects p ON p.id=e.project_id
+        LEFT JOIN "User" creator ON creator.id=e.created_by_id
+        LEFT JOIN "User" planner ON planner.id=e.planning_by_id
+        LEFT JOIN "User" manager ON manager.id=e.project_manager_by_id
+        WHERE ($1::int=0 OR e.id=$1)
+          AND ((e.stage='planning' AND e.planning_status='pending' AND $2::boolean)
+            OR (e.stage='project_manager' AND e.project_manager_status='pending' AND e.project_manager_id=$3))
+        ORDER BY e.created_at DESC,e.id DESC
+      `, expenseId, isPlanning, userId);
+      return json({ items: rows.map(itemFromRow), viewer: { userId, isPlanning, isProjectManager } });
+    }
+
     const projectId = Number(url.searchParams.get("projectId")) || 0;
     const rows = await prisma.$queryRawUnsafe(`
       SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,
