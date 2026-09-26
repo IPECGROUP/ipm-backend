@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
-import { prisma } from "../../../../../lib/prisma";
-import { readSessionActivityLogs } from "../../../../../lib/sessionActivityLog";
+import { prisma } from "../../../../lib/prisma";
+import { readSessionActivityLogs } from "../../../../lib/sessionActivityLog";
 
 export const dynamic = "force-dynamic";
 
