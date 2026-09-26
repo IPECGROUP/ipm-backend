@@ -1117,15 +1117,33 @@ export async function GET(req, ctx) {
       : {}),
   };
 
-  let rows = await prisma.paymentRequest.findMany({
+  const listOptions = {
     where,
-    include: { createdBy: { select: { name: true, username: true, email: true } }, project: { select: { name: true, code: true } } },
     orderBy: { id: "desc" },
     // Historical cartables must include older requests too; the former 500-row
     // cap could hide a user's earlier workflow items before involvement was
     // evaluated.
     take: 5000,
-  });
+  };
+  let rows;
+  try {
+    rows = await prisma.paymentRequest.findMany({
+      ...listOptions,
+      include: {
+        createdBy: { select: { name: true, username: true, email: true } },
+        project: { select: { name: true, code: true } },
+      },
+    });
+  } catch (error) {
+    // A few deployed databases predate the PaymentRequest → Project relation.
+    // Project labels are supplementary; an unavailable relation must never
+    // make the user's full historical cartable disappear.
+    console.error("payment_requests_project_include_fallback", error);
+    rows = await prisma.paymentRequest.findMany({
+      ...listOptions,
+      include: { createdBy: { select: { name: true, username: true, email: true } } },
+    });
+  }
 
   const rowsWithFlags = rows.map((r) => {
     const canAct = uctx.isSuperAdmin || canActOnStep({
