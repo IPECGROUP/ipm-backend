@@ -6,6 +6,7 @@ import { cookies } from "next/headers";
 import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { writeAuditLog } from "../../../../lib/auditLog";
+import { logSessionEnd, logSessionStart } from "../../../../lib/sessionActivityLog";
 import { requestMetadata } from "../../../../lib/security";
 
 const COOKIE_NAME = "ipm_session";
@@ -205,6 +206,7 @@ async function handleLogin(request) {
     path: "/",
     maxAge: SESSION_MAX_AGE_SECONDS,
   });
+  await logSessionStart(token, user.id);
 
   await writeAuditLog({ request, actor: user, action: "auth.login", details: { sessionHours: SESSION_MAX_AGE_SECONDS / 3600 } });
 
@@ -223,17 +225,20 @@ async function handleMe(request) {
 
   if (!sess?.user) return json({ user: null });
   if (sess.user.isActive === false) {
+    await logSessionEnd(sess.id);
     try { await prisma.session.delete({ where: { id: sess.id } }); } catch {}
     jar.set(COOKIE_NAME, "", { path: "/", maxAge: 0 });
     return json({ user: null });
   }
   if (userIsExpired(sess.user)) {
+    await logSessionEnd(sess.id);
     try { await prisma.session.delete({ where: { id: sess.id } }); } catch {}
     jar.set(COOKIE_NAME, "", { path: "/", maxAge: 0 });
     return json({ user: null });
   }
 
   if (sess.expiresAt && new Date(sess.expiresAt).getTime() < Date.now()) {
+    await logSessionEnd(sess.id);
     try { await prisma.session.delete({ where: { id: sess.id } }); } catch {}
     jar.set(COOKIE_NAME, "", { path: "/", maxAge: 0 });
     return json({ user: null });
@@ -248,6 +253,7 @@ async function handleLogout(request) {
   let actor = null;
   if (token) {
     actor = await prisma.session.findUnique({ where: { id: token }, include: { user: true } }).then((s) => s?.user || null).catch(() => null);
+    await logSessionEnd(token);
     try { await prisma.session.deleteMany({ where: { id: token } }); } catch {}
   }
   jar.set(COOKIE_NAME, "", { path: "/", maxAge: 0 });
