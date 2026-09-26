@@ -10,12 +10,14 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 async function markPendingLessonAsRead(lessonId, userId) {
-  await prisma.$executeRaw`
+  const inserted = await prisma.$queryRaw`
     INSERT INTO project_lesson_views (lesson_id, user_id)
     VALUES (${lessonId}, ${userId})
     ON CONFLICT (lesson_id, user_id)
-    DO UPDATE SET viewed_at = NOW()
+    DO NOTHING
+    RETURNING lesson_id
   `;
+  return inserted.length > 0;
 }
 
 async function incrementApprovedLessonViews(lessonId) {
@@ -57,7 +59,10 @@ export async function POST(request) {
       });
     }
 
-    const viewCount = await incrementApprovedLessonViews(lessonId);
+    const isFirstView = await markPendingLessonAsRead(lessonId, Number(user.id));
+    const viewCount = isFirstView
+      ? await incrementApprovedLessonViews(lessonId)
+      : Number(lesson.view_count || 0);
     return noStoreJson({ viewCount, isUnread: false });
   } catch (error) {
     console.error("project_lesson_view_failed", error);

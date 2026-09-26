@@ -28,8 +28,8 @@ export async function GET(request) {
       prisma.$queryRaw`SELECT l.project_id, l.category, l.importance, l.created_by_id, p.name AS project_name, u.name, u.username FROM project_lessons l LEFT JOIN projects p ON p.id=l.project_id LEFT JOIN "User" u ON u.id=l.created_by_id WHERE l.status='approved'`,
       prisma.$queryRaw`SELECT l.title AS library_title, COUNT(i.id)::int AS count FROM base_libraries l LEFT JOIN library_items i ON i.library_id=l.id GROUP BY l.id, l.title ORDER BY l.title`,
       prisma.$queryRaw`SELECT category FROM training_resources`,
-      prisma.$queryRaw`SELECT v.user_id, u.name, u.username, COUNT(*)::int AS count FROM knowledge_page_visits v LEFT JOIN "User" u ON u.id=v.user_id WHERE v.page_key='lessons' GROUP BY v.user_id, u.name, u.username ORDER BY count DESC, v.user_id ASC LIMIT 3`,
-      prisma.$queryRaw`SELECT v.user_id, u.name, u.username, COUNT(*)::int AS count FROM knowledge_page_visits v LEFT JOIN "User" u ON u.id=v.user_id WHERE v.page_key='training' GROUP BY v.user_id, u.name, u.username ORDER BY count DESC, v.user_id ASC LIMIT 3`,
+      prisma.$queryRaw`SELECT v.user_id, u.name, u.username, COUNT(*)::int AS count FROM project_lesson_views v LEFT JOIN "User" u ON u.id=v.user_id GROUP BY v.user_id, u.name, u.username ORDER BY count DESC, v.user_id ASC LIMIT 3`,
+      prisma.$queryRaw`SELECT v.user_id, u.name, u.username, COUNT(*)::int AS count FROM knowledge_page_visits v LEFT JOIN "User" u ON u.id=v.user_id WHERE v.page_key='training_interaction' GROUP BY v.user_id, u.name, u.username ORDER BY count DESC, v.user_id ASC LIMIT 3`,
     ]);
     const grouped = (rows, key, fallback) => Object.values(rows.reduce((result, row) => { const label = String(row[key] || fallback).trim() || fallback; result[label] = { label, count: number(result[label]?.count) + 1 }; return result; }, {}));
     const authors = Object.values(lessons.reduce((result, row) => { const id = String(row.created_by_id || "unknown"); const current = result[id] || { id, name: nameOf(row), count: 0 }; current.count += 1; result[id] = current; return result; }, {})).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "fa"));
@@ -48,7 +48,7 @@ export async function POST(request) {
     const user = await getCurrentUser(request);
     if (!user) return json({ error: "unauthorized" }, 401);
     const page = String((await request.json().catch(() => ({}))).page || "");
-    if (!['lessons', 'training'].includes(page)) return json({ error: "invalid_page" }, 400);
+    if (!['lessons', 'training_interaction'].includes(page)) return json({ error: "invalid_page" }, 400);
     await ensureKnowledgeSchemas();
     await prisma.$executeRaw`INSERT INTO knowledge_page_visits (page_key, user_id) VALUES (${page}, ${Number(user.id)})`;
     return json({ ok: true }, 201);
