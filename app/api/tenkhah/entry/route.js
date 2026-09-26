@@ -1,9 +1,10 @@
 import { prisma } from "../../../../lib/prisma";
+import { isSessionExpired } from "../../../../lib/security";
 export const runtime = "nodejs";
 
 const json = (data, status = 200) => Response.json(data, { status });
 const cookie = (request, name) => String(request.headers.get("cookie") || "").match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`))?.[1] || "";
-async function userIdOf(request) { const raw=request.headers.get("x-user-id")||cookie(request,"user_id"); if(/^\d+$/.test(raw)) return +raw; const sid=cookie(request,"ipm_session"); const session=sid&&await prisma.session.findUnique({where:{id:sid}}).catch(()=>null); return session?.userId || (process.env.NODE_ENV!=="production" ? 1 : null); }
+async function userIdOf(request) { const sid=cookie(request,"ipm_session"); const session=sid&&await prisma.session.findUnique({where:{id:sid}}).catch(()=>null); if(session&&!isSessionExpired(session)) return session.userId; const raw=request.headers.get("x-user-id")||cookie(request,"user_id"); return process.env.NODE_ENV!=="production"&&/^\d+$/.test(raw) ? +raw : (process.env.NODE_ENV!=="production" ? 1 : null); }
 const amount = (value) => { const raw=String(value??"").replace(/[۰-۹]/g,d=>"۰۱۲۳۴۵۶۷۸۹".indexOf(d)).replace(/[٠-٩]/g,d=>"٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/[^\d]/g,""); return raw ? BigInt(raw) : 0n; };
 
 export async function PATCH(request) {

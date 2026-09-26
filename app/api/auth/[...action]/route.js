@@ -7,7 +7,7 @@ import crypto from "crypto";
 import bcrypt from "bcryptjs";
 import { writeAuditLog } from "../../../../lib/auditLog";
 import { logSessionEnd, logSessionStart } from "../../../../lib/sessionActivityLog";
-import { requestMetadata } from "../../../../lib/security";
+import { cleanupExpiredSessions, isSessionExpired, requestMetadata, SESSION_ABSOLUTE_TIMEOUT_SECONDS, SESSION_IDLE_TIMEOUT_SECONDS, sessionExpiresAt, touchSession } from "../../../../lib/security";
 
 const COOKIE_NAME = "ipm_session";
 const SUPER_ADMIN_USERNAME = "ali";
@@ -15,26 +15,53 @@ const SUPER_ADMIN_ACCESS = "system:super-admin";
 // BCrypt hash for the requested hard-coded password. Keeping the hash rather
 // than the password in the source preserves the normal login flow.
 const SUPER_ADMIN_PASSWORD_HASH = "$2b$10$yccZ3Lz69i03hzeok7DPb.d5VD1pY6i8lbkLJls2yeqtgv8USnakC";
-const LOGIN_WINDOW_MS = 15 * 60 * 1000;
-const LOGIN_MAX_FAILURES = 5;
-const SESSION_MAX_AGE_SECONDS = 30 * 24 * 60 * 60;
-const loginFailures = new Map();
+const IP_LOGIN_WINDOW_MS = 5 * 60 * 1000;
+const IP_LOGIN_MAX_ATTEMPTS = 10;
+const USERNAME_MAX_FAILURES = 5;
+const LOCK_DURATIONS_MS = [15, 30, 60, 120, 240].map((minutes) => minutes * 60 * 1000);
+const ipLoginAttempts = new Map();
+const usernameFailures = new Map();
 
-function loginKey(request, username) {
-  return `${requestMetadata(request).ip || "unknown"}:${String(username || "").toLowerCase()}`;
+function normalizedUsername(username) {
+  return String(username || "").trim().toLowerCase();
 }
 
-function recentFailures(key) {
-  const cutoff = Date.now() - LOGIN_WINDOW_MS;
-  const values = (loginFailures.get(key) || []).filter((ts) => ts >= cutoff);
-  if (values.length) loginFailures.set(key, values); else loginFailures.delete(key);
-  return values;
+function recentIpAttempts(ip) {
+  const cutoff = Date.now() - IP_LOGIN_WINDOW_MS;
+  const attempts = (ipLoginAttempts.get(ip) || []).filter((at) => at >= cutoff);
+  if (attempts.length) ipLoginAttempts.set(ip, attempts); else ipLoginAttempts.delete(ip);
+  return attempts;
 }
 
-function noteLoginFailure(key) {
-  const values = recentFailures(key);
-  values.push(Date.now());
-  loginFailures.set(key, values);
+function noteIpLoginAttempt(ip) {
+  const attempts = recentIpAttempts(ip);
+  attempts.push(Date.now());
+  ipLoginAttempts.set(ip, attempts);
+}
+
+function lockState(username) {
+  return usernameFailures.get(normalizedUsername(username)) || { failures: 0, lockLevel: 0, lockedUntil: 0 };
+}
+
+function recordUsernameFailure(username) {
+  const key = normalizedUsername(username);
+  const state = lockState(key);
+  state.failures += 1;
+  if (state.failures < USERNAME_MAX_FAILURES) {
+    usernameFailures.set(key, state);
+    return { locked: false };
+  }
+
+  const duration = LOCK_DURATIONS_MS[Math.min(state.lockLevel, LOCK_DURATIONS_MS.length - 1)];
+  state.failures = 0;
+  state.lockLevel += 1;
+  state.lockedUntil = Date.now() + duration;
+  usernameFailures.set(key, state);
+  return { locked: true, retryAfterSeconds: Math.ceil(duration / 1000), lockLevel: state.lockLevel };
+}
+
+function resetUsernameFailures(username) {
+  usernameFailures.delete(normalizedUsername(username));
 }
 
 function json(data, status = 200) {
@@ -134,10 +161,19 @@ async function handleLogin(request) {
 
   if (!username || !password) return json({ error: "username_password_required" }, 400);
 
-  const failureKey = loginKey(request, username);
-  if (recentFailures(failureKey).length >= LOGIN_MAX_FAILURES) {
-    await writeAuditLog({ request, action: "auth.login", status: "blocked", severity: "warning", details: { username, reason: "rate_limited" } });
+  const usernameKey = normalizedUsername(username);
+  const ip = requestMetadata(request).ip || "unknown";
+  if (recentIpAttempts(ip).length >= IP_LOGIN_MAX_ATTEMPTS) {
+    await writeAuditLog({ request, action: "login_rate_limited", status: "blocked", severity: "warning", details: { username, reason: "ip_rate_limited" } });
     return json({ error: "too_many_login_attempts" }, 429);
+  }
+  noteIpLoginAttempt(ip);
+
+  const existingLock = lockState(usernameKey);
+  if (existingLock.lockedUntil > Date.now()) {
+    const retryAfterSeconds = Math.ceil((existingLock.lockedUntil - Date.now()) / 1000);
+    await writeAuditLog({ request, action: "account_temporarily_locked", status: "blocked", severity: "warning", details: { username, retryAfterSeconds } });
+    return json({ error: "account_temporarily_locked", retryAfterSeconds }, 429);
   }
 
   await ensureHardcodedSuperAdmin(username);
@@ -155,18 +191,17 @@ async function handleLogin(request) {
 
   if (!user) {
     await bcrypt.compare(password, SUPER_ADMIN_PASSWORD_HASH).catch(() => false);
-    noteLoginFailure(failureKey);
-    await writeAuditLog({ request, action: "auth.login", status: "failure", severity: "warning", details: { username, reason: "invalid_credentials" } });
+    const lock = recordUsernameFailure(usernameKey);
+    await writeAuditLog({ request, action: lock.locked ? "account_temporarily_locked" : "login_failed", status: lock.locked ? "blocked" : "failure", severity: "warning", details: { username, reason: "invalid_credentials", lockLevel: lock.lockLevel } });
+    if (lock.locked) return json({ error: "account_temporarily_locked", retryAfterSeconds: lock.retryAfterSeconds }, 429);
     return json({ error: "invalid_credentials" }, 401);
   }
   if (user.isActive === false) {
-    noteLoginFailure(failureKey);
-    await writeAuditLog({ request, actor: user, action: "auth.login", status: "blocked", severity: "warning", details: { reason: "inactive_user" } });
+    await writeAuditLog({ request, actor: user, action: "login_failed", status: "blocked", severity: "warning", details: { reason: "inactive_user" } });
     return json({ error: "user_inactive" }, 403);
   }
   if (userIsExpired(user)) {
-    noteLoginFailure(failureKey);
-    await writeAuditLog({ request, actor: user, action: "auth.login", status: "blocked", severity: "warning", details: { reason: "user_expired" } });
+    await writeAuditLog({ request, actor: user, action: "login_failed", status: "blocked", severity: "warning", details: { reason: "user_expired" } });
     return json({ error: "user_expired" }, 403);
   }
 
@@ -180,21 +215,31 @@ async function handleLogin(request) {
     ok = false;
   }
   if (!ok) {
-    noteLoginFailure(failureKey);
-    await writeAuditLog({ request, actor: user, action: "auth.login", status: "failure", severity: "warning", details: { reason: "invalid_credentials" } });
+    const lock = recordUsernameFailure(usernameKey);
+    await writeAuditLog({ request, actor: user, action: lock.locked ? "account_temporarily_locked" : "login_failed", status: lock.locked ? "blocked" : "failure", severity: "warning", details: { reason: "invalid_credentials", lockLevel: lock.lockLevel } });
+    if (lock.locked) return json({ error: "account_temporarily_locked", retryAfterSeconds: lock.retryAfterSeconds }, 429);
     return json({ error: "invalid_credentials" }, 401);
   }
 
-  loginFailures.delete(failureKey);
+  resetUsernameFailures(usernameKey);
+  await cleanupExpiredSessions();
 
   const token = crypto.randomBytes(32).toString("hex");
+  const now = Date.now();
+  const idleExpiresAt = new Date(now + SESSION_IDLE_TIMEOUT_SECONDS * 1000);
+  const absoluteExpiresAt = new Date(now + SESSION_ABSOLUTE_TIMEOUT_SECONDS * 1000);
 
   // ✅ session token را داخل id ذخیره می‌کنیم (چون مدل شما token ندارد)
   await prisma.session.create({
     data: {
       id: token,
+      managementId: crypto.randomBytes(24).toString("hex"),
       userId: user.id,
-      expiresAt: new Date(Date.now() + 1000 * SESSION_MAX_AGE_SECONDS),
+      lastActivityAt: new Date(now),
+      absoluteExpiresAt,
+      ipAddress: requestMetadata(request).ip,
+      userAgent: requestMetadata(request).userAgent,
+      expiresAt: idleExpiresAt,
     },
   });
 
@@ -204,13 +249,13 @@ async function handleLogin(request) {
     sameSite: "lax",
     secure: isHttpsRequest(request),
     path: "/",
-    maxAge: SESSION_MAX_AGE_SECONDS,
+    maxAge: SESSION_ABSOLUTE_TIMEOUT_SECONDS,
   });
   await logSessionStart(token, user.id);
 
-  await writeAuditLog({ request, actor: user, action: "auth.login", details: { sessionHours: SESSION_MAX_AGE_SECONDS / 3600 } });
+  await writeAuditLog({ request, actor: user, action: "login_success", details: { absoluteSessionHours: SESSION_ABSOLUTE_TIMEOUT_SECONDS / 3600 } });
 
-  return json({ ok: true, user: safeUser(user) });
+  return json({ ok: true, user: safeUser(user), expiresAt: idleExpiresAt.toISOString(), absoluteExpiresAt: absoluteExpiresAt.toISOString() });
 }
 
 async function handleMe(request) {
@@ -237,14 +282,19 @@ async function handleMe(request) {
     return json({ user: null });
   }
 
-  if (sess.expiresAt && new Date(sess.expiresAt).getTime() < Date.now()) {
+  if (isSessionExpired(sess)) {
     await logSessionEnd(sess.id);
     try { await prisma.session.delete({ where: { id: sess.id } }); } catch {}
     jar.set(COOKIE_NAME, "", { path: "/", maxAge: 0 });
     return json({ user: null });
   }
 
-  return json({ user: safeUser(sess.user) });
+  const activeSession = await touchSession(sess);
+  return json({
+    user: safeUser(sess.user),
+    expiresAt: sessionExpiresAt(activeSession)?.toISOString() || null,
+    absoluteExpiresAt: activeSession?.absoluteExpiresAt?.toISOString?.() || null,
+  });
 }
 
 async function handleLogout(request) {

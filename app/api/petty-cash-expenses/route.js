@@ -1,4 +1,5 @@
 import { prisma } from "../../../lib/prisma";
+import { isSessionExpired } from "../../../lib/security";
 
 export const runtime = "nodejs";
 
@@ -18,7 +19,7 @@ async function userIdOf(request) {
   if (/^\d+$/.test(raw)) return Number(raw);
   const sessionId = cookie(request, "ipm_session");
   const session = sessionId && await prisma.session.findUnique({ where: { id: sessionId } }).catch(() => null);
-  return session?.userId || (process.env.NODE_ENV !== "production" ? 1 : null);
+  return session && !isSessionExpired(session) ? session.userId : (process.env.NODE_ENV !== "production" ? 1 : null);
 }
 
 function normalized(value = "") {

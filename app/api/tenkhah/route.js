@@ -1,11 +1,12 @@
 import { prisma } from "../../../lib/prisma";
+import { isSessionExpired } from "../../../lib/security";
 import { nextSharedPaymentSerial } from "../../../lib/paymentSerial";
 import { requirePagePermission } from "../../../lib/pagePermissions";
 
 export const runtime = "nodejs";
 const json = (data, status = 200) => Response.json(data, { status });
 const cookie = (r, n) => String(r.headers.get("cookie") || "").match(new RegExp(`(?:^|;\\s*)${n}=([^;]+)`))?.[1] || "";
-async function userIdOf(r) { const raw = r.headers.get("x-user-id") || cookie(r, "user_id"); if (/^\d+$/.test(raw)) return +raw; const sid = cookie(r, "ipm_session"); const s = sid && await prisma.session.findUnique({ where: { id: sid } }).catch(() => null); return s?.userId || (process.env.NODE_ENV !== "production" ? 1 : null); }
+async function userIdOf(r) { const sid = cookie(r, "ipm_session"); const s = sid && await prisma.session.findUnique({ where: { id: sid } }).catch(() => null); if (s && !isSessionExpired(s)) return s.userId; const raw = r.headers.get("x-user-id") || cookie(r, "user_id"); return process.env.NODE_ENV !== "production" && /^\d+$/.test(raw) ? +raw : (process.env.NODE_ENV !== "production" ? 1 : null); }
 // Keep the ali account's elevated payment-request access consistent across
 // the ordinary payment-request and tenkhah APIs. This access is intentionally
 // scoped to this page's listing/deletion behavior, not to every financial operation.

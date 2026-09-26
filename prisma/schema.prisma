@@ -238,13 +238,20 @@ model Center {
 }
 
 model Session {
-  id        String   @id @default(uuid())
-  userId    Int
-  user      User     @relation(fields: [userId], references: [id], onDelete: Cascade)
-  createdAt DateTime @default(now())
-  expiresAt DateTime
+  id                String   @id @default(uuid())
+  managementId      String   @unique @default(uuid()) @map("management_id")
+  userId            Int
+  user              User     @relation(fields: [userId], references: [id], onDelete: Cascade)
+  createdAt         DateTime @default(now())
+  lastActivityAt    DateTime @default(now()) @map("last_activity_at")
+  absoluteExpiresAt DateTime @map("absolute_expires_at")
+  ipAddress         String?  @map("ip_address")
+  userAgent         String?  @map("user_agent")
+  expiresAt         DateTime
 
   @@index([userId])
+  @@index([expiresAt])
+  @@index([absoluteExpiresAt])
 }
 
 model RevenueEstimateRow {
