@@ -1,5 +1,6 @@
 import { prisma } from "../../../lib/prisma";
 import { nextSharedPaymentSerial } from "../../../lib/paymentSerial";
+import { requirePagePermission } from "../../../lib/pagePermissions";
 
 export const runtime = "nodejs";
 const json = (data, status = 200) => Response.json(data, { status });
@@ -88,6 +89,8 @@ export async function GET(r) {
   try {
     await ensure(); const uid = await userIdOf(r); if (!uid) return json({ error: "unauthorized" }, 401);
     const url = new URL(r.url), recipientStage = url.searchParams.get("recipients"), balanceProjectId = +url.searchParams.get("projectBalances"), balanceBeneficiaryId = +url.searchParams.get("beneficiaryId");
+    const dashboardReport = url.searchParams.get("dashboard") === "1";
+    if (dashboardReport) { const denied = await requirePagePermission(r, "داشبورد مدیریت مالی", "نمایش منو"); if (denied) return denied; }
     // Beneficiary selection is intentionally independent from administrative
     // role-management access. Return only the profile fields needed by the
     // request form, never users' roles or unit assignments.
@@ -110,10 +113,10 @@ export async function GET(r) {
     const sharedManagementWhere = managementMember ? " OR (t.stage='management' AND t.status='pending')" : "";
     const historicalFinanceWhere = financeMember ? " OR COALESCE(t.workflow_history,'[]'::jsonb) @> '[{\"assignedToUnit\":\"finance\"}]'::jsonb" : "";
     const historicalManagementWhere = managementMember ? " OR COALESCE(t.workflow_history,'[]'::jsonb) @> '[{\"assignedToUnit\":\"management\"}]'::jsonb" : "";
-    const items = await requests(inbox
+    const items = await requests(dashboardReport ? "" : inbox
       ? `WHERE t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${sharedFinanceWhere}${sharedManagementWhere}${historicalFinanceWhere}${historicalManagementWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND s.current_assignee_user_id=$1)`
-      : `WHERE t.created_by_id=$1 OR t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${sharedFinanceWhere}${sharedManagementWhere}${historicalFinanceWhere}${historicalManagementWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND (s.current_assignee_user_id=$1 OR s.created_by_id=$1))`, [uid]);
-    const all = await settlements(items.map(x => x.id)); const shown = inbox ? all.filter(s => +s.currentAssigneeUserId === uid && s.status === "pending") : all.filter(s => +s.createdById === uid || +s.currentAssigneeUserId === uid);
+      : `WHERE t.created_by_id=$1 OR t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${sharedFinanceWhere}${sharedManagementWhere}${historicalFinanceWhere}${historicalManagementWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND (s.current_assignee_user_id=$1 OR s.created_by_id=$1))`, dashboardReport ? [] : [uid]);
+    const all = dashboardReport ? [] : await settlements(items.map(x => x.id)); const shown = inbox ? all.filter(s => +s.currentAssigneeUserId === uid && s.status === "pending") : all.filter(s => +s.createdById === uid || +s.currentAssigneeUserId === uid);
     return json({ items: items.map(x => ({
       ...x,
       canAct: x.status === "pending" && (x.stage === "finance" ? financeMember : x.stage === "management" ? managementMember : +x.currentAssigneeUserId === uid),

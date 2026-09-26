@@ -313,6 +313,8 @@ function normalizeOut(row, userNamesById = null) {
     currencySourceId: row.currencySourceId,
 
     projectId: row.projectId,
+    projectName: row.project?.name || "",
+    projectCode: row.project?.code || "",
     budgetCode: row.budgetCode,
 
     status: row.status,
@@ -1033,6 +1035,11 @@ export async function GET(req, ctx) {
 
   const slug = await getSlug(ctx);
   const url = new URL(req.url);
+  const dashboardReport = slug.length === 0 && url.searchParams.get("dashboard") === "1";
+  if (dashboardReport) {
+    const dashboardDenied = await requirePagePermission(req, "داشبورد مدیریت مالی", "نمایش منو");
+    if (dashboardDenied) return dashboardDenied;
+  }
 
   if (slug.length === 0 && url.searchParams.get("nextRecipientsForCreate") === "1") {
     const initialTarget = await resolveInitialWorkflowTarget(uctx, url.searchParams.get("projectId"));
@@ -1112,7 +1119,7 @@ export async function GET(req, ctx) {
 
   let rows = await prisma.paymentRequest.findMany({
     where,
-    include: { createdBy: { select: { name: true, username: true, email: true } } },
+    include: { createdBy: { select: { name: true, username: true, email: true } }, project: { select: { name: true, code: true } } },
     orderBy: { id: "desc" },
     // Historical cartables must include older requests too; the former 500-row
     // cap could hide a user's earlier workflow items before involvement was
@@ -1138,7 +1145,7 @@ export async function GET(req, ctx) {
   // The super-admin's view is intentionally never narrowed by the UI's
   // "mine" or "inbox" query parameter; it must include every request.
   let filtered = rowsWithFlags;
-  if (uctx.isSuperAdmin) {
+  if (dashboardReport || uctx.isSuperAdmin) {
     filtered = rowsWithFlags;
   } else if (view === "mine") {
     filtered = rowsWithFlags.filter((x) => x.isMine);
