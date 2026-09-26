@@ -68,6 +68,16 @@ async function isManagementUser(userId) {
   const users = await settlementRecipients("management", null);
   return users.some((user) => Number(user.id) === Number(userId));
 }
+async function financeRequesterManagementRecipients() {
+  // Finance-originated petty-cash requests skip project management and are
+  // deliberately routed only to the two named senior-management accounts.
+  const users = await prisma.user.findMany({
+    where: { username: { in: ["marandi", "nouri"], mode: "insensitive" }, isActive: { not: false } },
+    select: { id: true, name: true, username: true, email: true },
+    orderBy: { id: "asc" },
+  });
+  return users;
+}
 async function settlementRecipients(stage, excludeId) {
   // A user's membership can come from a direct unit assignment or from one of
   // that unit's designated positions (UnitRoleMap -> UserRoleMap).
@@ -106,6 +116,7 @@ export async function GET(r) {
       return json({ users });
     }
     if (url.searchParams.get("currentUserFinance") === "1") return json({ isFinance: await isFinanceUser(uid) });
+    if (recipientStage === "finance_request_management") return json({ users: await financeRequesterManagementRecipients() });
     if (["control_project", "finance", "project_manager", "management"].includes(recipientStage)) return json({ users: await settlementRecipients(recipientStage, uid) });
     if (balanceProjectId && balanceBeneficiaryId) { const rows = await prisma.$queryRawUnsafe(`SELECT COALESCE(SUM(GREATEST(0,COALESCE(t.charged_amount,0)-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id),0))),0)::text AS "unregisteredBalance",COALESCE(SUM(GREATEST(0,COALESCE(t.charged_amount,0)-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id AND s.status='completed'),0))),0)::text AS "unsettledBalance",COALESCE(SUM(COALESCE(t.charged_amount,0)),0)::text AS "receivedAmount" FROM tenkhah_requests t WHERE t.project_id=$1 AND COALESCE(t.beneficiary_user_id,t.created_by_id)=$2 AND t.status='charged'`, balanceProjectId, balanceBeneficiaryId); return json(rows[0] || { unregisteredBalance: "0", unsettledBalance: "0", receivedAmount: "0" }); }
     const inbox = url.searchParams.get("inbox") === "1";
@@ -128,7 +139,8 @@ export async function GET(r) {
     const all = dashboardReport ? [] : await settlements(items.map(x => x.id)); const shown = inbox ? all.filter(s => +s.currentAssigneeUserId === uid && s.status === "pending") : all.filter(s => +s.createdById === uid || +s.currentAssigneeUserId === uid);
     return json({ items: items.map(x => ({
       ...x,
-      canAct: x.status === "pending" && (x.stage === "finance" ? financeMember : x.stage === "management" ? managementMember : +x.currentAssigneeUserId === uid),
+      canAct: x.status === "pending" && (x.stage === "finance" ? financeMember : x.stage === "management" ? (x.currentAssigneeUserId ? +x.currentAssigneeUserId === uid : managementMember) : +x.currentAssigneeUserId === uid),
+      canEdit: canViewAllRequests && !dashboardReport,
       settlements: all.filter(s => +s.tenkhahRequestId === +x.id),
     })), settlements: shown });
   } catch (e) { return json({ error: "internal_error", message: String(e?.message || e) }, 500); }
@@ -147,13 +159,16 @@ export async function POST(r) {
       await prisma.$executeRawUnsafe("UPDATE tenkhah_requests SET unregistered_balance=unregistered_balance-$1::bigint,updated_at=CURRENT_TIMESTAMP WHERE id=$2", String(settledAmount), tid);
       return json({ ok: true }, 201);
     }
-    const pid = +b.projectId, mid = +b.projectManagerId, beneficiaryId = +b.beneficiaryUserId, w = amount(b.amount);
+    const pid = +b.projectId, selectedRecipientId = +b.projectManagerId, beneficiaryId = +b.beneficiaryUserId, w = amount(b.amount);
     const beneficiary = beneficiaryId ? await prisma.user.findUnique({ where: { id: beneficiaryId }, select: { id: true } }) : null;
-    if (!String(b.requestDate || "").trim() || !String(b.purpose || "").trim() || !pid || !mid || !beneficiary || w <= 0n) return json({ error: "invalid_input" }, 400);
-    const projectManagers = await settlementRecipients("project_manager", uid);
-    if (!projectManagers.some((user) => +user.id === mid)) return json({ error: "invalid_project_manager_user" }, 400);
-    const initialAssigneeId = mid;
-    const initialStage = "project_manager";
+    if (!String(b.requestDate || "").trim() || !String(b.purpose || "").trim() || !pid || !selectedRecipientId || !beneficiary || w <= 0n) return json({ error: "invalid_input" }, 400);
+    const requesterIsFinance = await isFinanceUser(uid);
+    const validRecipients = requesterIsFinance
+      ? await financeRequesterManagementRecipients()
+      : await settlementRecipients("project_manager", uid);
+    if (!validRecipients.some((user) => +user.id === selectedRecipientId)) return json({ error: requesterIsFinance ? "invalid_management_recipient" : "invalid_project_manager_user" }, 400);
+    const initialAssigneeId = selectedRecipientId;
+    const initialStage = requesterIsFinance ? "management" : "project_manager";
     const requestNumber = await nextSharedPaymentSerial(prisma, { dateJalali: b.requestDate, projectId: pid });
     // A tenkhah remains in its own tables and workflow.  The linked payment
     // request is a tracking identity only and is excluded from the normal
@@ -164,8 +179,8 @@ export async function POST(r) {
       createdById: uid, currentAssigneeUserId: initialAssigneeId, status: "pending",
       historyJson: [{ type: "created", at: new Date().toISOString(), byUserId: uid, rialAmount: String(w) }],
     } });
-    const history = JSON.stringify([{ type: "created", at: new Date().toISOString(), byUserId: uid }, { type: "step_set", stage: "project_manager", assignedToUserId: mid, at: new Date().toISOString() }]);
-    await prisma.$executeRawUnsafe("INSERT INTO tenkhah_requests (payment_request_id,request_number,request_date,project_id,requested_amount,purpose,currency,unregistered_balance,unsettled_balance,created_by_id,beneficiary_user_id,project_manager_id,finance_user_id,current_assignee_user_id,project_liquidity,stage,workflow_history) VALUES ($1,$2,$3,$4,$5::bigint,$6,$7,$8::bigint,$9::bigint,$10,$11,$12,$13,$14,$15::bigint,$16,$17::jsonb)", linkedPayment.id, requestNumber, String(b.requestDate), pid, String(w), String(b.purpose).trim(), String(b.currency || ""), String(w), String(w), uid, beneficiaryId, initialAssigneeId, null, initialAssigneeId, String(amount(b.projectLiquidity)), initialStage, history);
+    const history = JSON.stringify([{ type: "created", at: new Date().toISOString(), byUserId: uid }, { type: "step_set", stage: initialStage, assignedToUserId: initialAssigneeId, at: new Date().toISOString() }]);
+    await prisma.$executeRawUnsafe("INSERT INTO tenkhah_requests (payment_request_id,request_number,request_date,project_id,requested_amount,purpose,currency,unregistered_balance,unsettled_balance,created_by_id,beneficiary_user_id,project_manager_id,finance_user_id,current_assignee_user_id,project_liquidity,stage,workflow_history) VALUES ($1,$2,$3,$4,$5::bigint,$6,$7,$8::bigint,$9::bigint,$10,$11,$12,$13,$14,$15::bigint,$16,$17::jsonb)", linkedPayment.id, requestNumber, String(b.requestDate), pid, String(w), String(b.purpose).trim(), String(b.currency || ""), String(w), String(w), uid, beneficiaryId, requesterIsFinance ? null : initialAssigneeId, null, initialAssigneeId, String(amount(b.projectLiquidity)), initialStage, history);
     return json({ ok: true, requestNumber }, 201);
   } catch (e) { return json({ error: "internal_error", message: String(e?.message || e) }, 500); }
 }
@@ -173,6 +188,27 @@ export async function POST(r) {
 export async function PATCH(r) {
   try {
     await ensure(); const uid = await userIdOf(r), b = await r.json().catch(() => ({}));
+    if (b.action === "edit_request") {
+      if (!(await isTenkhahRequestAdmin(uid))) return json({ error: "forbidden" }, 403);
+      const id = +b.id, projectId = +b.projectId, beneficiaryId = +b.beneficiaryUserId, requestedAmount = amount(b.amount);
+      const row = (await requests("WHERE t.id=$1", [id]))[0];
+      const [project, beneficiary] = await Promise.all([
+        projectId ? prisma.project.findUnique({ where: { id: projectId }, select: { id: true } }) : null,
+        beneficiaryId ? prisma.user.findUnique({ where: { id: beneficiaryId }, select: { id: true } }) : null,
+      ]);
+      if (!row || !project || !beneficiary || !String(b.requestDate || "").trim() || !String(b.purpose || "").trim() || requestedAmount <= 0n) return json({ error: "invalid_input" }, 400);
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe(
+          "UPDATE tenkhah_requests SET request_date=$1,project_id=$2,beneficiary_user_id=$3,requested_amount=$4::bigint,purpose=$5,currency=$6,updated_at=CURRENT_TIMESTAMP WHERE id=$7",
+          String(b.requestDate), projectId, beneficiaryId, String(requestedAmount), String(b.purpose).trim(), String(b.currency || row.currency || "IRR"), id,
+        );
+        if (row.paymentRequestId) await tx.paymentRequest.update({
+          where: { id: Number(row.paymentRequestId) },
+          data: { dateJalali: String(b.requestDate), projectId, amount: requestedAmount, title: `تنخواه - ${String(b.purpose).trim()}` },
+        });
+      });
+      return json({ ok: true });
+    }
     if (b.action === "advance_settlement") {
       const s = (await prisma.$queryRawUnsafe("SELECT * FROM tenkhah_settlements WHERE id=$1", +b.settlementId))[0]; if (!s || +s.current_assignee_user_id !== uid || s.status !== "pending") return json({ error: "not_allowed" }, 403);
       if (s.stage === "project_manager") await prisma.$executeRawUnsafe("UPDATE tenkhah_settlements SET stage='requester_delivery',current_assignee_user_id=created_by_id,updated_at=CURRENT_TIMESTAMP WHERE id=$1", s.id);
@@ -187,7 +223,7 @@ export async function PATCH(r) {
     // The financial stage is shared by all finance members, including for
     // legacy rows that still have an individual assignee value.
     const canActOnSharedFinance = row?.stage === "finance" && await isFinanceUser(uid);
-    const canActOnSharedManagement = row?.stage === "management" && await isManagementUser(uid);
+    const canActOnSharedManagement = row?.stage === "management" && !row?.currentAssigneeUserId && await isManagementUser(uid);
     if (!uid || !row || (+row.currentAssigneeUserId !== uid && !canActOnSharedFinance && !canActOnSharedManagement) || row.status !== "pending") return json({ error: "not_allowed" }, 403);
     const decision = ["approve", "return", "reject"].includes(b.action) ? b.action : "approve";
     const history = Array.isArray(row.workflowHistory) ? row.workflowHistory : [];
