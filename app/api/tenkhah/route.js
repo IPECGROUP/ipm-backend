@@ -123,7 +123,17 @@ export async function GET(r) {
     // happened to be selected when it was requested.  Project remains on the
     // request for budgeting and workflow, while every balance shown to the
     // user is the aggregate across that beneficiary's projects.
-    if (balanceBeneficiaryId) { const rows = await prisma.$queryRawUnsafe(`SELECT COALESCE(SUM(GREATEST(0,COALESCE(t.charged_amount,0)-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id),0))),0)::text AS "unregisteredBalance",COALESCE(SUM(GREATEST(0,COALESCE(t.charged_amount,0)-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id AND s.status='completed'),0))),0)::text AS "unsettledBalance",COALESCE(SUM(COALESCE(t.charged_amount,0)),0)::text AS "receivedAmount" FROM tenkhah_requests t WHERE COALESCE(t.beneficiary_user_id,t.created_by_id)=$1 AND t.status='charged'`, balanceBeneficiaryId); return json(rows[0] || { unregisteredBalance: "0", unsettledBalance: "0", receivedAmount: "0" }); }
+    if (balanceBeneficiaryId) {
+      // The petty-cash expense table is provisioned by its own API.  Keep the
+      // request form usable on installations where that page has never been
+      // opened yet, while including its approved expenses whenever it exists.
+      const pettyCashTable = await prisma.$queryRawUnsafe("SELECT to_regclass('public.petty_cash_expenses') AS name");
+      const pettyCashExists = Boolean(pettyCashTable[0]?.name);
+      const registeredPettyCash = pettyCashExists ? `+COALESCE((SELECT SUM(e.amount) FROM petty_cash_expenses e WHERE e.created_by_id=$1),0)` : "";
+      const approvedPettyCash = pettyCashExists ? `+COALESCE((SELECT SUM(e.amount) FROM petty_cash_expenses e WHERE e.created_by_id=$1 AND e.stage='completed' AND e.project_manager_status='approved'),0)` : "";
+      const rows = await prisma.$queryRawUnsafe(`SELECT GREATEST(0,COALESCE(SUM(t.charged_amount),0)-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id JOIN tenkhah_requests settled ON settled.id=s.tenkhah_request_id WHERE COALESCE(settled.beneficiary_user_id,settled.created_by_id)=$1),0)${registeredPettyCash})::text AS "unregisteredBalance",GREATEST(0,COALESCE(SUM(t.charged_amount),0)-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id JOIN tenkhah_requests settled ON settled.id=s.tenkhah_request_id WHERE COALESCE(settled.beneficiary_user_id,settled.created_by_id)=$1 AND s.status='completed'),0)${approvedPettyCash})::text AS "unsettledBalance",COALESCE(SUM(COALESCE(t.charged_amount,0)),0)::text AS "receivedAmount" FROM tenkhah_requests t WHERE COALESCE(t.beneficiary_user_id,t.created_by_id)=$1 AND t.status='charged'`, balanceBeneficiaryId);
+      return json(rows[0] || { unregisteredBalance: "0", unsettledBalance: "0", receivedAmount: "0" });
+    }
     const inbox = url.searchParams.get("inbox") === "1";
     const financeMember = await isFinanceUser(uid);
     // Finance is a shared queue.  Do not let an old individual assignee hide
