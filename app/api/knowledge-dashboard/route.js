@@ -23,7 +23,7 @@ const nameOf = (row) => row.name || row.username || `کاربر #${row.user_id}`
 
 export async function GET(request) {
   try {
-    const denied = await requirePagePermission(request, "درس‌آموخته‌ها", "داشبورد مدیریت دانش");
+    const denied = await requirePagePermission(request, "داشبورد مدیریت دانش", "نمایش منو");
     if (denied) return denied;
     if (!await getCurrentUser(request)) return json({ error: "unauthorized" }, 401);
     await ensureKnowledgeSchemas();
