@@ -283,7 +283,7 @@ async function handleMe(request) {
   }
 
   if (isSessionExpired(sess)) {
-    await logSessionEnd(sess.id);
+    await logSessionEnd(sess.id, sessionExpiresAt(sess));
     try { await prisma.session.delete({ where: { id: sess.id } }); } catch {}
     jar.set(COOKIE_NAME, "", { path: "/", maxAge: 0 });
     return json({ user: null });

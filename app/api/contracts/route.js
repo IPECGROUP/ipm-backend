@@ -627,11 +627,14 @@ async function buildContractData(body, existingId = "") {
 
 export async function GET(request) {
   try {
-    const denied = await requireContractPermission(request, "نمایش منو");
+    const url = new URL(request.url);
+    const requiredPermission = url.searchParams.get("dashboard") === "1"
+      ? "داشبورد مدیریت قراردادها"
+      : "نمایش منو";
+    const denied = await requireContractPermission(request, requiredPermission);
     if (denied) return denied;
     await ensureContractSchema();
 
-    const url = new URL(request.url);
     const id = trimString(url.searchParams.get("id"));
     const projectId = parseOptionalProjectId(url.searchParams.get("projectId") || url.searchParams.get("project_id"));
     const documentType = normalizeDocumentType(url.searchParams.get("documentType") || url.searchParams.get("document_type") || "");

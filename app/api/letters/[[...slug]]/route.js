@@ -1159,7 +1159,11 @@ async function tryDeleteAttachmentFiles(letters) {
 
 export async function GET(req, ctx) {
   try {
-    const denied = await requirePagePermission(req, "مدیریت اسناد", "نمایش منو");
+    const url = new URL(req.url);
+    const requiredPermission = url.searchParams.get("dashboard") === "1"
+      ? "داشبورد مدیریت اسناد"
+      : "نمایش منو";
+    const denied = await requirePagePermission(req, "مدیریت اسناد", requiredPermission);
     if (denied) return denied;
     const slug = await getSlug(ctx);
     const p0 = slug[0] || "";
