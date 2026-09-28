@@ -650,13 +650,16 @@ async function userContext(userId) {
 }
 
 export async function GET(req) {
-  const denied = await requirePagePermission(req, "درخواست تأمین", "نمایش منو");
+  const url = new URL(req.url);
+  const dashboardView = url.searchParams.get("dashboard") === "1";
+  const denied = dashboardView
+    ? await requirePagePermission(req, "درخواست تأمین", "داشبورد مدیریت تأمین")
+    : await requirePagePermission(req, "درخواست تأمین", "نمایش منو");
   if (denied) return denied;
   try {
     const userId = await getUserId(req);
     if (!userId) return json({ error: "unauthorized" }, 401);
 
-    const url = new URL(req.url);
     if (url.searchParams.get("nextRecipientsForCreate") === "1") {
       const creatorCtx = await userRoleAndUnitContext(userId);
       const targetRoleKey = nextRoleKeyForCreatorContext(creatorCtx);
@@ -692,7 +695,6 @@ export async function GET(req) {
     }
 
     const { mainAdmin } = await userContext(userId);
-    const dashboardView = url.searchParams.get("dashboard") === "1";
     const ownerOnly = url.searchParams.get("owner") === "me";
     const search = cleanText(url.searchParams.get("search") || "", 120);
     const requestedPage = Number(url.searchParams.get("page") || 1);

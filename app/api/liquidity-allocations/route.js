@@ -144,11 +144,16 @@ export async function GET(request) {
   try {
     const searchParams = new URL(request.url).searchParams;
     const requestedProjectId = Number(searchParams.get("projectId") || searchParams.get("project_id"));
+    const dashboardView = searchParams.get("dashboard") === "1";
+    if (dashboardView) {
+      const canViewDashboard = await hasPagePermission(request, "پیش‌بینی جریان نقدی", "داشبورد مدیریت مالی");
+      if (!canViewDashboard) return json({ error: "forbidden" }, 403);
+    }
     const canViewLiquidity = await hasPagePermission(request, "تخصیص نقدینگی", "نمایش منو");
     // A payment requester may see the read-only balance of the project being
     // selected, without being allowed to open the liquidity allocation page or
     // read balances/history of other projects.
-    if (!canViewLiquidity) {
+    if (!dashboardView && !canViewLiquidity) {
       const canViewPayment = Number.isInteger(requestedProjectId) && requestedProjectId > 0
         ? await hasPagePermission(request, "درخواست پرداخت", "نمایش منو")
         : false;
@@ -157,7 +162,6 @@ export async function GET(request) {
     await ensureLiquidityTable();
     // A dashboard reset is intentionally view-only.  The liquidity page and
     // payment-request validation must always use the real, current balances.
-    const dashboardView = searchParams.get("dashboard") === "1";
     const resets = dashboardView
       ? await prisma.$queryRawUnsafe("SELECT reset_at AS \"resetAt\" FROM financial_dashboard_resets ORDER BY id DESC LIMIT 1")
       : [];

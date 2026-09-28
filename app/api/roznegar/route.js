@@ -310,12 +310,15 @@ function mapEntry(row) {
 
 export async function GET(req) {
   try {
-    const denied = await requirePagePermission(req, "روزنگار پروژه", "نمایش منو");
+    const url = new URL(req.url);
+    const isDashboardRequest = parseBool(url.searchParams.get("dashboard"), false);
+    const denied = isDashboardRequest
+      ? await requirePagePermission(req, "کاربرگ مالی", "داشبورد مدیریت پروژه")
+      : await requirePagePermission(req, "روزنگار پروژه", "نمایش منو");
     if (denied) return denied;
     const userId = await getUserIdFromReq(req);
     if (!userId) return bad("unauthorized", 401);
 
-    const url = new URL(req.url);
     const projectIdParam = String(url.searchParams.get("projectId") || url.searchParams.get("project_id") || "").trim();
     const projectId = Number(projectIdParam);
     const dateYmd = String(url.searchParams.get("dateYmd") || url.searchParams.get("date_ymd") || "").trim();

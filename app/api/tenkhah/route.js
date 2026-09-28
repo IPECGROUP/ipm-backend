@@ -104,7 +104,7 @@ export async function GET(r) {
     await ensure(); const uid = await userIdOf(r); if (!uid) return json({ error: "unauthorized" }, 401);
     const url = new URL(r.url), recipientStage = url.searchParams.get("recipients"), balanceProjectId = +url.searchParams.get("projectBalances"), balanceBeneficiaryId = +url.searchParams.get("beneficiaryId");
     const dashboardReport = url.searchParams.get("dashboard") === "1";
-    if (dashboardReport) { const denied = await requirePagePermission(r, "داشبورد مدیریت مالی", "نمایش منو"); if (denied) return denied; }
+    if (dashboardReport) { const denied = await requirePagePermission(r, "پیش‌بینی جریان نقدی", "داشبورد مدیریت مالی"); if (denied) return denied; }
     const canViewAllRequests = dashboardReport || await isTenkhahRequestAdmin(uid);
     // Beneficiary selection is intentionally independent from administrative
     // role-management access. Return only the profile fields needed by the

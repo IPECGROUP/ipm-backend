@@ -1,4 +1,5 @@
 import { prisma } from "../../../lib/prisma";
+import { requirePagePermission } from "../../../lib/pagePermissions";
 import { getCurrentUser, ensureProjectLessonsSchema, noStoreJson as json } from "../project-lessons/_shared";
 
 export const runtime = "nodejs";
@@ -22,6 +23,8 @@ const nameOf = (row) => row.name || row.username || `کاربر #${row.user_id}`
 
 export async function GET(request) {
   try {
+    const denied = await requirePagePermission(request, "درس‌آموخته‌ها", "داشبورد مدیریت دانش");
+    if (denied) return denied;
     if (!await getCurrentUser(request)) return json({ error: "unauthorized" }, 401);
     await ensureKnowledgeSchemas();
     const [lessons, libraries, resources, lessonVisits, resourceVisits] = await Promise.all([

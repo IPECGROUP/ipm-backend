@@ -1027,19 +1027,16 @@ async function userNameMapForRows(rows = []) {
 // --- handlers
 export async function GET(req, ctx) {
   await ensurePaymentRequestCompatibility();
-  const denied = await requirePagePermission(req, "درخواست پرداخت", "نمایش منو");
+  const slug = await getSlug(ctx);
+  const url = new URL(req.url);
+  const dashboardReport = slug.length === 0 && url.searchParams.get("dashboard") === "1";
+  const denied = dashboardReport
+    ? await requirePagePermission(req, "پیش‌بینی جریان نقدی", "داشبورد مدیریت مالی")
+    : await requirePagePermission(req, "درخواست پرداخت", "نمایش منو");
   if (denied) return denied;
   const userId = await getUserId(req);
   if (!userId) return json({ error: "unauthorized" }, 401);
   const uctx = await getUserContext(req, userId);
-
-  const slug = await getSlug(ctx);
-  const url = new URL(req.url);
-  const dashboardReport = slug.length === 0 && url.searchParams.get("dashboard") === "1";
-  if (dashboardReport) {
-    const dashboardDenied = await requirePagePermission(req, "داشبورد مدیریت مالی", "نمایش منو");
-    if (dashboardDenied) return dashboardDenied;
-  }
 
   if (slug.length === 0 && url.searchParams.get("nextRecipientsForCreate") === "1") {
     const initialTarget = await resolveInitialWorkflowTarget(uctx, url.searchParams.get("projectId"));
