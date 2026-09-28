@@ -102,7 +102,7 @@ async function settlementRecipients(stage, excludeId) {
 export async function GET(r) {
   try {
     await ensure(); const uid = await userIdOf(r); if (!uid) return json({ error: "unauthorized" }, 401);
-    const url = new URL(r.url), recipientStage = url.searchParams.get("recipients"), balanceProjectId = +url.searchParams.get("projectBalances"), balanceBeneficiaryId = +url.searchParams.get("beneficiaryId");
+    const url = new URL(r.url), recipientStage = url.searchParams.get("recipients"), balanceBeneficiaryId = +url.searchParams.get("beneficiaryId");
     const dashboardReport = url.searchParams.get("dashboard") === "1";
     if (dashboardReport) { const denied = await requirePagePermission(r, "پیش‌بینی جریان نقدی", "داشبورد مدیریت مالی"); if (denied) return denied; }
     const canViewAllRequests = dashboardReport || await isTenkhahRequestAdmin(uid);
@@ -119,7 +119,11 @@ export async function GET(r) {
     if (url.searchParams.get("currentUserFinance") === "1") return json({ isFinance: await isFinanceUser(uid) });
     if (recipientStage === "finance_request_management") return json({ users: await financeRequesterManagementRecipients() });
     if (["control_project", "finance", "project_manager", "management"].includes(recipientStage)) return json({ users: await settlementRecipients(recipientStage, uid) });
-    if (balanceProjectId && balanceBeneficiaryId) { const rows = await prisma.$queryRawUnsafe(`SELECT COALESCE(SUM(GREATEST(0,COALESCE(t.charged_amount,0)-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id),0))),0)::text AS "unregisteredBalance",COALESCE(SUM(GREATEST(0,COALESCE(t.charged_amount,0)-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id AND s.status='completed'),0))),0)::text AS "unsettledBalance",COALESCE(SUM(COALESCE(t.charged_amount,0)),0)::text AS "receivedAmount" FROM tenkhah_requests t WHERE t.project_id=$1 AND COALESCE(t.beneficiary_user_id,t.created_by_id)=$2 AND t.status='charged'`, balanceProjectId, balanceBeneficiaryId); return json(rows[0] || { unregisteredBalance: "0", unsettledBalance: "0", receivedAmount: "0" }); }
+    // A petty-cash debt belongs to its beneficiary, not to the project that
+    // happened to be selected when it was requested.  Project remains on the
+    // request for budgeting and workflow, while every balance shown to the
+    // user is the aggregate across that beneficiary's projects.
+    if (balanceBeneficiaryId) { const rows = await prisma.$queryRawUnsafe(`SELECT COALESCE(SUM(GREATEST(0,COALESCE(t.charged_amount,0)-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id),0))),0)::text AS "unregisteredBalance",COALESCE(SUM(GREATEST(0,COALESCE(t.charged_amount,0)-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id AND s.status='completed'),0))),0)::text AS "unsettledBalance",COALESCE(SUM(COALESCE(t.charged_amount,0)),0)::text AS "receivedAmount" FROM tenkhah_requests t WHERE COALESCE(t.beneficiary_user_id,t.created_by_id)=$1 AND t.status='charged'`, balanceBeneficiaryId); return json(rows[0] || { unregisteredBalance: "0", unsettledBalance: "0", receivedAmount: "0" }); }
     const inbox = url.searchParams.get("inbox") === "1";
     const financeMember = await isFinanceUser(uid);
     // Finance is a shared queue.  Do not let an old individual assignee hide
