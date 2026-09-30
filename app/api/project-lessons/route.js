@@ -61,7 +61,7 @@ const parseLesson = (body) => ({
   solution: String(body.solution || "")
     .trim()
     .slice(0, 5000),
-  importance: String(body.importance || ""),
+  importance: String(body.importance || "medium"),
   impacts: list(body.impacts, 10),
   tagIds: list(body.tagIds),
   files: filesOf(body.files),
@@ -72,7 +72,6 @@ const validLesson = (lesson) =>
   lesson.category &&
   lesson.challenge &&
   lesson.solution &&
-  ["low", "medium", "high"].includes(lesson.importance) &&
   lesson.impacts.length &&
   lesson.tagIds.length;
 
