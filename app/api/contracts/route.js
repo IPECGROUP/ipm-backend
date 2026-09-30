@@ -569,12 +569,12 @@ async function buildContractData(body, existingId = "") {
   if (!documentType) return { error: "invalid_document_type" };
   if (!projectId) return { error: "project_required" };
   if (documentType === "main" && !contractNo) return { error: "contract_no_required" };
-  if (documentType !== "main" && !parentContractId) return { error: "parent_contract_required" };
+  if (documentType === "appendix" && !parentContractId) return { error: "parent_contract_required" };
   if (documentType === "sub" && !subContractNo) return { error: "sub_contract_no_required" };
 
   if (!(await projectExists(projectId))) return { error: "project_not_found" };
 
-  if (documentType !== "main") {
+  if (documentType === "appendix") {
     const parent = await getContractById(parentContractId);
     if (!parent) return { error: "parent_contract_not_found" };
     const parentProjectId = parent.projectId ?? parent.project_id;
@@ -597,7 +597,7 @@ async function buildContractData(body, existingId = "") {
       documentType,
       contractNo: documentType === "main" ? contractNo : null,
       subContractNo: documentType === "sub" ? subContractNo : null,
-      parentContractId: documentType === "main" ? null : parentContractId,
+      parentContractId: documentType === "appendix" ? parentContractId : null,
       relatedLetterId: relatedLetterIds[0] || null,
       relatedLetterIds,
       general: normalizeGeneralPayload(body),
