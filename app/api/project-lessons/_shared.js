@@ -100,6 +100,7 @@ async function createProjectLessonsSchema() {
   await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS project_lessons (
     id TEXT PRIMARY KEY,
     project_id INTEGER NOT NULL,
+    subject TEXT,
     category TEXT NOT NULL,
     challenge TEXT NOT NULL,
     solution TEXT NOT NULL,
@@ -115,6 +116,9 @@ async function createProjectLessonsSchema() {
     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
   )`);
 
+  await prisma.$executeRawUnsafe(
+    "ALTER TABLE project_lessons ADD COLUMN IF NOT EXISTS subject TEXT",
+  );
   await prisma.$executeRawUnsafe(
     "ALTER TABLE project_lessons ADD COLUMN IF NOT EXISTS view_count INTEGER NOT NULL DEFAULT 0",
   );

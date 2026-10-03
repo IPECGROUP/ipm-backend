@@ -34,6 +34,7 @@ const mapItem = (row) => ({
   projectId: row.project_id,
   projectName: row.project_name || "",
   projectCode: row.project_code || "",
+  subject: row.subject || "",
   category: row.category,
   challenge: row.challenge,
   solution: row.solution,
@@ -52,6 +53,9 @@ const mapItem = (row) => ({
 
 const parseLesson = (body) => ({
   projectId: Number(body.projectId),
+  subject: String(body.subject || "")
+    .trim()
+    .slice(0, 500),
   category: String(body.category || "")
     .trim()
     .slice(0, 200),
@@ -143,8 +147,8 @@ export async function POST(request) {
     await ensureSchema();
     const id = randomUUID();
     await prisma.$executeRaw`
-      INSERT INTO project_lessons (id,project_id,category,challenge,solution,importance,impacts,tag_ids,files,created_by_id,status)
-      VALUES (${id},${lesson.projectId},${lesson.category},${lesson.challenge},${lesson.solution},${lesson.importance},${JSON.stringify(lesson.impacts)}::jsonb,${JSON.stringify(lesson.tagIds)}::jsonb,${JSON.stringify(lesson.files)}::jsonb,${Number(user.id)},'pending')
+      INSERT INTO project_lessons (id,project_id,subject,category,challenge,solution,importance,impacts,tag_ids,files,created_by_id,status)
+      VALUES (${id},${lesson.projectId},${lesson.subject || null},${lesson.category},${lesson.challenge},${lesson.solution},${lesson.importance},${JSON.stringify(lesson.impacts)}::jsonb,${JSON.stringify(lesson.tagIds)}::jsonb,${JSON.stringify(lesson.files)}::jsonb,${Number(user.id)},'pending')
     `;
     return json({ ok: true, pending: true }, 201);
   } catch (error) {
@@ -177,8 +181,8 @@ export async function PATCH(request) {
     if (!project) return json({ error: "active_project_required" }, 400);
     const rows =
       action === "approve"
-        ? await prisma.$queryRaw`UPDATE project_lessons SET project_id=${lesson.projectId},category=${lesson.category},challenge=${lesson.challenge},solution=${lesson.solution},importance=${lesson.importance},impacts=${JSON.stringify(lesson.impacts)}::jsonb,tag_ids=${JSON.stringify(lesson.tagIds)}::jsonb,files=${JSON.stringify(lesson.files)}::jsonb,status='approved',reviewed_by_id=${Number(user.id)},reviewed_at=NOW() WHERE id=${id} AND status='pending' RETURNING *`
-        : await prisma.$queryRaw`UPDATE project_lessons SET project_id=${lesson.projectId},category=${lesson.category},challenge=${lesson.challenge},solution=${lesson.solution},importance=${lesson.importance},impacts=${JSON.stringify(lesson.impacts)}::jsonb,tag_ids=${JSON.stringify(lesson.tagIds)}::jsonb,files=${JSON.stringify(lesson.files)}::jsonb WHERE id=${id} RETURNING *`;
+        ? await prisma.$queryRaw`UPDATE project_lessons SET project_id=${lesson.projectId},subject=${lesson.subject || null},category=${lesson.category},challenge=${lesson.challenge},solution=${lesson.solution},importance=${lesson.importance},impacts=${JSON.stringify(lesson.impacts)}::jsonb,tag_ids=${JSON.stringify(lesson.tagIds)}::jsonb,files=${JSON.stringify(lesson.files)}::jsonb,status='approved',reviewed_by_id=${Number(user.id)},reviewed_at=NOW() WHERE id=${id} AND status='pending' RETURNING *`
+        : await prisma.$queryRaw`UPDATE project_lessons SET project_id=${lesson.projectId},subject=${lesson.subject || null},category=${lesson.category},challenge=${lesson.challenge},solution=${lesson.solution},importance=${lesson.importance},impacts=${JSON.stringify(lesson.impacts)}::jsonb,tag_ids=${JSON.stringify(lesson.tagIds)}::jsonb,files=${JSON.stringify(lesson.files)}::jsonb WHERE id=${id} RETURNING *`;
     if (!rows.length) return json({ error: "not_found" }, 404);
     return json({ item: await enrichedRow(rows[0], project) });
   } catch (error) {
