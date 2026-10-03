@@ -39,6 +39,8 @@ async function ensure() {
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS tenkhah_assignee_idx ON tenkhah_requests(current_assignee_user_id)");
     await prisma.$executeRawUnsafe("CREATE UNIQUE INDEX IF NOT EXISTS tenkhah_payment_request_idx ON tenkhah_requests(payment_request_id) WHERE payment_request_id IS NOT NULL");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS tenkhah_settlement_assignee_idx ON tenkhah_settlements(current_assignee_user_id)");
+    await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS tenkhah_settlements_request_id_idx ON tenkhah_settlements(tenkhah_request_id)");
+    await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS tenkhah_settlement_entries_settlement_id_idx ON tenkhah_settlement_entries(settlement_id)");
   })();
   return ready;
 }
@@ -144,10 +146,10 @@ export async function GET(r) {
       return json(balances);
     }
     const inbox = url.searchParams.get("inbox") === "1";
-    const financeMember = await isFinanceUser(uid);
+    const financeMember = dashboardReport ? false : await isFinanceUser(uid);
     // Finance is a shared queue.  Do not let an old individual assignee hide
     // the request from the other members of the finance unit.
-    const managementMember = await isManagementUser(uid);
+    const managementMember = dashboardReport ? false : await isManagementUser(uid);
     const sharedFinanceWhere = financeMember ? " OR (t.stage='finance' AND t.status='pending')" : "";
     const sharedManagementWhere = managementMember ? " OR (t.stage='management' AND t.status='pending')" : "";
     const historicalFinanceWhere = financeMember ? " OR COALESCE(t.workflow_history,'[]'::jsonb) @> '[{\"assignedToUnit\":\"finance\"}]'::jsonb" : "";
@@ -163,7 +165,7 @@ export async function GET(r) {
     const all = dashboardReport ? [] : await settlements(items.map(x => x.id)); const shown = inbox ? all.filter(s => +s.currentAssigneeUserId === uid && s.status === "pending") : all.filter(s => +s.createdById === uid || +s.currentAssigneeUserId === uid);
     return json({ items: items.map(x => ({
       ...x,
-      canAct: x.status === "pending" && (x.stage === "finance" ? financeMember : x.stage === "management" ? (x.currentAssigneeUserId ? +x.currentAssigneeUserId === uid : managementMember) : +x.currentAssigneeUserId === uid),
+      canAct: !dashboardReport && x.status === "pending" && (x.stage === "finance" ? financeMember : x.stage === "management" ? (x.currentAssigneeUserId ? +x.currentAssigneeUserId === uid : managementMember) : +x.currentAssigneeUserId === uid),
       canEdit: canViewAllRequests && !dashboardReport,
       settlements: all.filter(s => +s.tenkhahRequestId === +x.id),
     })), settlements: shown });

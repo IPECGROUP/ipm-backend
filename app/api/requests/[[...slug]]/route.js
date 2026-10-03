@@ -399,14 +399,22 @@ async function relatedLettersForRows(rows) {
     ? await prisma.project.findMany({ where: { id: { in: projectIds } }, select: { id: true, name: true, code: true } })
     : [];
   const projectById = new Map(projects.map((project) => [Number(project.id), `${project.code || ""}${project.name ? `${project.code ? " - " : ""}${project.name}` : ""}`]));
+  const letterById = new Map(letters.map((letter) => [Number(letter.id), letter]));
+  const letterByNumber = new Map();
+  for (const letter of letters) {
+    for (const number of [letter.letterNo, letter.secretariatNo]) {
+      const key = String(number ?? "").trim();
+      if (key && !letterByNumber.has(key)) letterByNumber.set(key, letter);
+    }
+  }
 
   const result = new Map();
   requestedByRow.forEach((rowRefs, rowId) => {
     result.set(rowId, rowRefs.map((ref) => {
       // Old requests sometimes stored letterNo. Prefer an explicit number
       // match over an id collision, otherwise use the current database id.
-      const byNumber = letters.find((letter) => String(letter.letterNo ?? "").trim() === ref || String(letter.secretariatNo ?? "").trim() === ref);
-      const byId = /^\d+$/.test(ref) ? letters.find((letter) => Number(letter.id) === Number(ref)) : null;
+      const byNumber = letterByNumber.get(ref);
+      const byId = /^\d+$/.test(ref) ? letterById.get(Number(ref)) : null;
       const letter = byNumber || byId;
       return letter ? serializeRelatedLetter(letter, ref, projectById.get(Number(letter.projectId)) || "") : null;
     }).filter(Boolean));
@@ -1036,6 +1044,34 @@ export async function GET(req, ctx) {
   if (denied) return denied;
   const userId = await getUserId(req);
   if (!userId) return json({ error: "unauthorized" }, 401);
+  if (dashboardReport) {
+    const reportOptions = {
+      where: paymentRequestOnlyWhere,
+      orderBy: { id: "desc" },
+      take: 5000,
+    };
+    const creator = { select: { name: true, username: true, email: true } };
+    let rows;
+    try {
+      rows = await prisma.paymentRequest.findMany({
+        ...reportOptions,
+        include: { createdBy: creator, project: { select: { name: true, code: true } } },
+      });
+    } catch (error) {
+      console.error("dashboard_requests_project_include_fallback", error);
+      rows = await prisma.paymentRequest.findMany({ ...reportOptions, include: { createdBy: creator } });
+    }
+    // Reporting needs every request, but never its cartable permissions or
+    // workflow recipient lookups. Keep preview names and letter details.
+    const [userNamesById, relatedLettersByRequest] = await Promise.all([
+      userNameMapForRows(rows),
+      relatedLettersForRows(rows),
+    ]);
+    return json({ items: rows.map((row) => ({
+      ...normalizeOut(row, userNamesById),
+      relatedLetters: relatedLettersByRequest.get(String(row.id)) || [],
+    })) });
+  }
   const uctx = await getUserContext(req, userId);
 
   if (slug.length === 0 && url.searchParams.get("nextRecipientsForCreate") === "1") {

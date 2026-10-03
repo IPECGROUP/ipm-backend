@@ -256,6 +256,35 @@ export async function GET(request) {
     const recipients = url.searchParams.get("recipients");
     if (recipients === "project_manager") return json({ users: await workflowMembers("project_manager") });
 
+    if (url.searchParams.get("summary") === "received-details") {
+      const projectId = Number(url.searchParams.get("projectId")) || 0;
+      if (!projectId) return json({ error: "project_id_required" }, 400);
+
+      // Keep this list tied to the exact inputs of the total displayed in the
+      // "My petty cash" table: charged requests for this beneficiary and this
+      // project only.  Do not expose other beneficiaries' payment details.
+      const rows = await prisma.$queryRawUnsafe(`
+        SELECT t.id,t.request_number AS "requestNumber",t.request_date AS "requestDate",
+          t.charged_date AS "chargedDate",t.purpose,t.currency,
+          COALESCE(t.charged_amount,0)::text AS "chargedAmount",
+          COALESCE(t.cash_payment_amount,0)::text AS "cashPaymentAmount",
+          t.cash_payment_currency AS "cashPaymentCurrency",t.cash_payment_method AS "cashPaymentMethod",
+          COALESCE(t.credit_payment_amount,0)::text AS "creditPaymentAmount",
+          t.credit_payment_currency AS "creditPaymentCurrency",t.credit_payment_description AS "creditPaymentDescription",
+          p.code AS "projectCode",p.name AS "projectName",beneficiary.name AS "beneficiaryName",beneficiary.username AS "beneficiaryUsername"
+        FROM tenkhah_requests t
+        INNER JOIN projects p ON p.id=t.project_id
+        LEFT JOIN "User" beneficiary ON beneficiary.id=COALESCE(t.beneficiary_user_id,t.created_by_id)
+        WHERE COALESCE(t.beneficiary_user_id,t.created_by_id)=$1
+          AND t.project_id=$2
+          AND t.status='charged'
+        ORDER BY t.charged_date DESC NULLS LAST,t.created_at DESC,t.id DESC
+      `, userId, projectId);
+      const items = rows.map((row) => ({ ...row, id: Number(row.id) }));
+      const total = items.reduce((sum, item) => sum + BigInt(item.chargedAmount || "0"), 0n);
+      return json({ items, total: total.toString() });
+    }
+
     if (url.searchParams.get("summary") === "mine") {
       const rows = await prisma.$queryRawUnsafe(`
         WITH received AS (

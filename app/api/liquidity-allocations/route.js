@@ -149,7 +149,7 @@ export async function GET(request) {
       const canViewDashboard = await hasPagePermission(request, "پیش‌بینی جریان نقدی", "داشبورد مدیریت مالی");
       if (!canViewDashboard) return json({ error: "forbidden" }, 403);
     }
-    const canViewLiquidity = await hasPagePermission(request, "تخصیص نقدینگی", "نمایش منو");
+    const canViewLiquidity = dashboardView ? false : await hasPagePermission(request, "تخصیص نقدینگی", "نمایش منو");
     // A payment requester may see the read-only balance of the project being
     // selected, without being allowed to open the liquidity allocation page or
     // read balances/history of other projects.
@@ -177,7 +177,7 @@ export async function GET(request) {
         where: { projectId: { not: null }, ...(resetAt ? { createdAt: { gt: resetAt } } : {}) },
         select: { projectId: true, currencyTypeId: true, amount: true, cashAmount: true, creditAmount: true, status: true, historyJson: true },
       }),
-      prisma.$queryRawUnsafe(`
+      dashboardView ? Promise.resolve([]) : prisma.$queryRawUnsafe(`
         SELECT id, batch_id AS "batchId", allocation_date AS "allocationDate", source,
           available_amount::text AS "availableAmount", description, project_id AS "projectId",
           amount::text AS amount, row_type AS "rowType", created_at AS "createdAt"
@@ -222,6 +222,9 @@ export async function GET(request) {
         expenseCount: result.expenseCount[key] || 0,
       };
     });
+    // The dashboard only consumes project totals. Avoid reading and assembling
+    // the full allocation history for every dashboard visit.
+    if (dashboardView) return json({ projects: result.projects });
     const projectById = new Map(projectRecords.map((project) => [String(project.id), project]));
     const historyByBatch = new Map();
     for (const row of historyRows) {
