@@ -2,7 +2,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 export const runtime = "nodejs";
 let ready;
-const allowed = new Set(["document", "liquidity"]);
+const allowed = new Set(["document", "liquidity", "worksheet-receipt"]);
 const category = (request) => new URL(request.url).searchParams.get("category") || "";
 async function ensure() { if (!ready) ready = prisma.$executeRawUnsafe("CREATE TABLE IF NOT EXISTS financial_base_options (id SERIAL PRIMARY KEY, category VARCHAR(20) NOT NULL, title TEXT NOT NULL, created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP, UNIQUE(category,title))"); return ready; }
 export async function GET(request) { try { await ensure(); const c = category(request); if (!allowed.has(c)) return NextResponse.json({ error: "invalid_category" }, { status: 400 }); const items = await prisma.$queryRawUnsafe("SELECT id,title FROM financial_base_options WHERE category=$1 ORDER BY id", c); return NextResponse.json({ items }); } catch { return NextResponse.json({ error: "internal_error" }, { status: 500 }); } }
