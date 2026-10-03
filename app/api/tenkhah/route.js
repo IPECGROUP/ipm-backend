@@ -162,9 +162,26 @@ export async function GET(r) {
     const items = await requests(canViewAllRequests ? "" : inbox
       ? `WHERE t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${beneficiaryWhere}${sharedFinanceWhere}${sharedManagementWhere}${historicalFinanceWhere}${historicalManagementWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND s.current_assignee_user_id=$1)`
       : `WHERE t.created_by_id=$1 OR t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${beneficiaryWhere}${sharedFinanceWhere}${sharedManagementWhere}${historicalFinanceWhere}${historicalManagementWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND (s.current_assignee_user_id=$1 OR s.created_by_id=$1))`, canViewAllRequests ? [] : [uid]);
+    const managementApproverIds = dashboardReport
+      ? [...new Set(items.flatMap((item) => (Array.isArray(item.workflowHistory) ? item.workflowHistory : [])
+        .filter((entry) => entry?.stage === "management" && ["approve", "approved"].includes(entry?.type))
+        .map((entry) => Number(entry?.byUserId))
+        .filter(Number.isInteger)))]
+      : [];
+    const managementApprovers = managementApproverIds.length
+      ? await prisma.user.findMany({ where: { id: { in: managementApproverIds } }, select: { id: true, name: true, username: true, email: true } })
+      : [];
+    const managementApproverById = new Map(managementApprovers.map((person) => [Number(person.id), person.name || person.username || person.email || null]));
+    const managementApproverByRequestId = new Map(items.map((item) => {
+      const approval = [...(Array.isArray(item.workflowHistory) ? item.workflowHistory : [])]
+        .reverse()
+        .find((entry) => entry?.stage === "management" && ["approve", "approved"].includes(entry?.type));
+      return [Number(item.id), managementApproverById.get(Number(approval?.byUserId)) || null];
+    }));
     const all = dashboardReport ? [] : await settlements(items.map(x => x.id)); const shown = inbox ? all.filter(s => +s.currentAssigneeUserId === uid && s.status === "pending") : all.filter(s => +s.createdById === uid || +s.currentAssigneeUserId === uid);
     return json({ items: items.map(x => ({
       ...x,
+      managementApprover: dashboardReport ? managementApproverByRequestId.get(Number(x.id)) || null : null,
       canAct: !dashboardReport && x.status === "pending" && (x.stage === "finance" ? financeMember : x.stage === "management" ? (x.currentAssigneeUserId ? +x.currentAssigneeUserId === uid : managementMember) : +x.currentAssigneeUserId === uid),
       canEdit: canViewAllRequests && !dashboardReport,
       settlements: all.filter(s => +s.tenkhahRequestId === +x.id),
