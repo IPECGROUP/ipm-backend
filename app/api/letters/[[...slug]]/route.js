@@ -314,15 +314,12 @@ const LETTER_LIST_SELECT = {
   updatedAt: true,
 };
 
-// The dashboard aggregates only these fields. Keeping its query separate
-// prevents attachment blobs and document-editor fields from being serialized
-// for every letter on page load.
+// Read only fields needed for dashboard aggregation; the response contains
+// the finished panels rather than one JSON object per letter.
 const LETTER_DASHBOARD_SELECT = {
-  id: true,
   kind: true,
   docClass: true,
   classificationLabel: true,
-  classificationId: true,
   projectId: true,
   tagIds: true,
   toName: true,
@@ -330,6 +327,118 @@ const LETTER_DASHBOARD_SELECT = {
   receiverName: true,
   createdAt: true,
 };
+
+const DASHBOARD_METRICS = [
+  ["total", "کل اسناد ثبت‌شده"],
+  ["incoming", "اسناد وارده"],
+  ["outgoing", "اسناد صادره"],
+  ["internal", "اسناد داخلی"],
+  ["confidential", "اسناد محرمانه"],
+];
+const DASHBOARD_MONTH_FORMATTER = new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric", month: "2-digit" });
+
+function dashboardMonth(date) {
+  const parts = DASHBOARD_MONTH_FORMATTER.formatToParts(date);
+  const digits = (value) => Number(String(value).replace(/[۰-۹]/g, (digit) => "۰۱۲۳۴۵۶۷۸۹".indexOf(digit)).replace(/[٠-٩]/g, (digit) => "٠١٢٣٤٥٦٧٨٩".indexOf(digit)));
+  return { year: digits(parts.find((part) => part.type === "year")?.value), month: digits(parts.find((part) => part.type === "month")?.value) };
+}
+
+function dashboardKind(raw) {
+  const value = String(raw || "").toLowerCase();
+  if (value.includes("internal") || value.includes("داخلی")) return "internal";
+  if (value.includes("out") || value.includes("صادر")) return "outgoing";
+  return "incoming";
+}
+
+function dashboardMetrics(counts) {
+  return DASHBOARD_METRICS.map(([key, label]) => ({ key, label, value: counts[key] }));
+}
+
+function rankDashboardCounts(counts, limit) {
+  return [...counts.entries()]
+    .map(([label, value]) => ({ key: label, label, value }))
+    .sort((a, b) => b.value - a.value || a.label.localeCompare(b.label, "fa"))
+    .slice(0, limit);
+}
+
+function buildDocumentsDashboard(letters, projects, tags, canSeeConfidential) {
+  const emptyCounts = () => ({ total: 0, incoming: 0, outgoing: 0, internal: 0, confidential: 0 });
+  const all = emptyCounts();
+  const previousMonth = emptyCounts();
+  const previousWeek = emptyCounts();
+  const now = Date.now();
+  const currentMonth = dashboardMonth(new Date(now));
+  const priorMonth = currentMonth.month === 1
+    ? { year: currentMonth.year - 1, month: 12 }
+    : { year: currentMonth.year, month: currentMonth.month - 1 };
+  const weekStart = now - 14 * 86400000;
+  const weekEnd = now - 7 * 86400000;
+  const recipientCounts = new Map();
+  const tagCounts = new Map();
+  const projectCounts = new Map();
+  let earliest = Infinity;
+
+  for (const letter of letters) {
+    const classification = letter.classificationLabel ?? letter.classification?.label ?? decodeClassificationDocClassFallback(letter.docClass);
+    const confidential = isConfidentialLabel(classification);
+    if (confidential && !canSeeConfidential) continue;
+    const kind = dashboardKind(letter.kind);
+    const date = new Date(letter.createdAt);
+    const timestamp = date.getTime();
+    const add = (counts) => {
+      counts.total += 1;
+      counts[kind] += 1;
+      if (confidential) counts.confidential += 1;
+    };
+    add(all);
+    if (Number.isFinite(timestamp)) {
+      earliest = Math.min(earliest, timestamp);
+      if (timestamp >= weekStart && timestamp < weekEnd) add(previousWeek);
+      if (timestamp >= now - 65 * 86400000 && timestamp <= now) {
+        const month = dashboardMonth(date);
+        if (month.year === priorMonth.year && month.month === priorMonth.month) add(previousMonth);
+      }
+    }
+    const recipient = String(letter.toName || letter.receiverName || letter.orgName || "").trim();
+    if (recipient) recipientCounts.set(recipient, (recipientCounts.get(recipient) || 0) + 1);
+    if (letter.projectId != null) {
+      const id = String(letter.projectId);
+      const counts = projectCounts.get(id) || { incoming: 0, outgoing: 0, internal: 0 };
+      counts[kind] += 1;
+      projectCounts.set(id, counts);
+    }
+    if (Array.isArray(letter.tagIds)) {
+      for (const value of letter.tagIds) {
+        const id = String(typeof value === "object" && value !== null ? value.id ?? value.tagId : value);
+        if (id && id !== "undefined" && id !== "null") tagCounts.set(id, (tagCounts.get(id) || 0) + 1);
+      }
+    }
+  }
+
+  const spanDays = Number.isFinite(earliest) ? Math.max(1, Math.ceil((now - earliest) / 86400000) + 1) : 1;
+  const tagLabels = new Map(tags.map((tag) => [String(tag.id), tag.label || `برچسب ${tag.id}`]));
+  const labelCounts = new Map();
+  for (const [id, count] of tagCounts) {
+    const label = tagLabels.get(id) || `برچسب ${id}`;
+    labelCounts.set(label, (labelCounts.get(label) || 0) + count);
+  }
+  return {
+    statistics: {
+      all: dashboardMetrics(all),
+      previousMonth: dashboardMetrics(previousMonth),
+      previousWeek: dashboardMetrics(previousWeek),
+    },
+    dashboardData: {
+      recipients: rankDashboardCounts(recipientCounts, 5),
+      averages: { month: all.total / (spanDays / 30.4375), week: all.total / (spanDays / 7), day: all.total / spanDays },
+      projects: projects.filter((project) => /^\d{3}$/.test(String(project.code || "").replace(/[۰-۹]/g, (digit) => "۰۱۲۳۴۵۶۷۸۹".indexOf(digit)).replace(/[٠-٩]/g, (digit) => "٠١٢٣٤٥٦٧٨٩".indexOf(digit)).trim())).map((project) => {
+        const counts = projectCounts.get(String(project.id)) || { incoming: 0, outgoing: 0, internal: 0 };
+        return { id: project.id, label: `${project.code ? `${project.code} - ` : ""}${project.name || "پروژه بدون نام"}`, ...counts, total: counts.incoming + counts.outgoing + counts.internal };
+      }),
+      tags: rankDashboardCounts(labelCounts, 10),
+    },
+  };
+}
 
 async function safeLetterFindMany(args = {}) {
   try {
@@ -1266,7 +1375,6 @@ export async function GET(req, ctx) {
     if (dashboardView) {
       const [letters, projects, tags] = await Promise.all([
         safeLetterFindMany({
-          orderBy: { id: "desc" },
           select: LETTER_DASHBOARD_SELECT,
         }),
         prisma.project.findMany({
@@ -1280,13 +1388,7 @@ export async function GET(req, ctx) {
           orderBy: { label: "asc" },
         }),
       ]);
-      return json({
-        items: letters
-          .map((letter) => toSnakeLetter(letter, { includeAttachments: false }))
-          .filter((letter) => canViewConfidentialLetter(letter, viewer.canSeeConfidential)),
-        projects,
-        tags,
-      });
+      return json(buildDocumentsDashboard(letters, projects, tags, viewer.canSeeConfidential));
     }
     const items = (await listLetters({ createdBy: null })).filter((it) =>
       canViewConfidentialLetter(it, viewer.canSeeConfidential)
