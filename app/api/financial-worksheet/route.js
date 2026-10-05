@@ -197,12 +197,22 @@ export async function POST(request) {
 
 export async function DELETE(request) {
   try {
-    const denied = await requirePagePermission(request, "کاربرگ مالی", "صورت وضعیت‌ها");
-    if (denied) return denied;
-    await ensureSchema();
     const { searchParams } = new URL(request.url);
     const id = trimString(searchParams.get("id"));
     if (!id) return json({ error: "id_required" }, 400);
+    const [statementDenied, receiptDenied] = await Promise.all([
+      requirePagePermission(request, "کاربرگ مالی", "صورت وضعیت‌ها"),
+      requirePagePermission(request, "کاربرگ مالی", "دریافتی‌ها"),
+    ]);
+    if (statementDenied && receiptDenied) return statementDenied;
+    await ensureSchema();
+    const rows = await prisma.$queryRaw`
+      SELECT "kind" FROM "financial_worksheet" WHERE "id" = ${id} LIMIT 1
+    `;
+    const kind = Array.isArray(rows) ? rows[0]?.kind : null;
+    if (!kind) return json({ error: "not_found" }, 404);
+    const denied = kind === "receipts" ? receiptDenied : statementDenied;
+    if (denied) return denied;
 
     await prisma.$executeRaw`
       DELETE FROM "financial_worksheet"

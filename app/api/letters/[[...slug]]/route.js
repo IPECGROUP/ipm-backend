@@ -314,6 +314,23 @@ const LETTER_LIST_SELECT = {
   updatedAt: true,
 };
 
+// The dashboard aggregates only these fields. Keeping its query separate
+// prevents attachment blobs and document-editor fields from being serialized
+// for every letter on page load.
+const LETTER_DASHBOARD_SELECT = {
+  id: true,
+  kind: true,
+  docClass: true,
+  classificationLabel: true,
+  classificationId: true,
+  projectId: true,
+  tagIds: true,
+  toName: true,
+  orgName: true,
+  receiverName: true,
+  createdAt: true,
+};
+
 async function safeLetterFindMany(args = {}) {
   try {
     if (args?.select) {
@@ -1160,7 +1177,8 @@ async function tryDeleteAttachmentFiles(letters) {
 export async function GET(req, ctx) {
   try {
     const url = new URL(req.url);
-    const requiredPermission = url.searchParams.get("dashboard") === "1"
+    const dashboardView = url.searchParams.get("dashboard") === "1";
+    const requiredPermission = dashboardView
       ? "داشبورد مدیریت اسناد"
       : "نمایش منو";
     const denied = await requirePagePermission(req, "مدیریت اسناد", requiredPermission);
@@ -1245,6 +1263,31 @@ export async function GET(req, ctx) {
     }
 
     const viewer = await getViewerAccessInfo(req);
+    if (dashboardView) {
+      const [letters, projects, tags] = await Promise.all([
+        safeLetterFindMany({
+          orderBy: { id: "desc" },
+          select: LETTER_DASHBOARD_SELECT,
+        }),
+        prisma.project.findMany({
+          where: { isActive: true },
+          select: { id: true, code: true, name: true, isActive: true },
+          orderBy: { code: "asc" },
+        }),
+        prisma.tag.findMany({
+          where: { scope: "letters" },
+          select: { id: true, label: true },
+          orderBy: { label: "asc" },
+        }),
+      ]);
+      return json({
+        items: letters
+          .map((letter) => toSnakeLetter(letter, { includeAttachments: false }))
+          .filter((letter) => canViewConfidentialLetter(letter, viewer.canSeeConfidential)),
+        projects,
+        tags,
+      });
+    }
     const items = (await listLetters({ createdBy: null })).filter((it) =>
       canViewConfidentialLetter(it, viewer.canSeeConfidential)
     );
