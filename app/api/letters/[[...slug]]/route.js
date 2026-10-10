@@ -1198,7 +1198,7 @@ async function listLetters({ createdBy = null, includePublic = false } = {}) {
 
   const items = await safeLetterFindMany({
     where,
-    orderBy: { id: "desc" },
+    orderBy: [{ letterDate: "desc" }, { createdAt: "desc" }, { id: "desc" }],
   });
   return items.map(toSnakeLetter);
 }
