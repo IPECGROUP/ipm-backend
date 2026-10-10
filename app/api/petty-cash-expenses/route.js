@@ -193,6 +193,19 @@ async function ensureTable() {
     `);
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_settlement_reports_project_idx ON petty_cash_settlement_reports(project_id)");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_settlement_report_items_report_idx ON petty_cash_settlement_report_items(report_id)");
+    await prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS petty_cash_expense_reports (
+        id SERIAL PRIMARY KEY,
+        report_name VARCHAR(180) NOT NULL,
+        project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
+        created_by_id INTEGER NOT NULL,
+        submission_key UUID NOT NULL UNIQUE,
+        created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS expense_report_id INTEGER REFERENCES petty_cash_expense_reports(id) ON DELETE RESTRICT");
+    await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expense_reports_creator_idx ON petty_cash_expense_reports(created_by_id)");
+    await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expenses_report_idx ON petty_cash_expenses(expense_report_id)");
   })();
   return ready;
 }
@@ -251,6 +264,30 @@ export async function GET(request) {
     await ensureTable();
     const userId = await userIdOf(request);
     if (!userId) return json({ error: "unauthorized" }, 401);
+    const reportUrl = new URL(request.url);
+    if (reportUrl.searchParams.get("expenseReports") === "mine") {
+      const reports = await prisma.$queryRawUnsafe(`
+        SELECT r.id,r.report_name AS "reportName",r.project_id AS "projectId",r.created_at AS "createdAt",
+          p.code AS "projectCode",p.name AS "projectName"
+        FROM petty_cash_expense_reports r INNER JOIN projects p ON p.id=r.project_id
+        WHERE r.created_by_id=$1 ORDER BY r.created_at DESC,r.id DESC
+      `, userId);
+      const expenses = await prisma.$queryRawUnsafe(`
+        SELECT e.id,e.expense_report_id AS "reportId",e.expense_date AS "expenseDate",e.description,
+          e.budget_code AS "budgetCode",e.amount::text AS amount,e.file_name AS "fileName",e.file_url AS "fileUrl",
+          e.stage,manager.name AS "projectManagerName"
+        FROM petty_cash_expenses e INNER JOIN petty_cash_expense_reports r ON r.id=e.expense_report_id
+        LEFT JOIN "User" manager ON manager.id=e.project_manager_id
+        WHERE r.created_by_id=$1 ORDER BY e.id
+      `, userId);
+      const byReport = new Map();
+      expenses.forEach((expense) => {
+        const id = Number(expense.reportId);
+        if (!byReport.has(id)) byReport.set(id, []);
+        byReport.get(id).push({ ...expense, id: Number(expense.id), reportId: id });
+      });
+      return json({ items: reports.map((report) => ({ ...report, id: Number(report.id), items: byReport.get(Number(report.id)) || [] })) });
+    }
     await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe("SELECT pg_advisory_xact_lock(91827461)");
       await repairOutlierSettlementReportNumbers(tx);
@@ -418,6 +455,49 @@ export async function POST(request) {
     const userId = await userIdOf(request);
     if (!userId) return json({ error: "unauthorized" }, 401);
     const body = await request.json().catch(() => ({}));
+    if (body.action === "create_expense_report") {
+      const projectId = Number(body.projectId);
+      const reportName = String(body.reportName || "").trim();
+      const submissionKey = String(body.submissionKey || "");
+      if (!Number.isInteger(projectId) || projectId <= 0 || !reportName || reportName.length > 180 ||
+        !/^[a-f0-9]{8}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{4}-[a-f0-9]{12}$/i.test(submissionKey)) return json({ error: "invalid_report" }, 400);
+      const entries = Array.isArray(body.items) ? body.items : [];
+      if (!entries.length || entries.length > 500) return json({ error: "at_least_one_expense_required" }, 400);
+      const expenses = entries.map((entry) => ({
+        expenseDate: normalizeDigits(entry.expenseDate).trim(), description: String(entry.description || "").trim(),
+        budgetCode: String(entry.budgetCode || "").trim(), amount: asAmount(entry.amount),
+        fileName: String(entry.fileName || "").trim(), fileUrl: String(entry.fileUrl || "").trim(),
+      }));
+      if (expenses.some((expense) => !/^\d{4}[/-](0[1-9]|1[0-2])[/-](0[1-9]|[12]\d|3[01])$/.test(expense.expenseDate) ||
+        !expense.description || !expense.budgetCode || expense.budgetCode.length > 80 || expense.amount <= 0n || expense.amount > 9223372036854775807n ||
+        !expense.fileName || expense.fileName.length > 180 || !/^\/uploads\/petty-cash-expenses\/[a-f0-9-]+\.(jpg|jpeg|png|webp)$/.test(expense.fileUrl))) return json({ error: "required_expense_fields" }, 400);
+      const report = await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe("SELECT pg_advisory_xact_lock($1)", userId);
+        const existing = await tx.$queryRawUnsafe('SELECT id,created_by_id AS "createdById" FROM petty_cash_expense_reports WHERE submission_key=$1::uuid', submissionKey);
+        if (existing.length) {
+          if (Number(existing[0].createdById) !== userId) throw new RouteError("not_allowed", 403);
+          return { id: Number(existing[0].id) };
+        }
+        const project = await tx.project.findFirst({ where: { id: projectId, isActive: true }, select: { id: true } });
+        if (!project) throw new RouteError("active_project_not_found", 404);
+        const codes = [...new Set(expenses.map((expense) => expense.budgetCode))];
+        const budgets = await tx.costBreakdownItem.findMany({ where: { projectId, budgetCode: { in: codes } }, select: { budgetCode: true } });
+        if (codes.some((code) => !budgets.some((budget) => budget.budgetCode === code))) throw new RouteError("budget_code_not_found", 400);
+        const inserted = await tx.$queryRawUnsafe(`
+          INSERT INTO petty_cash_expense_reports (report_name,project_id,created_by_id,submission_key)
+          VALUES ($1,$2,$3,$4::uuid) RETURNING id
+        `, reportName, projectId, userId, submissionKey);
+        const reportId = Number(inserted[0].id);
+        // One bulk insert keeps the complete report atomic, including every expense.
+        await tx.$executeRawUnsafe(`
+          INSERT INTO petty_cash_expenses (project_id,expense_date,description,budget_code,amount,created_by_id,file_name,file_url,expense_report_id)
+          SELECT $1,x."expenseDate",x.description,x."budgetCode",x.amount::bigint,$2,x."fileName",x."fileUrl",$3
+          FROM jsonb_to_recordset($4::jsonb) AS x("expenseDate" text,description text,"budgetCode" text,amount text,"fileName" text,"fileUrl" text)
+        `, projectId, userId, reportId, JSON.stringify(expenses.map((expense) => ({ ...expense, amount: String(expense.amount) }))));
+        return { id: reportId };
+      });
+      return json({ ok: true, item: report }, 201);
+    }
     if (body.action === "create_settlement_report") {
       const expenseIds = [...new Set((Array.isArray(body.expenseIds) ? body.expenseIds : []).map(Number).filter((id) => Number.isInteger(id) && id > 0))];
       if (!expenseIds.length) return json({ error: "at_least_one_expense_required" }, 400);
