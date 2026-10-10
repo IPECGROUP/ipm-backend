@@ -168,6 +168,8 @@ async function ensureTable() {
     // CREATE TABLE IF NOT EXISTS does not add columns to installations that
     // already have an older version of this runtime-managed table.
     await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS rejected_by_id INTEGER");
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS file_name VARCHAR(180)");
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS file_url TEXT");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expenses_project_idx ON petty_cash_expenses(project_id)");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expenses_assignee_idx ON petty_cash_expenses(project_manager_id, stage)");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expenses_creator_idx ON petty_cash_expenses(created_by_id)");
@@ -223,6 +225,7 @@ function itemFromRow(row) {
   return {
     id: Number(row.id), projectId: Number(row.projectId), projectCode: row.projectCode, projectName: row.projectName,
     expenseDate: row.expenseDate, description: row.description, budgetCode: row.budgetCode, amount: String(row.amount),
+    fileName: row.fileName || null, fileUrl: row.fileUrl || null,
     stage: row.stage, planningStatus: row.planningStatus, planningById: row.planningById,
     planningByName: row.planningByName, planningByUsername: row.planningByUsername, planningAt: row.planningAt,
     projectManagerId: row.projectManagerId, projectManagerStatus: row.projectManagerStatus,
@@ -347,7 +350,7 @@ export async function GET(request) {
       if (reportId && !reportRows.length) return json({ error: "report_not_found" }, 404);
       if (!reportId) return json({ items: reportRows.map(reportFromRow) });
       const expenseRows = await prisma.$queryRawUnsafe(`
-        SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,
+        SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,e.file_name AS "fileName",e.file_url AS "fileUrl",
           e.stage,e.planning_status AS "planningStatus",e.planning_by_id AS "planningById",planner.name AS "planningByName",planner.username AS "planningByUsername",e.planning_at AS "planningAt",
           e.project_manager_id AS "projectManagerId",e.project_manager_status AS "projectManagerStatus",e.project_manager_by_id AS "projectManagerById",manager.name AS "projectManagerByName",manager.username AS "projectManagerByUsername",e.project_manager_at AS "projectManagerAt",
           e.created_by_id AS "createdById",expense_creator.name AS "createdByName",expense_creator.username AS "createdByUsername",r.id AS "settlementReportId",r.report_number AS "settlementReportNumber"
@@ -368,7 +371,7 @@ export async function GET(request) {
     const expenseId = Number(url.searchParams.get("expenseId")) || 0;
     if (inbox) {
       const rows = await prisma.$queryRawUnsafe(`
-        SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,
+        SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,e.file_name AS "fileName",e.file_url AS "fileUrl",
           e.stage,e.planning_status AS "planningStatus",e.planning_by_id AS "planningById",planner.name AS "planningByName",planner.username AS "planningByUsername",e.planning_at AS "planningAt",
           e.project_manager_id AS "projectManagerId",e.project_manager_status AS "projectManagerStatus",e.project_manager_by_id AS "projectManagerById",manager.name AS "projectManagerByName",manager.username AS "projectManagerByUsername",e.project_manager_at AS "projectManagerAt",
           e.created_by_id AS "createdById",creator.name AS "createdByName",creator.username AS "createdByUsername",NULL::int AS "settlementReportId",NULL::text AS "settlementReportNumber"
@@ -387,7 +390,7 @@ export async function GET(request) {
 
     const projectId = Number(url.searchParams.get("projectId")) || 0;
     const rows = await prisma.$queryRawUnsafe(`
-      SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,
+      SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,e.file_name AS "fileName",e.file_url AS "fileUrl",
         e.stage,e.planning_status AS "planningStatus",e.planning_by_id AS "planningById",planner.name AS "planningByName",planner.username AS "planningByUsername",e.planning_at AS "planningAt",
         e.project_manager_id AS "projectManagerId",e.project_manager_status AS "projectManagerStatus",e.project_manager_by_id AS "projectManagerById",manager.name AS "projectManagerByName",manager.username AS "projectManagerByUsername",e.project_manager_at AS "projectManagerAt",
         e.created_by_id AS "createdById",creator.name AS "createdByName",creator.username AS "createdByUsername",report.id AS "settlementReportId",report.report_number AS "settlementReportNumber"
@@ -455,6 +458,9 @@ export async function POST(request) {
     const description = String(body.description || "").trim();
     const budgetCode = String(body.budgetCode || "").trim();
     const amount = asAmount(body.amount);
+    const fileName = String(body.fileName || "").trim().slice(0, 180) || null;
+    const fileUrl = String(body.fileUrl || "").trim() || null;
+    if (fileUrl && !/^\/uploads\/petty-cash-expenses\/[a-f0-9-]+\.[a-z0-9]+$/.test(fileUrl)) return json({ error: "invalid_attachment" }, 400);
     if (!projectId || !expenseDate || !description || !budgetCode || amount <= 0n) return json({ error: "invalid_input" }, 400);
     const [project, budget] = await Promise.all([
       prisma.project.findFirst({ where: { id: projectId, isActive: true }, select: { id: true } }),
@@ -463,10 +469,10 @@ export async function POST(request) {
     if (!project) return json({ error: "active_project_not_found" }, 404);
     if (!budget) return json({ error: "budget_code_not_found" }, 400);
     const rows = await prisma.$queryRawUnsafe(`
-      INSERT INTO petty_cash_expenses (project_id,expense_date,description,budget_code,amount,created_by_id)
-      VALUES ($1,$2,$3,$4,$5::bigint,$6)
+      INSERT INTO petty_cash_expenses (project_id,expense_date,description,budget_code,amount,created_by_id,file_name,file_url)
+      VALUES ($1,$2,$3,$4,$5::bigint,$6,$7,$8)
       RETURNING id
-    `, projectId, expenseDate, description, budgetCode, String(amount), userId);
+    `, projectId, expenseDate, description, budgetCode, String(amount), userId, fileName, fileUrl);
     return json({ ok: true, id: Number(rows[0].id) }, 201);
   } catch (error) {
     console.error("petty_cash_expenses_post_error", error);
@@ -485,8 +491,11 @@ export async function PATCH(request) {
     const id = Number(body.id);
     if (body.action === "update") {
       const projectId = Number(body.projectId), expenseDate = String(body.expenseDate || "").trim(), description = String(body.description || "").trim(), budgetCode = String(body.budgetCode || "").trim(), amount = asAmount(body.amount);
+      const fileName = String(body.fileName || "").trim().slice(0, 180) || null;
+      const fileUrl = String(body.fileUrl || "").trim() || null;
+      if (fileUrl && !/^\/uploads\/petty-cash-expenses\/[a-f0-9-]+\.[a-z0-9]+$/.test(fileUrl)) return json({ error: "invalid_attachment" }, 400);
       if (!id || !projectId || !expenseDate || !description || !budgetCode || amount <= 0n) return json({ error: "invalid_input" }, 400);
-      const changed = await prisma.$executeRawUnsafe("UPDATE petty_cash_expenses SET expense_date=$1,description=$2,budget_code=$3,amount=$4::bigint,updated_at=CURRENT_TIMESTAMP WHERE id=$5 AND project_id=$6 AND created_by_id=$7 AND stage='planning'", expenseDate, description, budgetCode, String(amount), id, projectId, userId);
+      const changed = await prisma.$executeRawUnsafe("UPDATE petty_cash_expenses SET expense_date=$1,description=$2,budget_code=$3,amount=$4::bigint,file_name=$8,file_url=$9,updated_at=CURRENT_TIMESTAMP WHERE id=$5 AND project_id=$6 AND created_by_id=$7 AND stage='planning'", expenseDate, description, budgetCode, String(amount), id, projectId, userId, fileName, fileUrl);
       if (!changed) return json({ error: "not_allowed" }, 403);
       return json({ ok: true });
     }
