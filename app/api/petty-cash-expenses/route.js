@@ -268,8 +268,9 @@ export async function GET(request) {
     if (reportUrl.searchParams.get("expenseReports") === "mine") {
       const reports = await prisma.$queryRawUnsafe(`
         SELECT r.id,r.report_name AS "reportName",r.project_id AS "projectId",r.created_at AS "createdAt",
-          p.code AS "projectCode",p.name AS "projectName"
+          p.code AS "projectCode",p.name AS "projectName",creator.name AS "createdByName",creator.username AS "createdByUsername"
         FROM petty_cash_expense_reports r INNER JOIN projects p ON p.id=r.project_id
+        LEFT JOIN "User" creator ON creator.id=r.created_by_id
         WHERE r.created_by_id=$1 ORDER BY r.created_at DESC,r.id DESC
       `, userId);
       const expenses = await prisma.$queryRawUnsafe(`
