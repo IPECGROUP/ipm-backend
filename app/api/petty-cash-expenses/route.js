@@ -15,11 +15,12 @@ class RouteError extends Error {
 }
 
 async function userIdOf(request) {
-  const raw = request.headers.get("x-user-id") || cookie(request, "user_id");
-  if (/^\d+$/.test(raw)) return Number(raw);
   const sessionId = cookie(request, "ipm_session");
   const session = sessionId && await prisma.session.findUnique({ where: { id: sessionId } }).catch(() => null);
-  return session && !isSessionExpired(session) ? session.userId : (process.env.NODE_ENV !== "production" ? 1 : null);
+  if (session && !isSessionExpired(session)) return session.userId;
+  if (process.env.NODE_ENV === "production") return null;
+  const raw = request.headers.get("x-user-id") || cookie(request, "user_id");
+  return /^\d+$/.test(raw) ? Number(raw) : 1;
 }
 
 function normalized(value = "") {
@@ -135,9 +136,12 @@ function asAmount(value) {
 function belongsToWorkflowUnit(stage, unit) {
   const name = normalized(unit?.name);
   const code = normalized(unit?.code);
-  const values = `${name} ${code}`;
-  if (stage === "planning") return values.includes("برنامه ریزی") || values.includes("برنامه‌ریزی") || values.includes("planning");
-  return values.includes("مدیریت پروژه") || values.includes("project management");
+  const values = `${name} ${code}`.replace(/\u200c/g, " ");
+  if (stage === "planning") return /برنامه ریزی|کنترل پروژه|planning|project control/.test(values);
+  if (stage === "project_manager") return /مدیریت پروژه|project management/.test(values);
+  if (stage === "finance") return /مالی|حسابداری|finance|accounting/.test(values);
+  if (stage === "management") return /مدیریت|management/.test(values) && !/مدیریت پروژه|project management|مالی|finance|accounting|کنترل پروژه/.test(values);
+  return false;
 }
 
 let ready;
@@ -206,28 +210,72 @@ async function ensureTable() {
     await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS expense_report_id INTEGER REFERENCES petty_cash_expense_reports(id) ON DELETE RESTRICT");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expense_reports_creator_idx ON petty_cash_expense_reports(created_by_id)");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expenses_report_idx ON petty_cash_expenses(expense_report_id)");
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expense_reports ADD COLUMN IF NOT EXISTS workflow_version INTEGER NOT NULL DEFAULT 1");
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expense_reports ADD COLUMN IF NOT EXISTS review_history JSONB NOT NULL DEFAULT '[]'::jsonb");
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expense_reports ADD COLUMN IF NOT EXISTS review_notes TEXT NOT NULL DEFAULT ''");
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expense_reports ADD COLUMN IF NOT EXISTS initial_stage VARCHAR(32) NOT NULL DEFAULT 'planning'");
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expense_reports ADD COLUMN IF NOT EXISTS updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP");
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS return_stage VARCHAR(32)");
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS review_status VARCHAR(20) NOT NULL DEFAULT 'pending'");
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS review_note TEXT NOT NULL DEFAULT ''");
   })();
   return ready;
 }
 
-async function workflowMembers(stage) {
+async function workflowRoster() {
   const mappedRows = await prisma.$queryRawUnsafe(`
     SELECT DISTINCT urm."userId" AS "userId", unit.name AS "unitName", unit.code AS "unitCode"
     FROM "UserRoleMap" urm
     INNER JOIN "UnitRoleMap" unit_role ON unit_role."roleId" = urm."roleId"
     INNER JOIN "Unit" unit ON unit.id = unit_role."unitId"
   `).catch(() => []);
-  const mappedIds = new Set(mappedRows
-    .filter((row) => belongsToWorkflowUnit(stage, { name: row.unitName, code: row.unitCode }))
-    .map((row) => Number(row.userId)));
   const users = await prisma.user.findMany({
     where: { isActive: true },
     include: { units: { include: { unit: true } } },
     orderBy: { id: "asc" },
   });
-  return users
-    .filter((user) => mappedIds.has(user.id) || user.units.some((link) => belongsToWorkflowUnit(stage, link.unit)))
-    .map((user) => ({ id: user.id, name: user.name, username: user.username, email: user.email }));
+  return Object.fromEntries(["planning", "project_manager", "finance", "management"].map((stage) => {
+    const mappedIds = new Set(mappedRows.filter((row) => belongsToWorkflowUnit(stage, { name: row.unitName, code: row.unitCode })).map((row) => Number(row.userId)));
+    return [stage, users.filter((user) => mappedIds.has(user.id) || (user.units || []).some((link) => belongsToWorkflowUnit(stage, link.unit)))
+      .map((user) => ({ id: user.id, name: user.name, username: user.username, email: user.email }))];
+  }));
+}
+
+async function workflowMembers(stage) { return (await workflowRoster())[stage] || []; }
+
+function canReviewExpense(expense, userId, roster) {
+  const stage = expense.stage;
+  if (!roster[stage]?.some((user) => Number(user.id) === Number(userId))) return false;
+  return stage !== "project_manager" || Number(expense.projectManagerId ?? expense.project_manager_id) === Number(userId);
+}
+
+async function expenseReportsFor(userId, roster, inbox = false) {
+  const reports = await prisma.$queryRawUnsafe(`
+    SELECT r.id,r.report_name AS "reportName",r.project_id AS "projectId",r.created_at AS "createdAt",
+      r.created_by_id AS "createdById",r.workflow_version AS version,r.review_history AS "historyJson",r.review_notes AS "reviewNotes",r.updated_at AS "updatedAt",
+      p.code AS "projectCode",p.name AS "projectName",creator.name AS "createdByName",creator.username AS "createdByUsername"
+    FROM petty_cash_expense_reports r INNER JOIN projects p ON p.id=r.project_id
+    LEFT JOIN "User" creator ON creator.id=r.created_by_id
+    WHERE r.created_by_id=$1 OR EXISTS (
+      SELECT 1 FROM petty_cash_expenses e WHERE e.expense_report_id=r.id AND (
+        (e.stage='planning' AND $2::boolean) OR (e.stage='project_manager' AND e.project_manager_id=$1 AND $3::boolean)
+        OR (e.stage='finance' AND $4::boolean) OR (e.stage='management' AND $5::boolean)))
+      OR EXISTS (SELECT 1 FROM jsonb_array_elements(r.review_history) h WHERE (h->>'userId')::int=$1)
+    ORDER BY r.created_at DESC,r.id DESC
+  `, userId, roster.planning.some((u) => u.id === userId), roster.project_manager.some((u) => u.id === userId), roster.finance.some((u) => u.id === userId), roster.management.some((u) => u.id === userId));
+  if (!reports.length) return [];
+  const expenses = await prisma.$queryRawUnsafe(`
+    SELECT e.id,e.expense_report_id AS "reportId",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",
+      e.amount::text AS amount,e.file_name AS "fileName",e.file_url AS "fileUrl",e.stage,e.review_status AS "reviewStatus",e.review_note AS "reviewNote",
+      e.project_manager_id AS "projectManagerId",manager.name AS "projectManagerName"
+    FROM petty_cash_expenses e LEFT JOIN "User" manager ON manager.id=e.project_manager_id
+    WHERE e.expense_report_id=ANY($1::int[]) ORDER BY e.id
+  `, reports.map((r) => Number(r.id)));
+  return reports.map((report) => {
+    const items = expenses.filter((e) => Number(e.reportId) === Number(report.id)).map((e) => ({ ...e, id: Number(e.id), canAct: canReviewExpense(e, userId, roster) }));
+    const canRevise = Number(report.createdById) === userId && items.some((e) => e.stage === "revision");
+    return { ...report, id: Number(report.id), canAct: items.some((e) => e.canAct), canRevise, items, notificationTarget: "petty_cash_report", title: report.reportName, requestNumber: report.reportName };
+  }).filter((report) => !inbox || report.canAct || report.canRevise);
 }
 
 async function isMember(userId, stage) {
@@ -265,30 +313,11 @@ export async function GET(request) {
     const userId = await userIdOf(request);
     if (!userId) return json({ error: "unauthorized" }, 401);
     const reportUrl = new URL(request.url);
-    if (reportUrl.searchParams.get("expenseReports") === "mine") {
-      const reports = await prisma.$queryRawUnsafe(`
-        SELECT r.id,r.report_name AS "reportName",r.project_id AS "projectId",r.created_at AS "createdAt",
-          p.code AS "projectCode",p.name AS "projectName",creator.name AS "createdByName",creator.username AS "createdByUsername"
-        FROM petty_cash_expense_reports r INNER JOIN projects p ON p.id=r.project_id
-        LEFT JOIN "User" creator ON creator.id=r.created_by_id
-        WHERE r.created_by_id=$1 ORDER BY r.created_at DESC,r.id DESC
-      `, userId);
-      const expenses = await prisma.$queryRawUnsafe(`
-        SELECT e.id,e.expense_report_id AS "reportId",e.expense_date AS "expenseDate",e.description,
-          e.budget_code AS "budgetCode",e.amount::text AS amount,e.file_name AS "fileName",e.file_url AS "fileUrl",
-          e.stage,manager.name AS "projectManagerName"
-        FROM petty_cash_expenses e INNER JOIN petty_cash_expense_reports r ON r.id=e.expense_report_id
-        LEFT JOIN "User" manager ON manager.id=e.project_manager_id
-        WHERE r.created_by_id=$1 ORDER BY e.id
-      `, userId);
-      const byReport = new Map();
-      expenses.forEach((expense) => {
-        const id = Number(expense.reportId);
-        if (!byReport.has(id)) byReport.set(id, []);
-        byReport.get(id).push({ ...expense, id: Number(expense.id), reportId: id });
-      });
-      return json({ items: reports.map((report) => ({ ...report, id: Number(report.id), items: byReport.get(Number(report.id)) || [] })) });
+    if (reportUrl.searchParams.has("expenseReports")) {
+      const roster = await workflowRoster();
+      return json({ items: await expenseReportsFor(userId, roster) });
     }
+    const reportInbox = reportUrl.searchParams.get("inbox") === "1" ? await expenseReportsFor(userId, await workflowRoster(), true) : [];
     await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe("SELECT pg_advisory_xact_lock(91827461)");
       await repairOutlierSettlementReportNumbers(tx);
@@ -419,11 +448,12 @@ export async function GET(request) {
         LEFT JOIN "User" planner ON planner.id=e.planning_by_id
         LEFT JOIN "User" manager ON manager.id=e.project_manager_by_id
         WHERE ($1::int=0 OR e.id=$1)
+          AND e.expense_report_id IS NULL
           AND ((e.stage='planning' AND e.planning_status='pending' AND $2::boolean)
             OR (e.stage='project_manager' AND e.project_manager_status='pending' AND e.project_manager_id=$3))
         ORDER BY e.created_at DESC,e.id DESC
       `, expenseId, isPlanning, userId);
-      return json({ items: rows.map(itemFromRow), viewer: { userId, isPlanning, isProjectManager } });
+      return json({ items: [...reportInbox, ...rows.map(itemFromRow)], viewer: { userId, isPlanning, isProjectManager } });
     }
 
     const projectId = Number(url.searchParams.get("projectId")) || 0;
@@ -472,6 +502,9 @@ export async function POST(request) {
       if (expenses.some((expense) => !/^\d{4}[/-](0[1-9]|1[0-2])[/-](0[1-9]|[12]\d|3[01])$/.test(expense.expenseDate) ||
         !expense.description || !expense.budgetCode || expense.budgetCode.length > 80 || expense.amount <= 0n || expense.amount > 9223372036854775807n ||
         !expense.fileName || expense.fileName.length > 180 || !/^\/uploads\/petty-cash-expenses\/[a-f0-9-]+\.(jpg|jpeg|png|webp)$/.test(expense.fileUrl))) return json({ error: "required_expense_fields" }, 400);
+      const roster = await workflowRoster();
+      const initialStage = roster.finance.some((user) => user.id === userId) ? "management" : "planning";
+      if (!roster[initialStage].length) return json({ error: "workflow_recipients_missing" }, 400);
       const report = await prisma.$transaction(async (tx) => {
         await tx.$executeRawUnsafe("SELECT pg_advisory_xact_lock($1)", userId);
         const existing = await tx.$queryRawUnsafe('SELECT id,created_by_id AS "createdById" FROM petty_cash_expense_reports WHERE submission_key=$1::uuid', submissionKey);
@@ -485,17 +518,17 @@ export async function POST(request) {
         const budgets = await tx.costBreakdownItem.findMany({ where: { projectId, budgetCode: { in: codes } }, select: { budgetCode: true } });
         if (codes.some((code) => !budgets.some((budget) => budget.budgetCode === code))) throw new RouteError("budget_code_not_found", 400);
         const inserted = await tx.$queryRawUnsafe(`
-          INSERT INTO petty_cash_expense_reports (report_name,project_id,created_by_id,submission_key)
-          VALUES ($1,$2,$3,$4::uuid) RETURNING id
-        `, reportName, projectId, userId, submissionKey);
+          INSERT INTO petty_cash_expense_reports (report_name,project_id,created_by_id,submission_key,initial_stage,review_history)
+          VALUES ($1,$2,$3,$4::uuid,$5,$6::jsonb) RETURNING id
+        `, reportName, projectId, userId, submissionKey, initialStage, JSON.stringify([{ userId, action: "submitted", stage: initialStage, at: new Date().toISOString() }]));
         const reportId = Number(inserted[0].id);
         // One bulk insert keeps the complete report atomic, including every expense.
         await tx.$executeRawUnsafe(`
-          INSERT INTO petty_cash_expenses (project_id,expense_date,description,budget_code,amount,created_by_id,file_name,file_url,expense_report_id)
-          SELECT $1,x."expenseDate",x.description,x."budgetCode",x.amount::bigint,$2,x."fileName",x."fileUrl",$3
+          INSERT INTO petty_cash_expenses (project_id,expense_date,description,budget_code,amount,created_by_id,file_name,file_url,expense_report_id,stage)
+          SELECT $1,x."expenseDate",x.description,x."budgetCode",x.amount::bigint,$2,x."fileName",x."fileUrl",$3,$5
           FROM jsonb_to_recordset($4::jsonb) AS x("expenseDate" text,description text,"budgetCode" text,amount text,"fileName" text,"fileUrl" text)
-        `, projectId, userId, reportId, JSON.stringify(expenses.map((expense) => ({ ...expense, amount: String(expense.amount) }))));
-        return { id: reportId };
+        `, projectId, userId, reportId, JSON.stringify(expenses.map((expense) => ({ ...expense, amount: String(expense.amount) }))), initialStage);
+        return { id: reportId, stage: initialStage };
       });
       return json({ ok: true, item: report }, 201);
     }
@@ -570,13 +603,109 @@ export async function PATCH(request) {
     if (!userId) return json({ error: "unauthorized" }, 401);
     const body = await request.json().catch(() => ({}));
     const id = Number(body.id);
+    if (body.action === "review_report") {
+      const reportId = Number(body.reportId), version = Number(body.expectedVersion);
+      const decision = String(body.decision || ""), note = String(body.note || "").trim();
+      if (!Number.isInteger(reportId) || reportId <= 0 || !Number.isInteger(version) || version <= 0 || !["approve", "reject", "revision"].includes(decision) || note.length > 500) return json({ error: "invalid_input" }, 400);
+      const rowDecisions = body.rowDecisions && typeof body.rowDecisions === "object" && !Array.isArray(body.rowDecisions) ? body.rowDecisions : {};
+      if (Object.values(rowDecisions).some((value) => !["approve", "reject", "revision"].includes(value))) return json({ error: "invalid_input" }, 400);
+      const roster = await workflowRoster();
+      await prisma.$transaction(async (tx) => {
+        const reports = await tx.$queryRawUnsafe("SELECT * FROM petty_cash_expense_reports WHERE id=$1 FOR UPDATE", reportId);
+        const report = reports[0];
+        if (!report) throw new RouteError("report_not_found", 404);
+        if (Number(report.workflow_version) !== version) throw new RouteError("workflow_changed", 409);
+        const expenses = await tx.$queryRawUnsafe("SELECT * FROM petty_cash_expenses WHERE expense_report_id=$1 ORDER BY id FOR UPDATE", reportId);
+        const actionable = expenses.filter((expense) => canReviewExpense(expense, userId, roster));
+        if (!actionable.length || Object.keys(rowDecisions).some((key) => !actionable.some((e) => String(e.id) === key))) throw new RouteError("not_allowed", 403);
+        const choices = actionable.map((expense) => ({ expense, decision: decision === "approve" ? rowDecisions[expense.id] || decision : decision }));
+        const projectManagerId = Number(body.projectManagerId) || null;
+        if (choices.some((choice) => choice.expense.stage === "planning" && choice.decision === "approve") &&
+          !roster.project_manager.some((user) => user.id === projectManagerId)) throw new RouteError("invalid_project_manager", 400);
+        if (choices.some((choice) => choice.expense.stage === "project_manager" && choice.decision === "approve") && !roster.finance.length) throw new RouteError("workflow_recipients_missing", 400);
+        const changes = [];
+        for (const choice of choices) {
+          const expense = choice.expense;
+          const nextStage = choice.decision === "reject" ? "rejected" : choice.decision === "revision" ? "revision"
+            : expense.stage === "planning" ? "project_manager" : expense.stage === "project_manager" ? "finance" : "completed";
+          const status = choice.decision === "approve" ? "approved" : choice.decision === "reject" ? "rejected" : "revision";
+          await tx.$executeRawUnsafe(`
+            UPDATE petty_cash_expenses SET stage=$1,review_status=$2::text,review_note=$3,
+              return_stage=CASE WHEN $2='revision' THEN stage ELSE NULL END,
+              project_manager_id=CASE WHEN stage='planning' AND $2='approved' THEN $4::int ELSE project_manager_id END,
+              planning_status=CASE WHEN stage='planning' THEN $2 ELSE planning_status END,
+              planning_by_id=CASE WHEN stage='planning' THEN $5::int ELSE planning_by_id END,
+              planning_at=CASE WHEN stage='planning' THEN CURRENT_TIMESTAMP ELSE planning_at END,
+              project_manager_status=CASE WHEN stage='project_manager' THEN $2 ELSE project_manager_status END,
+              project_manager_by_id=CASE WHEN stage='project_manager' THEN $5::int ELSE project_manager_by_id END,
+              project_manager_at=CASE WHEN stage='project_manager' THEN CURRENT_TIMESTAMP ELSE project_manager_at END,
+              rejected_by_id=CASE WHEN $2='rejected' THEN $5::int ELSE rejected_by_id END,updated_at=CURRENT_TIMESTAMP
+            WHERE id=$6
+          `, nextStage, status, note, projectManagerId, userId, Number(expense.id));
+          changes.push({ id: Number(expense.id), fromStage: expense.stage, toStage: nextStage, decision: choice.decision });
+        }
+        await tx.$executeRawUnsafe(`UPDATE petty_cash_expense_reports SET workflow_version=workflow_version+1,
+          review_history=review_history || $1::jsonb,review_notes=$2,updated_at=CURRENT_TIMESTAMP WHERE id=$3`,
+        JSON.stringify([{ userId, action: decision, note, changes, at: new Date().toISOString() }]), note, reportId);
+      });
+      return json({ ok: true });
+    }
+    if (body.action === "resubmit_report") {
+      const reportId = Number(body.reportId), version = Number(body.expectedVersion);
+      const reportName = String(body.reportName || "").trim();
+      const entries = Array.isArray(body.items) ? body.items : [];
+      if (!Number.isInteger(reportId) || reportId <= 0 || !Number.isInteger(version) || !reportName || reportName.length > 180 || !entries.length || entries.length > 500) return json({ error: "invalid_report" }, 400);
+      const normalizedEntries = entries.map((entry) => ({ id: Number(entry.id) || 0, expenseDate: normalizeDigits(entry.expenseDate).trim(),
+        description: String(entry.description || "").trim(), budgetCode: String(entry.budgetCode || "").trim(), amount: asAmount(entry.amount),
+        fileName: String(entry.fileName || "").trim(), fileUrl: String(entry.fileUrl || "").trim() }));
+      if (normalizedEntries.some((entry) => !/^\d{4}[/-](0[1-9]|1[0-2])[/-](0[1-9]|[12]\d|3[01])$/.test(entry.expenseDate) || !entry.description || !entry.budgetCode || entry.budgetCode.length > 80 ||
+        entry.amount <= 0n || entry.amount > 9223372036854775807n || !entry.fileName || entry.fileName.length > 180 || !/^\/uploads\/petty-cash-expenses\/[a-f0-9-]+\.(jpg|jpeg|png|webp)$/.test(entry.fileUrl))) return json({ error: "required_expense_fields" }, 400);
+      const roster = await workflowRoster();
+      await prisma.$transaction(async (tx) => {
+        const reports = await tx.$queryRawUnsafe("SELECT * FROM petty_cash_expense_reports WHERE id=$1 FOR UPDATE", reportId);
+        const report = reports[0];
+        if (!report || Number(report.created_by_id) !== userId) throw new RouteError("not_allowed", 403);
+        if (Number(report.workflow_version) !== version) throw new RouteError("workflow_changed", 409);
+        const existing = await tx.$queryRawUnsafe("SELECT * FROM petty_cash_expenses WHERE expense_report_id=$1 ORDER BY id FOR UPDATE", reportId);
+        if (!existing.some((e) => e.stage === "revision")) throw new RouteError("not_allowed", 403);
+        if (new Set(normalizedEntries.filter((e) => e.id).map((e) => e.id)).size !== normalizedEntries.filter((e) => e.id).length ||
+          existing.some((e) => !normalizedEntries.some((entry) => entry.id === Number(e.id))) || normalizedEntries.some((entry) => entry.id && !existing.some((e) => Number(e.id) === entry.id))) throw new RouteError("invalid_input", 400);
+        const codes = [...new Set(normalizedEntries.map((entry) => entry.budgetCode))];
+        const budgets = await tx.costBreakdownItem.findMany({ where: { projectId: Number(report.project_id), budgetCode: { in: codes } }, select: { budgetCode: true } });
+        if (codes.some((code) => !budgets.some((budget) => budget.budgetCode === code))) throw new RouteError("budget_code_not_found", 400);
+        const changes = [];
+        for (const entry of normalizedEntries) {
+          const previous = existing.find((e) => Number(e.id) === entry.id);
+          if (previous && previous.stage !== "revision") {
+            if (entry.expenseDate !== previous.expense_date || entry.description !== previous.description || entry.budgetCode !== previous.budget_code || String(entry.amount) !== String(previous.amount) || entry.fileUrl !== previous.file_url || entry.fileName !== previous.file_name) throw new RouteError("not_allowed", 403);
+            continue;
+          }
+          const stage = previous?.return_stage || report.initial_stage;
+          if (!["planning", "project_manager", "finance", "management"].includes(stage)) throw new RouteError("invalid_input", 400);
+          if (!roster[stage].length) throw new RouteError("workflow_recipients_missing", 400);
+          if (stage === "project_manager" && !roster.project_manager.some((u) => u.id === Number(previous?.project_manager_id))) throw new RouteError("invalid_project_manager", 400);
+          if (previous) {
+            await tx.$executeRawUnsafe(`UPDATE petty_cash_expenses SET expense_date=$1,description=$2,budget_code=$3,amount=$4::bigint,file_name=$5,file_url=$6,
+              stage=$7,return_stage=NULL,review_status='pending',review_note='',updated_at=CURRENT_TIMESTAMP WHERE id=$8`,
+            entry.expenseDate, entry.description, entry.budgetCode, String(entry.amount), entry.fileName, entry.fileUrl, stage, entry.id);
+          } else {
+            await tx.$executeRawUnsafe(`INSERT INTO petty_cash_expenses (project_id,expense_date,description,budget_code,amount,created_by_id,file_name,file_url,expense_report_id,stage)
+              VALUES ($1,$2,$3,$4,$5::bigint,$6,$7,$8,$9,$10)`, Number(report.project_id), entry.expenseDate, entry.description, entry.budgetCode, String(entry.amount), userId, entry.fileName, entry.fileUrl, reportId, stage);
+          }
+          changes.push({ id: entry.id, toStage: stage });
+        }
+        await tx.$executeRawUnsafe(`UPDATE petty_cash_expense_reports SET report_name=$1,workflow_version=workflow_version+1,
+          review_history=review_history || $2::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$3`, reportName, JSON.stringify([{ userId, action: "resubmitted", changes, at: new Date().toISOString() }]), reportId);
+      });
+      return json({ ok: true, item: { id: reportId } });
+    }
     if (body.action === "update") {
       const projectId = Number(body.projectId), expenseDate = String(body.expenseDate || "").trim(), description = String(body.description || "").trim(), budgetCode = String(body.budgetCode || "").trim(), amount = asAmount(body.amount);
       const fileName = String(body.fileName || "").trim().slice(0, 180) || null;
       const fileUrl = String(body.fileUrl || "").trim() || null;
       if (fileUrl && !/^\/uploads\/petty-cash-expenses\/[a-f0-9-]+\.[a-z0-9]+$/.test(fileUrl)) return json({ error: "invalid_attachment" }, 400);
       if (!id || !projectId || !expenseDate || !description || !budgetCode || amount <= 0n) return json({ error: "invalid_input" }, 400);
-      const changed = await prisma.$executeRawUnsafe("UPDATE petty_cash_expenses SET expense_date=$1,description=$2,budget_code=$3,amount=$4::bigint,file_name=$8,file_url=$9,updated_at=CURRENT_TIMESTAMP WHERE id=$5 AND project_id=$6 AND created_by_id=$7 AND stage='planning'", expenseDate, description, budgetCode, String(amount), id, projectId, userId, fileName, fileUrl);
+      const changed = await prisma.$executeRawUnsafe("UPDATE petty_cash_expenses SET expense_date=$1,description=$2,budget_code=$3,amount=$4::bigint,file_name=$8,file_url=$9,updated_at=CURRENT_TIMESTAMP WHERE id=$5 AND project_id=$6 AND created_by_id=$7 AND stage='planning' AND expense_report_id IS NULL", expenseDate, description, budgetCode, String(amount), id, projectId, userId, fileName, fileUrl);
       if (!changed) return json({ error: "not_allowed" }, 403);
       return json({ ok: true });
     }
@@ -585,6 +714,7 @@ export async function PATCH(request) {
     const expenseRows = await prisma.$queryRawUnsafe("SELECT * FROM petty_cash_expenses WHERE id=$1", id);
     const expense = expenseRows[0];
     if (!expense) return json({ error: "not_found" }, 404);
+    if (expense.expense_report_id) return json({ error: "not_allowed" }, 403);
 
     if (expense.stage === "planning") {
       if (!(await isMember(userId, "planning"))) return json({ error: "not_allowed" }, 403);
@@ -613,6 +743,7 @@ export async function PATCH(request) {
     return json({ error: "already_processed" }, 400);
   } catch (error) {
     console.error("petty_cash_expenses_patch_error", error);
+    if (error instanceof RouteError) return json({ error: error.code }, error.status);
     return json({ error: "internal_error" }, 500);
   }
 }
@@ -629,7 +760,7 @@ export async function DELETE(request) {
       // tenkhah_requests or any other payment-request data.
       const result = await prisma.$transaction(async (tx) => {
         const expenses = await tx.$queryRawUnsafe(
-          "SELECT id FROM petty_cash_expenses WHERE created_by_id=$1",
+          "SELECT id FROM petty_cash_expenses WHERE created_by_id=$1 AND expense_report_id IS NULL",
           userId,
         );
         const reports = await tx.$queryRawUnsafe(
@@ -653,7 +784,7 @@ export async function DELETE(request) {
     }
     const ids = [...new Set((Array.isArray(body.ids) ? body.ids : []).map(Number).filter((id) => Number.isInteger(id) && id > 0))];
     if (!ids.length) return json({ error: "invalid_input" }, 400);
-    const deleted = await prisma.$executeRawUnsafe("DELETE FROM petty_cash_expenses WHERE id=ANY($1::int[]) AND created_by_id=$2 AND stage='planning'", ids, userId);
+    const deleted = await prisma.$executeRawUnsafe("DELETE FROM petty_cash_expenses WHERE id=ANY($1::int[]) AND created_by_id=$2 AND stage='planning' AND expense_report_id IS NULL", ids, userId);
     if (!deleted) return json({ error: "not_allowed" }, 403);
     return json({ ok: true, deleted: Number(deleted) });
   } catch (error) {
