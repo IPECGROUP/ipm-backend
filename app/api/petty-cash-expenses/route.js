@@ -517,6 +517,22 @@ export async function POST(request) {
         }
         const project = await tx.project.findFirst({ where: { id: projectId, isActive: true }, select: { id: true } });
         if (!project) throw new RouteError("active_project_not_found", 404);
+        const [balance] = await tx.$queryRawUnsafe(`
+          SELECT COALESCE((
+            SELECT SUM(COALESCE(t.charged_amount,0))
+            FROM tenkhah_requests t
+            WHERE COALESCE(t.beneficiary_user_id,t.created_by_id)=$1 AND t.status='charged'
+          ),0)::text AS "receivedAmount",
+          COALESCE((
+            SELECT SUM(e.amount) FROM petty_cash_expenses e WHERE e.created_by_id=$1
+          ),0)::text AS "registeredAmount"
+        `, userId);
+        const receivedAmount = BigInt(balance?.receivedAmount || "0");
+        const registeredAmount = BigInt(balance?.registeredAmount || "0");
+        const availableAmount = receivedAmount > registeredAmount ? receivedAmount - registeredAmount : 0n;
+        const reportAmount = expenses.reduce((sum, expense) => sum + expense.amount, 0n);
+        if (receivedAmount <= 0n || availableAmount <= 0n) throw new RouteError("petty_cash_balance_unavailable", 400);
+        if (reportAmount > availableAmount) throw new RouteError("petty_cash_balance_exceeded", 400);
         const codes = [...new Set(expenses.map((expense) => expense.budgetCode))];
         const budgets = await tx.costBreakdownItem.findMany({ where: { projectId, budgetCode: { in: codes } }, select: { budgetCode: true } });
         if (codes.some((code) => !budgets.some((budget) => budget.budgetCode === code))) throw new RouteError("budget_code_not_found", 400);
