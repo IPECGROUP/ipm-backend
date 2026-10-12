@@ -1,5 +1,6 @@
 import { prisma } from "../../../lib/prisma";
 import { isSessionExpired } from "../../../lib/security";
+import { reportNotificationState } from "../../../lib/pettyCashNotifications.mjs";
 
 export const runtime = "nodejs";
 
@@ -274,11 +275,9 @@ async function expenseReportsFor(userId, roster, inbox = false) {
   return reports.map((report) => {
     const items = expenses.filter((e) => Number(e.reportId) === Number(report.id)).map((e) => ({ ...e, id: Number(e.id), canAct: canReviewExpense(e, userId, roster) }));
     const canRevise = Number(report.createdById) === userId && items.some((e) => e.stage === "revision");
-    const latestReview = Array.isArray(report.historyJson) ? report.historyJson.at(-1) : null;
-    const creatorDecision = Number(report.createdById) === userId && latestReview?.changes?.some((change) =>
-      ["reject", "revision"].includes(change.decision))
-      ? (latestReview.changes.some((change) => change.decision === "revision") ? "revision" : "rejected") : null;
-    return { ...report, id: Number(report.id), canAct: items.some((e) => e.canAct), canRevise, creatorDecision, items, notificationTarget: "petty_cash_report", title: report.reportName, requestNumber: report.reportName };
+    const canAct = items.some((e) => e.canAct);
+    const { creatorDecision, notificationVersion } = reportNotificationState(report, items, userId, canAct);
+    return { ...report, id: Number(report.id), canAct, canRevise, creatorDecision, notificationVersion, items, notificationTarget: "petty_cash_report", title: report.reportName, requestNumber: report.reportName };
   }).filter((report) => !inbox || report.canAct || report.canRevise || report.creatorDecision);
 }
 
@@ -322,10 +321,6 @@ export async function GET(request) {
       return json({ items: await expenseReportsFor(userId, roster) });
     }
     const reportInbox = reportUrl.searchParams.get("inbox") === "1" ? await expenseReportsFor(userId, await workflowRoster(), true) : [];
-    await prisma.$transaction(async (tx) => {
-      await tx.$executeRawUnsafe("SELECT pg_advisory_xact_lock(91827461)");
-      await repairOutlierSettlementReportNumbers(tx);
-    });
     const url = new URL(request.url);
     const recipients = url.searchParams.get("recipients");
     if (recipients === "project_manager") return json({ users: await workflowMembers("project_manager") });
@@ -401,6 +396,10 @@ export async function GET(request) {
 
     const [isPlanning, isProjectManager] = await Promise.all([isMember(userId, "planning"), isMember(userId, "project_manager")]);
     if (url.searchParams.get("reports") === "1") {
+      await prisma.$transaction(async (tx) => {
+        await tx.$executeRawUnsafe("SELECT pg_advisory_xact_lock(91827461)");
+        await repairOutlierSettlementReportNumbers(tx);
+      });
       const reportId = Number(url.searchParams.get("reportId")) || 0;
       const reportRows = await prisma.$queryRawUnsafe(`
         SELECT r.id,r.report_number AS "reportNumber",r.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",r.prepared_at AS "preparedAt",
