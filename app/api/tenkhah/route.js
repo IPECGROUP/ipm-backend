@@ -41,6 +41,26 @@ async function ensure() {
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS tenkhah_settlement_assignee_idx ON tenkhah_settlements(current_assignee_user_id)");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS tenkhah_settlements_request_id_idx ON tenkhah_settlements(tenkhah_request_id)");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS tenkhah_settlement_entries_settlement_id_idx ON tenkhah_settlement_entries(settlement_id)");
+    // A tenkhah is created together with a PaymentRequest.  Older records
+    // could finish in the payment workflow without the mirror tenkhah row
+    // being marked as charged, which hid the received amount from its
+    // beneficiary.  Reconcile those rows when this API starts so existing
+    // approved requests become available as well as future ones.
+    await prisma.$executeRawUnsafe(`
+      UPDATE tenkhah_requests t
+      SET charged_amount = CASE
+            WHEN COALESCE(p."cashAmount",0) + COALESCE(p."creditAmount",0) > 0
+              THEN COALESCE(p."cashAmount",0) + COALESCE(p."creditAmount",0)
+            ELSE COALESCE(p.amount,t.requested_amount,0)
+          END,
+          cash_payment_amount = COALESCE(p."cashAmount",0),
+          credit_payment_amount = COALESCE(p."creditAmount",0),
+          charged_date = COALESCE(NULLIF(t.charged_date,''),NULLIF(p."cashDateJalali",''),t.request_date),
+          status = 'charged',stage = 'completed',current_assignee_user_id = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      FROM "PaymentRequest" p
+      WHERE p.id = t.payment_request_id AND p.status = 'approved' AND t.status <> 'charged'
+    `);
   })();
   return ready;
 }

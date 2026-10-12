@@ -330,23 +330,29 @@ export async function GET(request) {
       if (!projectId) return json({ error: "project_id_required" }, 400);
 
       // Keep this list tied to the exact inputs of the total displayed in the
-      // "My petty cash" table: charged requests for this beneficiary and this
-      // project only.  Do not expose other beneficiaries' payment details.
+      // "My petty cash" table: finalized requests for this beneficiary and
+      // project only. Do not expose other beneficiaries' payment details.
       const rows = await prisma.$queryRawUnsafe(`
         SELECT t.id,t.request_number AS "requestNumber",t.request_date AS "requestDate",
           t.charged_date AS "chargedDate",t.purpose,t.currency,
-          COALESCE(t.charged_amount,0)::text AS "chargedAmount",
-          COALESCE(t.cash_payment_amount,0)::text AS "cashPaymentAmount",
+          (CASE WHEN t.status='charged' THEN COALESCE(t.charged_amount,0)
+            WHEN pay.status='approved' THEN CASE
+              WHEN COALESCE(pay."cashAmount",0)+COALESCE(pay."creditAmount",0)>0
+                THEN COALESCE(pay."cashAmount",0)+COALESCE(pay."creditAmount",0)
+              ELSE COALESCE(pay.amount,t.requested_amount,0) END
+            ELSE 0 END)::text AS "chargedAmount",
+          (CASE WHEN t.status='charged' THEN COALESCE(t.cash_payment_amount,0) ELSE COALESCE(pay."cashAmount",0) END)::text AS "cashPaymentAmount",
           t.cash_payment_currency AS "cashPaymentCurrency",t.cash_payment_method AS "cashPaymentMethod",
-          COALESCE(t.credit_payment_amount,0)::text AS "creditPaymentAmount",
+          (CASE WHEN t.status='charged' THEN COALESCE(t.credit_payment_amount,0) ELSE COALESCE(pay."creditAmount",0) END)::text AS "creditPaymentAmount",
           t.credit_payment_currency AS "creditPaymentCurrency",t.credit_payment_description AS "creditPaymentDescription",
           p.code AS "projectCode",p.name AS "projectName",beneficiary.name AS "beneficiaryName",beneficiary.username AS "beneficiaryUsername"
         FROM tenkhah_requests t
+        LEFT JOIN "PaymentRequest" pay ON pay.id=t.payment_request_id
         INNER JOIN projects p ON p.id=t.project_id
         LEFT JOIN "User" beneficiary ON beneficiary.id=COALESCE(t.beneficiary_user_id,t.created_by_id)
         WHERE COALESCE(t.beneficiary_user_id,t.created_by_id)=$1
           AND t.project_id=$2
-          AND t.status='charged'
+          AND (t.status='charged' OR pay.status='approved')
         ORDER BY t.charged_date DESC NULLS LAST,t.created_at DESC,t.id DESC
       `, userId, projectId);
       const items = rows.map((row) => ({ ...row, id: Number(row.id) }));
@@ -358,10 +364,17 @@ export async function GET(request) {
       const rows = await prisma.$queryRawUnsafe(`
         WITH received AS (
           SELECT t.project_id AS "projectId",
-            COALESCE(SUM(COALESCE(t.charged_amount, 0)), 0) AS "receivedAmount"
+            COALESCE(SUM(CASE
+              WHEN t.status='charged' THEN COALESCE(t.charged_amount,0)
+              WHEN pay.status='approved' THEN CASE
+                WHEN COALESCE(pay."cashAmount",0)+COALESCE(pay."creditAmount",0)>0
+                  THEN COALESCE(pay."cashAmount",0)+COALESCE(pay."creditAmount",0)
+                ELSE COALESCE(pay.amount,t.requested_amount,0) END
+              ELSE 0 END),0) AS "receivedAmount"
           FROM tenkhah_requests t
+          LEFT JOIN "PaymentRequest" pay ON pay.id=t.payment_request_id
           WHERE COALESCE(t.beneficiary_user_id, t.created_by_id) = $1
-            AND t.status = 'charged'
+            AND (t.status='charged' OR pay.status='approved')
           GROUP BY t.project_id
         ), expenses AS (
           SELECT e.project_id AS "projectId",
@@ -519,17 +532,25 @@ export async function POST(request) {
         if (!project) throw new RouteError("active_project_not_found", 404);
         const [balance] = await tx.$queryRawUnsafe(`
           SELECT COALESCE((
-            SELECT SUM(COALESCE(t.charged_amount,0))
+            SELECT SUM(CASE
+              WHEN t.status='charged' THEN COALESCE(t.charged_amount,0)
+              WHEN p.status='approved' THEN CASE
+                WHEN COALESCE(p."cashAmount",0)+COALESCE(p."creditAmount",0)>0
+                  THEN COALESCE(p."cashAmount",0)+COALESCE(p."creditAmount",0)
+                ELSE COALESCE(p.amount,t.requested_amount,0)
+              END ELSE 0 END)
             FROM tenkhah_requests t
-            WHERE COALESCE(t.beneficiary_user_id,t.created_by_id)=$1 AND t.status='charged'
+            LEFT JOIN "PaymentRequest" p ON p.id=t.payment_request_id
+            WHERE COALESCE(t.beneficiary_user_id,t.created_by_id)=$1
           ),0)::text AS "receivedAmount",
           COALESCE((
-            SELECT SUM(e.amount) FROM petty_cash_expenses e WHERE e.created_by_id=$1
-          ),0)::text AS "registeredAmount"
+            SELECT SUM(e.amount) FROM petty_cash_expenses e
+            WHERE e.created_by_id=$1 AND e.stage='completed' AND e.project_manager_status='approved'
+          ),0)::text AS "settledAmount"
         `, userId);
         const receivedAmount = BigInt(balance?.receivedAmount || "0");
-        const registeredAmount = BigInt(balance?.registeredAmount || "0");
-        const availableAmount = receivedAmount > registeredAmount ? receivedAmount - registeredAmount : 0n;
+        const settledAmount = BigInt(balance?.settledAmount || "0");
+        const availableAmount = receivedAmount > settledAmount ? receivedAmount - settledAmount : 0n;
         const reportAmount = expenses.reduce((sum, expense) => sum + expense.amount, 0n);
         if (receivedAmount <= 0n || availableAmount <= 0n) throw new RouteError("petty_cash_balance_unavailable", 400);
         if (reportAmount > availableAmount) throw new RouteError("petty_cash_balance_exceeded", 400);
