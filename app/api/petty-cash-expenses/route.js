@@ -274,8 +274,12 @@ async function expenseReportsFor(userId, roster, inbox = false) {
   return reports.map((report) => {
     const items = expenses.filter((e) => Number(e.reportId) === Number(report.id)).map((e) => ({ ...e, id: Number(e.id), canAct: canReviewExpense(e, userId, roster) }));
     const canRevise = Number(report.createdById) === userId && items.some((e) => e.stage === "revision");
-    return { ...report, id: Number(report.id), canAct: items.some((e) => e.canAct), canRevise, items, notificationTarget: "petty_cash_report", title: report.reportName, requestNumber: report.reportName };
-  }).filter((report) => !inbox || report.canAct || report.canRevise);
+    const latestReview = Array.isArray(report.historyJson) ? report.historyJson.at(-1) : null;
+    const creatorDecision = Number(report.createdById) === userId && latestReview?.changes?.some((change) =>
+      ["reject", "revision"].includes(change.decision))
+      ? (latestReview.changes.some((change) => change.decision === "revision") ? "revision" : "rejected") : null;
+    return { ...report, id: Number(report.id), canAct: items.some((e) => e.canAct), canRevise, creatorDecision, items, notificationTarget: "petty_cash_report", title: report.reportName, requestNumber: report.reportName };
+  }).filter((report) => !inbox || report.canAct || report.canRevise || report.creatorDecision);
 }
 
 async function isMember(userId, stage) {
