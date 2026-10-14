@@ -253,15 +253,20 @@ function canReviewExpense(expense, userId, roster) {
 async function expenseReportsFor(userId, roster, inbox = false) {
   const reports = await prisma.$queryRawUnsafe(`
     SELECT r.id,r.report_name AS "reportName",r.project_id AS "projectId",r.created_at AS "createdAt",
-      r.created_by_id AS "createdById",r.workflow_version AS version,r.review_history AS "historyJson",r.review_notes AS "reviewNotes",r.updated_at AS "updatedAt",
+      r.created_by_id AS "createdById",r.initial_stage AS "initialStage",r.workflow_version AS version,r.review_history AS "historyJson",r.review_notes AS "reviewNotes",r.updated_at AS "updatedAt",
       p.code AS "projectCode",p.name AS "projectName",creator.name AS "createdByName",creator.username AS "createdByUsername"
     FROM petty_cash_expense_reports r INNER JOIN projects p ON p.id=r.project_id
     LEFT JOIN "User" creator ON creator.id=r.created_by_id
     WHERE r.created_by_id=$1 OR EXISTS (
       SELECT 1 FROM petty_cash_expenses e WHERE e.expense_report_id=r.id AND (
         (e.stage='planning' AND $2::boolean) OR (e.stage='project_manager' AND e.project_manager_id=$1 AND $3::boolean)
-        OR (e.stage='finance' AND $4::boolean) OR (e.stage='management' AND $5::boolean)))
-      OR EXISTS (SELECT 1 FROM jsonb_array_elements(r.review_history) h WHERE (h->>'userId')::int=$1)
+         OR e.project_manager_id=$1
+         OR (e.stage='finance' AND $4::boolean) OR (e.stage='management' AND $5::boolean)))
+      OR EXISTS (SELECT 1 FROM jsonb_array_elements(r.review_history) h WHERE
+        (h->>'userId')::int=$1 OR (h->'assignedToUserIds') @> jsonb_build_array($1::int)
+        OR ($2::boolean AND (h->>'stage'='planning' OR (h->'changes') @> '[{"toStage":"planning"}]'::jsonb))
+        OR ($4::boolean AND (h->>'stage'='finance' OR (h->'changes') @> '[{"toStage":"finance"}]'::jsonb))
+        OR ($5::boolean AND (h->>'stage'='management' OR (h->'changes') @> '[{"toStage":"management"}]'::jsonb)))
     ORDER BY r.created_at DESC,r.id DESC
   `, userId, roster.planning.some((u) => u.id === userId), roster.project_manager.some((u) => u.id === userId), roster.finance.some((u) => u.id === userId), roster.management.some((u) => u.id === userId));
   if (!reports.length) return [];
@@ -276,8 +281,14 @@ async function expenseReportsFor(userId, roster, inbox = false) {
     const items = expenses.filter((e) => Number(e.reportId) === Number(report.id)).map((e) => ({ ...e, id: Number(e.id), canAct: canReviewExpense(e, userId, roster) }));
     const canRevise = Number(report.createdById) === userId && items.some((e) => e.stage === "revision");
     const canAct = items.some((e) => e.canAct);
+    const history = Array.isArray(report.historyJson) ? report.historyJson : [];
+    const wasSentToMe = items.some((e) => Number(e.projectManagerId) === userId)
+      || history.some((entry) => Number(entry.userId) === userId || (entry.assignedToUserIds || []).some((id) => Number(id) === userId)
+        || (roster.planning.some((u) => u.id === userId) && (entry.stage === "planning" || entry.changes?.some((change) => change.toStage === "planning")))
+        || (roster.finance.some((u) => u.id === userId) && (entry.stage === "finance" || entry.changes?.some((change) => change.toStage === "finance")))
+        || (roster.management.some((u) => u.id === userId) && (entry.stage === "management" || entry.changes?.some((change) => change.toStage === "management"))));
     const { creatorDecision, notificationVersion } = reportNotificationState(report, items, userId, canAct);
-    return { ...report, id: Number(report.id), canAct, canRevise, creatorDecision, notificationVersion, items, notificationTarget: "petty_cash_report", title: report.reportName, requestNumber: report.reportName };
+    return { ...report, id: Number(report.id), canAct, canRevise, wasSentToMe, creatorDecision, notificationVersion, items, notificationTarget: "petty_cash_report", title: report.reportName, requestNumber: report.reportName };
   }).filter((report) => !inbox || report.canAct || report.canRevise || report.creatorDecision);
 }
 
@@ -560,7 +571,7 @@ export async function POST(request) {
         const inserted = await tx.$queryRawUnsafe(`
           INSERT INTO petty_cash_expense_reports (report_name,project_id,created_by_id,submission_key,initial_stage,review_history)
           VALUES ($1,$2,$3,$4::uuid,$5,$6::jsonb) RETURNING id
-        `, reportName, projectId, userId, submissionKey, initialStage, JSON.stringify([{ userId, action: "submitted", stage: initialStage, at: new Date().toISOString() }]));
+        `, reportName, projectId, userId, submissionKey, initialStage, JSON.stringify([{ userId, action: "submitted", stage: initialStage, assignedToUserIds: roster[initialStage].map((user) => user.id), at: new Date().toISOString() }]));
         const reportId = Number(inserted[0].id);
         // One bulk insert keeps the complete report atomic, including every expense.
         await tx.$executeRawUnsafe(`
@@ -684,9 +695,12 @@ export async function PATCH(request) {
           `, nextStage, status, note, projectManagerId, userId, Number(expense.id));
           changes.push({ id: Number(expense.id), fromStage: expense.stage, toStage: nextStage, decision: choice.decision });
         }
+        const assignedToUserIds = [...new Set(changes.flatMap((change) => change.toStage === "project_manager"
+          ? [projectManagerId] : ["revision", "rejected"].includes(change.toStage)
+            ? [Number(report.created_by_id)] : (roster[change.toStage] || []).map((user) => user.id)))];
         await tx.$executeRawUnsafe(`UPDATE petty_cash_expense_reports SET workflow_version=workflow_version+1,
           review_history=review_history || $1::jsonb,review_notes=$2,updated_at=CURRENT_TIMESTAMP WHERE id=$3`,
-        JSON.stringify([{ userId, action: decision, note, changes, at: new Date().toISOString() }]), note, reportId);
+        JSON.stringify([{ userId, action: decision, note, changes, assignedToUserIds, at: new Date().toISOString() }]), note, reportId);
       });
       return json({ ok: true });
     }
@@ -734,8 +748,11 @@ export async function PATCH(request) {
           }
           changes.push({ id: entry.id, toStage: stage });
         }
+        const assignedToUserIds = [...new Set(changes.flatMap((change) => change.toStage === "project_manager"
+          ? [Number(existing.find((expense) => Number(expense.id) === change.id)?.project_manager_id)]
+          : (roster[change.toStage] || []).map((user) => user.id)).filter((id) => Number.isInteger(id) && id > 0))];
         await tx.$executeRawUnsafe(`UPDATE petty_cash_expense_reports SET report_name=$1,workflow_version=workflow_version+1,
-          review_history=review_history || $2::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$3`, reportName, JSON.stringify([{ userId, action: "resubmitted", changes, at: new Date().toISOString() }]), reportId);
+          review_history=review_history || $2::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$3`, reportName, JSON.stringify([{ userId, action: "resubmitted", changes, assignedToUserIds, at: new Date().toISOString() }]), reportId);
       });
       return json({ ok: true, item: { id: reportId } });
     }
