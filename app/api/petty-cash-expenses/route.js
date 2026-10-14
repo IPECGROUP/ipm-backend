@@ -1,6 +1,7 @@
 import { prisma } from "../../../lib/prisma";
 import { isSessionExpired } from "../../../lib/security";
 import { reportNotificationState } from "../../../lib/pettyCashNotifications.mjs";
+import { expenseMoney } from "../../../lib/pettyCashExpenseMoney.mjs";
 
 export const runtime = "nodejs";
 
@@ -134,6 +135,7 @@ function asAmount(value) {
   return digits ? BigInt(digits) : 0n;
 }
 
+
 function belongsToWorkflowUnit(stage, unit) {
   const name = normalized(unit?.name);
   const code = normalized(unit?.code);
@@ -175,6 +177,10 @@ async function ensureTable() {
     await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS rejected_by_id INTEGER");
     await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS file_name VARCHAR(180)");
     await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS file_url TEXT");
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS currency_type_id INTEGER");
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS currency_name VARCHAR(100)");
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS currency_amount NUMERIC(22,2)");
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS exchange_rate BIGINT");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expenses_project_idx ON petty_cash_expenses(project_id)");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expenses_assignee_idx ON petty_cash_expenses(project_manager_id, stage)");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expenses_creator_idx ON petty_cash_expenses(created_by_id)");
@@ -272,7 +278,9 @@ async function expenseReportsFor(userId, roster, inbox = false) {
   if (!reports.length) return [];
   const expenses = await prisma.$queryRawUnsafe(`
     SELECT e.id,e.expense_report_id AS "reportId",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",
-      e.amount::text AS amount,e.file_name AS "fileName",e.file_url AS "fileUrl",e.stage,e.review_status AS "reviewStatus",e.review_note AS "reviewNote",
+      e.amount::text AS amount,e.currency_type_id AS "currencyTypeId",COALESCE(e.currency_name,'ریال') AS "currencyName",
+      COALESCE(e.currency_amount::text,e.amount::text) AS "currencyAmount",COALESCE(e.exchange_rate::text,'1') AS "exchangeRate",
+      e.file_name AS "fileName",e.file_url AS "fileUrl",e.stage,e.review_status AS "reviewStatus",e.review_note AS "reviewNote",
       e.project_manager_id AS "projectManagerId",manager.name AS "projectManagerName"
     FROM petty_cash_expenses e LEFT JOIN "User" manager ON manager.id=e.project_manager_id
     WHERE e.expense_report_id=ANY($1::int[]) ORDER BY e.id
@@ -527,12 +535,17 @@ export async function POST(request) {
       if (!entries.length || entries.length > 500) return json({ error: "at_least_one_expense_required" }, 400);
       const expenses = entries.map((entry) => ({
         expenseDate: normalizeDigits(entry.expenseDate).trim(), description: String(entry.description || "").trim(),
-        budgetCode: String(entry.budgetCode || "").trim(), amount: asAmount(entry.amount),
+        budgetCode: String(entry.budgetCode || "").trim(), ...expenseMoney(entry),
         fileName: String(entry.fileName || "").trim(), fileUrl: String(entry.fileUrl || "").trim(),
       }));
       if (expenses.some((expense) => !/^\d{4}[/-](0[1-9]|1[0-2])[/-](0[1-9]|[12]\d|3[01])$/.test(expense.expenseDate) ||
-        !expense.description || !expense.budgetCode || expense.budgetCode.length > 80 || expense.amount <= 0n || expense.amount > 9223372036854775807n ||
-        !expense.fileName || expense.fileName.length > 180 || !/^\/uploads\/petty-cash-expenses\/[a-f0-9-]+\.(jpg|jpeg|png|webp)$/.test(expense.fileUrl))) return json({ error: "required_expense_fields" }, 400);
+        !expense.description || !expense.budgetCode || expense.budgetCode.length > 80 || !expense.valid || expense.amount <= 0n || expense.amount > 9223372036854775807n ||
+        !expense.fileName || expense.fileName.length > 180 || !/^\/uploads\/petty-cash-expenses\/[a-f0-9-]+\.(jpg|jpeg|png|webp|pdf)$/.test(expense.fileUrl))) return json({ error: "required_expense_fields" }, 400);
+      const currencyIds = [...new Set(expenses.map((expense) => expense.currencyTypeId).filter(Boolean))];
+      const currencies = currencyIds.length ? await prisma.currencyType.findMany({ where: { id: { in: currencyIds } }, select: { id: true, title: true } }) : [];
+      if (currencies.length !== currencyIds.length || currencies.some((currency) => /ریال|rial|﷼/i.test(currency.title))) return json({ error: "invalid_currency" }, 400);
+      const currencyNames = new Map(currencies.map((currency) => [currency.id, currency.title]));
+      expenses.forEach((expense) => { expense.currencyName = expense.currencyTypeId ? currencyNames.get(expense.currencyTypeId) : "ریال"; });
       const roster = await workflowRoster();
       const initialStage = roster.finance.some((user) => user.id === userId) ? "management" : "planning";
       if (!roster[initialStage].length) return json({ error: "workflow_recipients_missing" }, 400);
@@ -579,10 +592,10 @@ export async function POST(request) {
         const reportId = Number(inserted[0].id);
         // One bulk insert keeps the complete report atomic, including every expense.
         await tx.$executeRawUnsafe(`
-          INSERT INTO petty_cash_expenses (project_id,expense_date,description,budget_code,amount,created_by_id,file_name,file_url,expense_report_id,stage)
-          SELECT $1,x."expenseDate",x.description,x."budgetCode",x.amount::bigint,$2,x."fileName",x."fileUrl",$3,$5
-          FROM jsonb_to_recordset($4::jsonb) AS x("expenseDate" text,description text,"budgetCode" text,amount text,"fileName" text,"fileUrl" text)
-        `, projectId, userId, reportId, JSON.stringify(expenses.map((expense) => ({ ...expense, amount: String(expense.amount) }))), initialStage);
+          INSERT INTO petty_cash_expenses (project_id,expense_date,description,budget_code,amount,currency_type_id,currency_name,currency_amount,exchange_rate,created_by_id,file_name,file_url,expense_report_id,stage)
+          SELECT $1,x."expenseDate",x.description,x."budgetCode",x.amount::bigint,x."currencyTypeId"::int,x."currencyName",x."currencyAmount"::numeric,x."exchangeRate"::bigint,$2,x."fileName",x."fileUrl",$3,$5
+          FROM jsonb_to_recordset($4::jsonb) AS x("expenseDate" text,description text,"budgetCode" text,amount text,"currencyTypeId" text,"currencyName" text,"currencyAmount" text,"exchangeRate" text,"fileName" text,"fileUrl" text)
+        `, projectId, userId, reportId, JSON.stringify(expenses.map((expense) => ({ ...expense, amount: String(expense.amount), exchangeRate: String(expense.exchangeRate) }))), initialStage);
         return { id: reportId, stage: initialStage };
       });
       return json({ ok: true, item: report }, 201);
@@ -725,10 +738,15 @@ export async function PATCH(request) {
       const entries = Array.isArray(body.items) ? body.items : [];
       if (!Number.isInteger(reportId) || reportId <= 0 || !Number.isInteger(version) || !reportName || reportName.length > 180 || !entries.length || entries.length > 500) return json({ error: "invalid_report" }, 400);
       const normalizedEntries = entries.map((entry) => ({ id: Number(entry.id) || 0, expenseDate: normalizeDigits(entry.expenseDate).trim(),
-        description: String(entry.description || "").trim(), budgetCode: String(entry.budgetCode || "").trim(), amount: asAmount(entry.amount),
+        description: String(entry.description || "").trim(), budgetCode: String(entry.budgetCode || "").trim(), ...expenseMoney(entry),
         fileName: String(entry.fileName || "").trim(), fileUrl: String(entry.fileUrl || "").trim() }));
       if (normalizedEntries.some((entry) => !/^\d{4}[/-](0[1-9]|1[0-2])[/-](0[1-9]|[12]\d|3[01])$/.test(entry.expenseDate) || !entry.description || !entry.budgetCode || entry.budgetCode.length > 80 ||
-        entry.amount <= 0n || entry.amount > 9223372036854775807n || !entry.fileName || entry.fileName.length > 180 || !/^\/uploads\/petty-cash-expenses\/[a-f0-9-]+\.(jpg|jpeg|png|webp)$/.test(entry.fileUrl))) return json({ error: "required_expense_fields" }, 400);
+        !entry.valid || entry.amount <= 0n || entry.amount > 9223372036854775807n || !entry.fileName || entry.fileName.length > 180 || !/^\/uploads\/petty-cash-expenses\/[a-f0-9-]+\.(jpg|jpeg|png|webp|pdf)$/.test(entry.fileUrl))) return json({ error: "required_expense_fields" }, 400);
+      const currencyIds = [...new Set(normalizedEntries.map((entry) => entry.currencyTypeId).filter(Boolean))];
+      const currencies = currencyIds.length ? await prisma.currencyType.findMany({ where: { id: { in: currencyIds } }, select: { id: true, title: true } }) : [];
+      if (currencies.length !== currencyIds.length || currencies.some((currency) => /ریال|rial|﷼/i.test(currency.title))) return json({ error: "invalid_currency" }, 400);
+      const currencyNames = new Map(currencies.map((currency) => [currency.id, currency.title]));
+      normalizedEntries.forEach((entry) => { entry.currencyName = entry.currencyTypeId ? currencyNames.get(entry.currencyTypeId) : "ریال"; });
       const roster = await workflowRoster();
       await prisma.$transaction(async (tx) => {
         const reports = await tx.$queryRawUnsafe("SELECT * FROM petty_cash_expense_reports WHERE id=$1 FOR UPDATE", reportId);
@@ -746,7 +764,11 @@ export async function PATCH(request) {
         for (const entry of normalizedEntries) {
           const previous = existing.find((e) => Number(e.id) === entry.id);
           if (previous && previous.stage !== "revision") {
-            if (entry.expenseDate !== previous.expense_date || entry.description !== previous.description || entry.budgetCode !== previous.budget_code || String(entry.amount) !== String(previous.amount) || entry.fileUrl !== previous.file_url || entry.fileName !== previous.file_name) throw new RouteError("not_allowed", 403);
+            const previousMoney = expenseMoney({ amount: previous.amount, currencyTypeId: previous.currency_type_id,
+              currencyAmount: previous.currency_amount, exchangeRate: previous.exchange_rate });
+            if (entry.expenseDate !== previous.expense_date || entry.description !== previous.description || entry.budgetCode !== previous.budget_code || String(entry.amount) !== String(previous.amount) ||
+              entry.currencyTypeId !== previousMoney.currencyTypeId || entry.currencyAmount !== previousMoney.currencyAmount || entry.exchangeRate !== previousMoney.exchangeRate ||
+              entry.fileUrl !== previous.file_url || entry.fileName !== previous.file_name) throw new RouteError("not_allowed", 403);
             continue;
           }
           const stage = previous?.return_stage || report.initial_stage;
@@ -755,11 +777,14 @@ export async function PATCH(request) {
           if (stage === "project_manager" && !roster.project_manager.some((u) => u.id === Number(previous?.project_manager_id))) throw new RouteError("invalid_project_manager", 400);
           if (previous) {
             await tx.$executeRawUnsafe(`UPDATE petty_cash_expenses SET expense_date=$1,description=$2,budget_code=$3,amount=$4::bigint,file_name=$5,file_url=$6,
-              stage=$7,return_stage=NULL,review_status='pending',review_note='',updated_at=CURRENT_TIMESTAMP WHERE id=$8`,
-            entry.expenseDate, entry.description, entry.budgetCode, String(entry.amount), entry.fileName, entry.fileUrl, stage, entry.id);
+              stage=$7,return_stage=NULL,review_status='pending',review_note='',currency_type_id=$9::int,currency_name=$10,
+              currency_amount=$11::numeric,exchange_rate=$12::bigint,updated_at=CURRENT_TIMESTAMP WHERE id=$8`,
+            entry.expenseDate, entry.description, entry.budgetCode, String(entry.amount), entry.fileName, entry.fileUrl, stage, entry.id,
+            entry.currencyTypeId, entry.currencyName, entry.currencyAmount, String(entry.exchangeRate));
           } else {
-            await tx.$executeRawUnsafe(`INSERT INTO petty_cash_expenses (project_id,expense_date,description,budget_code,amount,created_by_id,file_name,file_url,expense_report_id,stage)
-              VALUES ($1,$2,$3,$4,$5::bigint,$6,$7,$8,$9,$10)`, Number(report.project_id), entry.expenseDate, entry.description, entry.budgetCode, String(entry.amount), userId, entry.fileName, entry.fileUrl, reportId, stage);
+            await tx.$executeRawUnsafe(`INSERT INTO petty_cash_expenses (project_id,expense_date,description,budget_code,amount,created_by_id,file_name,file_url,expense_report_id,stage,currency_type_id,currency_name,currency_amount,exchange_rate)
+              VALUES ($1,$2,$3,$4,$5::bigint,$6,$7,$8,$9,$10,$11::int,$12,$13::numeric,$14::bigint)`, Number(report.project_id), entry.expenseDate, entry.description, entry.budgetCode, String(entry.amount), userId, entry.fileName, entry.fileUrl, reportId, stage,
+            entry.currencyTypeId, entry.currencyName, entry.currencyAmount, String(entry.exchangeRate));
           }
           changes.push({ id: entry.id, toStage: stage });
         }

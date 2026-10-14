@@ -17,7 +17,7 @@ export async function POST(request) {
   }
 
   const buffer = Buffer.from(await file.arrayBuffer());
-  const checked = validateUpload({ name: file.name, size: file.size, buffer, profile: "payment" });
+  const checked = validateUpload({ name: file.name, size: file.size, buffer, profile: "petty_cash" });
   if (!checked.ok) return Response.json({ error: checked.error }, { status: 415 });
 
   const storedName = `${randomUUID()}${checked.extension}`;
