@@ -2,6 +2,7 @@ import { prisma } from "../../../lib/prisma";
 import { isSessionExpired } from "../../../lib/security";
 import { reportNotificationState } from "../../../lib/pettyCashNotifications.mjs";
 import { expenseMoney } from "../../../lib/pettyCashExpenseMoney.mjs";
+import { nextSharedPaymentSerial } from "../../../lib/paymentSerial";
 
 export const runtime = "nodejs";
 
@@ -208,12 +209,17 @@ async function ensureTable() {
       CREATE TABLE IF NOT EXISTS petty_cash_expense_reports (
         id SERIAL PRIMARY KEY,
         report_name VARCHAR(180) NOT NULL,
+        report_number VARCHAR(40),
+        document_type VARCHAR(40) NOT NULL DEFAULT 'petty_cash_report',
         project_id INTEGER NOT NULL REFERENCES projects(id) ON DELETE RESTRICT,
         created_by_id INTEGER NOT NULL,
         submission_key UUID NOT NULL UNIQUE,
         created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
       )
     `);
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expense_reports ADD COLUMN IF NOT EXISTS report_number VARCHAR(40)");
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expense_reports ADD COLUMN IF NOT EXISTS document_type VARCHAR(40) NOT NULL DEFAULT 'petty_cash_report'");
+    await prisma.$executeRawUnsafe("CREATE UNIQUE INDEX IF NOT EXISTS petty_cash_expense_reports_number_key ON petty_cash_expense_reports(report_number)");
     await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS expense_report_id INTEGER REFERENCES petty_cash_expense_reports(id) ON DELETE RESTRICT");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expense_reports_creator_idx ON petty_cash_expense_reports(created_by_id)");
     await prisma.$executeRawUnsafe("CREATE INDEX IF NOT EXISTS petty_cash_expenses_report_idx ON petty_cash_expenses(expense_report_id)");
@@ -258,7 +264,7 @@ function canReviewExpense(expense, userId, roster) {
 
 async function expenseReportsFor(userId, roster, inbox = false) {
   const reports = await prisma.$queryRawUnsafe(`
-    SELECT r.id,r.report_name AS "reportName",r.project_id AS "projectId",r.created_at AS "createdAt",
+    SELECT r.id,r.report_name AS "reportName",r.report_number AS "reportNumber",r.document_type AS "documentType",r.project_id AS "projectId",r.created_at AS "createdAt",
       r.created_by_id AS "createdById",r.initial_stage AS "initialStage",r.workflow_version AS version,r.review_history AS "historyJson",r.review_notes AS "reviewNotes",r.updated_at AS "updatedAt",
       p.code AS "projectCode",p.name AS "projectName",creator.name AS "createdByName",creator.username AS "createdByUsername"
     FROM petty_cash_expense_reports r INNER JOIN projects p ON p.id=r.project_id
@@ -300,7 +306,7 @@ async function expenseReportsFor(userId, roster, inbox = false) {
         || (roster.finance.some((u) => u.id === userId) && (entry.stage === "finance" || entry.changes?.some((change) => change.toStage === "finance")))
         || (roster.management.some((u) => u.id === userId) && (entry.stage === "management" || entry.changes?.some((change) => change.toStage === "management"))));
     const { creatorDecision, notificationVersion } = reportNotificationState(report, items, userId, canAct);
-    return { ...report, id: Number(report.id), historyJson: history.map((entry) => ({ ...entry, actorName: actorNames.get(Number(entry.userId)) || null })), canAct, canRevise, wasSentToMe, creatorDecision, notificationVersion, items, notificationTarget: "petty_cash_report", title: report.reportName, requestNumber: report.reportName };
+    return { ...report, id: Number(report.id), historyJson: history.map((entry) => ({ ...entry, actorName: actorNames.get(Number(entry.userId)) || null })), canAct, canRevise, wasSentToMe, creatorDecision, notificationVersion, items, notificationTarget: "petty_cash_report", title: report.reportName, requestNumber: report.reportNumber || report.reportName };
   }).filter((report) => !inbox || report.canAct || report.canRevise || report.creatorDecision);
 }
 
@@ -551,10 +557,10 @@ export async function POST(request) {
       if (!roster[initialStage].length) return json({ error: "workflow_recipients_missing" }, 400);
       const report = await prisma.$transaction(async (tx) => {
         await tx.$executeRawUnsafe("SELECT pg_advisory_xact_lock($1)", userId);
-        const existing = await tx.$queryRawUnsafe('SELECT id,created_by_id AS "createdById" FROM petty_cash_expense_reports WHERE submission_key=$1::uuid', submissionKey);
+        const existing = await tx.$queryRawUnsafe('SELECT id,report_number AS "reportNumber",document_type AS "documentType",created_by_id AS "createdById" FROM petty_cash_expense_reports WHERE submission_key=$1::uuid', submissionKey);
         if (existing.length) {
           if (Number(existing[0].createdById) !== userId) throw new RouteError("not_allowed", 403);
-          return { id: Number(existing[0].id) };
+          return { id: Number(existing[0].id), reportNumber: existing[0].reportNumber, documentType: existing[0].documentType };
         }
         const project = await tx.project.findFirst({ where: { id: projectId, isActive: true }, select: { id: true } });
         if (!project) throw new RouteError("active_project_not_found", 404);
@@ -585,10 +591,14 @@ export async function POST(request) {
         const codes = [...new Set(expenses.map((expense) => expense.budgetCode))];
         const budgets = await tx.costBreakdownItem.findMany({ where: { projectId, budgetCode: { in: codes } }, select: { budgetCode: true } });
         if (codes.some((code) => !budgets.some((budget) => budget.budgetCode === code))) throw new RouteError("budget_code_not_found", 400);
+        const reportNumber = await nextSharedPaymentSerial(tx, {
+          dateJalali: normalizeDigits(new Intl.DateTimeFormat("fa-IR-u-ca-persian", { year: "numeric", timeZone: "Asia/Tehran" }).format(new Date())),
+          projectId,
+        });
         const inserted = await tx.$queryRawUnsafe(`
-          INSERT INTO petty_cash_expense_reports (report_name,project_id,created_by_id,submission_key,initial_stage,review_history)
-          VALUES ($1,$2,$3,$4::uuid,$5,$6::jsonb) RETURNING id
-        `, reportName, projectId, userId, submissionKey, initialStage, JSON.stringify([{ userId, action: "submitted", stage: initialStage, assignedToUserIds: roster[initialStage].map((user) => user.id), at: new Date().toISOString() }]));
+          INSERT INTO petty_cash_expense_reports (report_name,report_number,document_type,project_id,created_by_id,submission_key,initial_stage,review_history)
+          VALUES ($1,$2,'petty_cash_report',$3,$4,$5::uuid,$6,$7::jsonb) RETURNING id
+        `, reportName, reportNumber, projectId, userId, submissionKey, initialStage, JSON.stringify([{ userId, action: "submitted", stage: initialStage, assignedToUserIds: roster[initialStage].map((user) => user.id), at: new Date().toISOString() }]));
         const reportId = Number(inserted[0].id);
         // One bulk insert keeps the complete report atomic, including every expense.
         await tx.$executeRawUnsafe(`
@@ -596,7 +606,7 @@ export async function POST(request) {
           SELECT $1,x."expenseDate",x.description,x."budgetCode",x.amount::bigint,x."currencyTypeId"::int,x."currencyName",x."currencyAmount"::numeric,x."exchangeRate"::bigint,$2,x."fileName",x."fileUrl",$3,$5
           FROM jsonb_to_recordset($4::jsonb) AS x("expenseDate" text,description text,"budgetCode" text,amount text,"currencyTypeId" text,"currencyName" text,"currencyAmount" text,"exchangeRate" text,"fileName" text,"fileUrl" text)
         `, projectId, userId, reportId, JSON.stringify(expenses.map((expense) => ({ ...expense, amount: String(expense.amount), exchangeRate: String(expense.exchangeRate) }))), initialStage);
-        return { id: reportId, stage: initialStage };
+        return { id: reportId, reportNumber, documentType: "petty_cash_report", stage: initialStage };
       });
       return json({ ok: true, item: report }, 201);
     }
