@@ -674,14 +674,8 @@ export async function PATCH(request) {
     if (body.action === "review_report") {
       const reportId = Number(body.reportId), version = Number(body.expectedVersion);
       const decision = String(body.decision || ""), note = String(body.note || "").trim();
-      const rawNotes = body.notesByDecision && typeof body.notesByDecision === "object" && !Array.isArray(body.notesByDecision) ? body.notesByDecision : {};
-      const notesByDecision = Object.fromEntries(["approve", "revision", "reject"].map((key) => [key, String(rawNotes[key] ?? note).trim()]));
-      const reportWideReturn = body.reportWide === true && decision === "revision";
       if (!Number.isInteger(reportId) || reportId <= 0 || !Number.isInteger(version) || version <= 0 || !["approve", "reject", "revision"].includes(decision) || note.length > 500) return json({ error: "invalid_input" }, 400);
-      if ((body.reportWide === true && !reportWideReturn) || (reportWideReturn && !notesByDecision.revision)) return json({ error: "invalid_input" }, 400);
-      if (Object.values(notesByDecision).some((value) => value.length > 500)) return json({ error: "invalid_input" }, 400);
-      const rowDecisions = body.rowDecisions && typeof body.rowDecisions === "object" && !Array.isArray(body.rowDecisions) ? body.rowDecisions : {};
-      if (Object.values(rowDecisions).some((value) => !["approve", "reject", "revision"].includes(value))) return json({ error: "invalid_input" }, 400);
+      if (body.reportWide !== true || (body.rowDecisions && Object.keys(body.rowDecisions).length) || (decision === "revision" && !note)) return json({ error: "invalid_input" }, 400);
       const roster = await workflowRoster();
       await prisma.$transaction(async (tx) => {
         const reports = await tx.$queryRawUnsafe("SELECT * FROM petty_cash_expense_reports WHERE id=$1 FOR UPDATE", reportId);
@@ -690,8 +684,9 @@ export async function PATCH(request) {
         if (Number(report.workflow_version) !== version) throw new RouteError("workflow_changed", 409);
         const expenses = await tx.$queryRawUnsafe("SELECT * FROM petty_cash_expenses WHERE expense_report_id=$1 ORDER BY id FOR UPDATE", reportId);
         const actionable = expenses.filter((expense) => canReviewExpense(expense, userId, roster));
-        if (!actionable.length || Object.keys(rowDecisions).some((key) => !actionable.some((e) => String(e.id) === key))) throw new RouteError("not_allowed", 403);
-        const choices = (reportWideReturn ? expenses : actionable).map((expense) => ({ expense, decision: reportWideReturn ? "revision" : decision === "approve" ? rowDecisions[expense.id] || decision : decision }));
+        if (!expenses.length || actionable.length !== expenses.length) throw new RouteError("not_allowed", 403);
+        if (expenses.some((expense) => expense.stage !== expenses[0].stage)) throw new RouteError("workflow_changed", 409);
+        const choices = expenses.map((expense) => ({ expense, decision }));
         const projectManagerId = Number(body.projectManagerId) || null;
         if (choices.some((choice) => choice.expense.stage === "planning" && choice.decision === "approve") &&
           !roster.project_manager.some((user) => user.id === projectManagerId)) throw new RouteError("invalid_project_manager", 400);
@@ -699,7 +694,7 @@ export async function PATCH(request) {
         const changes = [];
         for (const choice of choices) {
           const expense = choice.expense;
-          const choiceNote = notesByDecision[choice.decision];
+          const choiceNote = note;
           const returnStage = ["planning", "project_manager", "finance", "management"].includes(expense.stage) ? expense.stage
             : ["planning", "project_manager", "finance", "management"].includes(expense.return_stage) ? expense.return_stage : report.initial_stage;
           const nextStage = choice.decision === "reject" ? "rejected" : choice.decision === "revision" ? "revision"
@@ -725,10 +720,10 @@ export async function PATCH(request) {
             ? [Number(report.created_by_id)] : (roster[change.toStage] || []).map((user) => user.id)))];
         await tx.$executeRawUnsafe(`UPDATE petty_cash_expense_reports SET workflow_version=workflow_version+1,
           review_history=review_history || $1::jsonb,review_notes=$2,updated_at=CURRENT_TIMESTAMP WHERE id=$3`,
-        JSON.stringify([{ userId, action: decision, note: reportWideReturn ? notesByDecision.revision : note,
-          reportWide: reportWideReturn, stage: reportWideReturn ? actionable[0].stage : undefined,
+        JSON.stringify([{ userId, action: decision, note,
+          reportWide: true, stage: expenses[0].stage,
           changes, assignedToUserIds, at: new Date().toISOString() }]),
-        choices.some((choice) => choice.decision === "revision") ? notesByDecision.revision : notesByDecision[decision], reportId);
+        note, reportId);
       });
       return json({ ok: true });
     }
@@ -756,11 +751,21 @@ export async function PATCH(request) {
         const existing = await tx.$queryRawUnsafe("SELECT * FROM petty_cash_expenses WHERE expense_report_id=$1 ORDER BY id FOR UPDATE", reportId);
         if (!existing.some((e) => e.stage === "revision")) throw new RouteError("not_allowed", 403);
         if (new Set(normalizedEntries.filter((e) => e.id).map((e) => e.id)).size !== normalizedEntries.filter((e) => e.id).length ||
-          existing.some((e) => !normalizedEntries.some((entry) => entry.id === Number(e.id))) || normalizedEntries.some((entry) => entry.id && !existing.some((e) => Number(e.id) === entry.id))) throw new RouteError("invalid_input", 400);
+          normalizedEntries.some((entry) => entry.id && !existing.some((e) => Number(e.id) === entry.id))) throw new RouteError("invalid_input", 400);
+        const removed = existing.filter((expense) => !normalizedEntries.some((entry) => entry.id === Number(expense.id)));
+        if (removed.some((expense) => expense.stage !== "revision")) throw new RouteError("not_allowed", 403);
+        if (removed.length) {
+          const linked = await tx.$queryRawUnsafe("SELECT expense_id FROM petty_cash_settlement_report_items WHERE expense_id = ANY($1::int[])", removed.map((expense) => Number(expense.id)));
+          if (linked.length) throw new RouteError("not_allowed", 403);
+        }
         const codes = [...new Set(normalizedEntries.map((entry) => entry.budgetCode))];
         const budgets = await tx.costBreakdownItem.findMany({ where: { projectId: Number(report.project_id), budgetCode: { in: codes } }, select: { budgetCode: true } });
         if (codes.some((code) => !budgets.some((budget) => budget.budgetCode === code))) throw new RouteError("budget_code_not_found", 400);
         const changes = [];
+        for (const expense of removed) {
+          await tx.$executeRawUnsafe("DELETE FROM petty_cash_expenses WHERE id=$1 AND expense_report_id=$2 AND stage='revision'", Number(expense.id), reportId);
+          changes.push({ id: Number(expense.id), fromStage: "revision", toStage: "deleted", decision: "delete" });
+        }
         for (const entry of normalizedEntries) {
           const previous = existing.find((e) => Number(e.id) === entry.id);
           if (previous && previous.stage !== "revision") {
