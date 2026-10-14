@@ -277,6 +277,10 @@ async function expenseReportsFor(userId, roster, inbox = false) {
     FROM petty_cash_expenses e LEFT JOIN "User" manager ON manager.id=e.project_manager_id
     WHERE e.expense_report_id=ANY($1::int[]) ORDER BY e.id
   `, reports.map((r) => Number(r.id)));
+  const actorIds = [...new Set(reports.flatMap((report) => (Array.isArray(report.historyJson) ? report.historyJson : [])
+    .map((entry) => Number(entry?.userId)).filter((id) => Number.isInteger(id) && id > 0)))];
+  const actors = actorIds.length ? await prisma.user.findMany({ where: { id: { in: actorIds } }, select: { id: true, name: true, username: true } }) : [];
+  const actorNames = new Map(actors.map((actor) => [actor.id, actor.name || actor.username || `کاربر ${actor.id}`]));
   return reports.map((report) => {
     const items = expenses.filter((e) => Number(e.reportId) === Number(report.id)).map((e) => ({ ...e, id: Number(e.id), canAct: canReviewExpense(e, userId, roster) }));
     const canRevise = Number(report.createdById) === userId && items.some((e) => e.stage === "revision");
@@ -288,7 +292,7 @@ async function expenseReportsFor(userId, roster, inbox = false) {
         || (roster.finance.some((u) => u.id === userId) && (entry.stage === "finance" || entry.changes?.some((change) => change.toStage === "finance")))
         || (roster.management.some((u) => u.id === userId) && (entry.stage === "management" || entry.changes?.some((change) => change.toStage === "management"))));
     const { creatorDecision, notificationVersion } = reportNotificationState(report, items, userId, canAct);
-    return { ...report, id: Number(report.id), canAct, canRevise, wasSentToMe, creatorDecision, notificationVersion, items, notificationTarget: "petty_cash_report", title: report.reportName, requestNumber: report.reportName };
+    return { ...report, id: Number(report.id), historyJson: history.map((entry) => ({ ...entry, actorName: actorNames.get(Number(entry.userId)) || null })), canAct, canRevise, wasSentToMe, creatorDecision, notificationVersion, items, notificationTarget: "petty_cash_report", title: report.reportName, requestNumber: report.reportName };
   }).filter((report) => !inbox || report.canAct || report.canRevise || report.creatorDecision);
 }
 
