@@ -661,7 +661,12 @@ export async function PATCH(request) {
     if (body.action === "review_report") {
       const reportId = Number(body.reportId), version = Number(body.expectedVersion);
       const decision = String(body.decision || ""), note = String(body.note || "").trim();
+      const rawNotes = body.notesByDecision && typeof body.notesByDecision === "object" && !Array.isArray(body.notesByDecision) ? body.notesByDecision : {};
+      const notesByDecision = Object.fromEntries(["approve", "revision", "reject"].map((key) => [key, String(rawNotes[key] ?? note).trim()]));
+      const reportWideReturn = body.reportWide === true && decision === "revision";
       if (!Number.isInteger(reportId) || reportId <= 0 || !Number.isInteger(version) || version <= 0 || !["approve", "reject", "revision"].includes(decision) || note.length > 500) return json({ error: "invalid_input" }, 400);
+      if ((body.reportWide === true && !reportWideReturn) || (reportWideReturn && !notesByDecision.revision)) return json({ error: "invalid_input" }, 400);
+      if (Object.values(notesByDecision).some((value) => value.length > 500)) return json({ error: "invalid_input" }, 400);
       const rowDecisions = body.rowDecisions && typeof body.rowDecisions === "object" && !Array.isArray(body.rowDecisions) ? body.rowDecisions : {};
       if (Object.values(rowDecisions).some((value) => !["approve", "reject", "revision"].includes(value))) return json({ error: "invalid_input" }, 400);
       const roster = await workflowRoster();
@@ -673,7 +678,7 @@ export async function PATCH(request) {
         const expenses = await tx.$queryRawUnsafe("SELECT * FROM petty_cash_expenses WHERE expense_report_id=$1 ORDER BY id FOR UPDATE", reportId);
         const actionable = expenses.filter((expense) => canReviewExpense(expense, userId, roster));
         if (!actionable.length || Object.keys(rowDecisions).some((key) => !actionable.some((e) => String(e.id) === key))) throw new RouteError("not_allowed", 403);
-        const choices = actionable.map((expense) => ({ expense, decision: decision === "approve" ? rowDecisions[expense.id] || decision : decision }));
+        const choices = (reportWideReturn ? expenses : actionable).map((expense) => ({ expense, decision: reportWideReturn ? "revision" : decision === "approve" ? rowDecisions[expense.id] || decision : decision }));
         const projectManagerId = Number(body.projectManagerId) || null;
         if (choices.some((choice) => choice.expense.stage === "planning" && choice.decision === "approve") &&
           !roster.project_manager.some((user) => user.id === projectManagerId)) throw new RouteError("invalid_project_manager", 400);
@@ -681,12 +686,15 @@ export async function PATCH(request) {
         const changes = [];
         for (const choice of choices) {
           const expense = choice.expense;
+          const choiceNote = notesByDecision[choice.decision];
+          const returnStage = ["planning", "project_manager", "finance", "management"].includes(expense.stage) ? expense.stage
+            : ["planning", "project_manager", "finance", "management"].includes(expense.return_stage) ? expense.return_stage : report.initial_stage;
           const nextStage = choice.decision === "reject" ? "rejected" : choice.decision === "revision" ? "revision"
             : expense.stage === "planning" ? "project_manager" : expense.stage === "project_manager" ? "finance" : "completed";
           const status = choice.decision === "approve" ? "approved" : choice.decision === "reject" ? "rejected" : "revision";
           await tx.$executeRawUnsafe(`
             UPDATE petty_cash_expenses SET stage=$1,review_status=$2::text,review_note=$3,
-              return_stage=CASE WHEN $2='revision' THEN stage ELSE NULL END,
+              return_stage=CASE WHEN $2='revision' THEN $7::text ELSE NULL END,
               project_manager_id=CASE WHEN stage='planning' AND $2='approved' THEN $4::int ELSE project_manager_id END,
               planning_status=CASE WHEN stage='planning' THEN $2 ELSE planning_status END,
               planning_by_id=CASE WHEN stage='planning' THEN $5::int ELSE planning_by_id END,
@@ -696,15 +704,18 @@ export async function PATCH(request) {
               project_manager_at=CASE WHEN stage='project_manager' THEN CURRENT_TIMESTAMP ELSE project_manager_at END,
               rejected_by_id=CASE WHEN $2='rejected' THEN $5::int ELSE rejected_by_id END,updated_at=CURRENT_TIMESTAMP
             WHERE id=$6
-          `, nextStage, status, note, projectManagerId, userId, Number(expense.id));
-          changes.push({ id: Number(expense.id), fromStage: expense.stage, toStage: nextStage, decision: choice.decision });
+          `, nextStage, status, choiceNote, projectManagerId, userId, Number(expense.id), returnStage);
+          changes.push({ id: Number(expense.id), fromStage: expense.stage, toStage: nextStage, decision: choice.decision, note: choiceNote });
         }
         const assignedToUserIds = [...new Set(changes.flatMap((change) => change.toStage === "project_manager"
           ? [projectManagerId] : ["revision", "rejected"].includes(change.toStage)
             ? [Number(report.created_by_id)] : (roster[change.toStage] || []).map((user) => user.id)))];
         await tx.$executeRawUnsafe(`UPDATE petty_cash_expense_reports SET workflow_version=workflow_version+1,
           review_history=review_history || $1::jsonb,review_notes=$2,updated_at=CURRENT_TIMESTAMP WHERE id=$3`,
-        JSON.stringify([{ userId, action: decision, note, changes, assignedToUserIds, at: new Date().toISOString() }]), note, reportId);
+        JSON.stringify([{ userId, action: decision, note: reportWideReturn ? notesByDecision.revision : note,
+          reportWide: reportWideReturn, stage: reportWideReturn ? actionable[0].stage : undefined,
+          changes, assignedToUserIds, at: new Date().toISOString() }]),
+        choices.some((choice) => choice.decision === "revision") ? notesByDecision.revision : notesByDecision[decision], reportId);
       });
       return json({ ok: true });
     }
