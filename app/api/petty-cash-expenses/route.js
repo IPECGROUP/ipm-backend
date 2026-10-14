@@ -856,6 +856,24 @@ export async function DELETE(request) {
     const userId = await userIdOf(request);
     if (!userId) return json({ error: "unauthorized" }, 401);
     const body = await request.json().catch(() => ({}));
+    if (body.action === "delete_report") {
+      const reportId = Number(body.reportId), version = Number(body.expectedVersion);
+      if (!Number.isInteger(reportId) || reportId <= 0 || !Number.isInteger(version) || version <= 0) return json({ error: "invalid_input" }, 400);
+      const deleted = await prisma.$transaction(async (tx) => {
+        const reports = await tx.$queryRawUnsafe("SELECT id,created_by_id,workflow_version FROM petty_cash_expense_reports WHERE id=$1 FOR UPDATE", reportId);
+        const report = reports[0];
+        if (!report || Number(report.created_by_id) !== userId) throw new RouteError("not_allowed", 403);
+        if (Number(report.workflow_version) !== version) throw new RouteError("workflow_changed", 409);
+        const expenses = await tx.$queryRawUnsafe("SELECT id,stage FROM petty_cash_expenses WHERE expense_report_id=$1 ORDER BY id FOR UPDATE", reportId);
+        if (!expenses.length || expenses.some((expense) => expense.stage !== "revision")) throw new RouteError("not_allowed", 403);
+        const linked = await tx.$queryRawUnsafe("SELECT expense_id FROM petty_cash_settlement_report_items WHERE expense_id=ANY($1::int[])", expenses.map((expense) => Number(expense.id)));
+        if (linked.length) throw new RouteError("not_allowed", 403);
+        await tx.$executeRawUnsafe("DELETE FROM petty_cash_expenses WHERE expense_report_id=$1", reportId);
+        await tx.$executeRawUnsafe("DELETE FROM petty_cash_expense_reports WHERE id=$1", reportId);
+        return expenses.length;
+      });
+      return json({ ok: true, deleted });
+    }
     if (body.action === "clear_petty_cash_page_data") {
       // This action is deliberately scoped to the petty-cash tables and the
       // current user's records.  In particular, it never changes
@@ -891,6 +909,7 @@ export async function DELETE(request) {
     return json({ ok: true, deleted: Number(deleted) });
   } catch (error) {
     console.error("petty_cash_expenses_delete_error", error);
+    if (error instanceof RouteError) return json({ error: error.code }, error.status);
     return json({ error: "internal_error" }, 500);
   }
 }
