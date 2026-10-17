@@ -106,7 +106,11 @@ export async function GET(request) {
     const kind = normalizeKind(searchParams.get("kind"));
     if (!kind) return json({ error: "invalid_kind" }, 400);
 
-    const rows = projectId && contractId
+    // A worksheet is always scoped to a selected project. Never return every
+    // project's financial data merely because the filter has not been chosen.
+    const rows = !projectId
+      ? []
+      : projectId && contractId
       ? await prisma.$queryRaw`
           SELECT "id", "project_id", "contract_id", "kind", "payload", "created_at", "updated_at"
           FROM "financial_worksheet"
