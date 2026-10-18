@@ -1554,8 +1554,10 @@ export async function PATCH(req, ctx) {
   if (data.docDatesJalali !== undefined) data.docDateJalali = data.docDatesJalali[0] || null;
   if ([SUPPLY_REQUEST_DOC_ID, TENKHAH_REQUEST_DOC_ID].includes(data.docId)) return json({ error: "invalid_doc_type" }, 400);
 
-  // A requester may edit their own request, but its approved/requested amount
-  // is immutable after creation. Enforce this server-side as well as in the UI.
+  // Monetary changes are allowed only while a returned request is back with
+  // its requester. The requested amount also has an exact copy in history.
+  const canEditReturnedAmount = row.status === "returned" && getCurrentStep(row.historyJson)?.roleKey === ROLE_KEYS.REQUESTER;
+  const monetaryFieldsProvided = body?.amount != null || body?.amountStr != null || body?.exchangeRate != null;
   delete data.amount;
   delete data.exchangeRate;
   delete data.rialAmount;
@@ -1563,6 +1565,36 @@ export async function PATCH(req, ctx) {
   if (data.creditAmount == null) delete data.creditAmount;
 
   const history = Array.isArray(row.historyJson) ? [...row.historyJson] : [];
+  if (canEditReturnedAmount && monetaryFieldsProvided) {
+    const createdIndex = history.findIndex((entry) => entry?.type === "created");
+    const previous = createdIndex >= 0 ? history[createdIndex] : {};
+    const isForeignCurrency = (data.currencyTypeId === undefined ? row.currencyTypeId : data.currencyTypeId) != null;
+    const requestedAmount = parseRequestedAmount(body?.amount ?? body?.amountStr ?? previous.requestAmount ?? row.amount, isForeignCurrency);
+    if (!requestedAmount || requestedAmount.minorUnits <= 0n) return json({ error: "amount_must_be_positive" }, 400);
+    const exchangeRate = isForeignCurrency ? toBigIntSafe(body?.exchangeRate ?? previous.exchangeRate) : 1n;
+    if (exchangeRate == null || exchangeRate <= 0n) return json({ error: "exchange_rate_required" }, 400);
+    const rialAmountMinorUnits = isForeignCurrency
+      ? convertedRialMinorUnits(requestedAmount.minorUnits, exchangeRate)
+      : requestedAmount.minorUnits;
+    const projectId = data.projectId ?? row.projectId;
+    if (!projectId) return json({ error: "project_required" }, 400);
+    const previousRialMinorUnits = parseRequestedAmount(previous.rialAmount ?? row.amount, true)?.minorUnits;
+    if (rialAmountMinorUnits !== previousRialMinorUnits || Number(projectId) !== Number(row.projectId)) {
+      const liquidityRemaining = await getProjectLiquidityRemaining(projectId);
+      if (rialAmountMinorUnits > liquidityRemaining) {
+        return json({ error: "amount_exceeds_project_liquidity", liquidityRemaining: formatMinorUnits(liquidityRemaining) }, 400);
+      }
+    }
+    data.amount = requestedAmount.legacyWholeAmount;
+    if (createdIndex >= 0) {
+      history[createdIndex] = {
+        ...previous,
+        requestAmount: requestedAmount.decimal,
+        exchangeRate: exchangeRate.toString(),
+        rialAmount: formatMinorUnits(rialAmountMinorUnits),
+      };
+    }
+  }
   const supplyMetaTouched =
     Object.prototype.hasOwnProperty.call(body, "hasSupplyRequest") ||
     Object.prototype.hasOwnProperty.call(body, "supplyRequestId") ||
