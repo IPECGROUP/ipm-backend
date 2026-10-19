@@ -1,0 +1,83 @@
+import { NextResponse } from "next/server";
+import { prisma } from "@/lib/prisma";
+
+export const runtime = "nodejs";
+
+let ready;
+async function ensureTable() {
+  if (!ready) {
+    ready = prisma.$executeRawUnsafe(`
+      CREATE TABLE IF NOT EXISTS supply_request_types (
+        id SERIAL PRIMARY KEY,
+        title TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )
+    `);
+  }
+  return ready;
+}
+
+export async function GET() {
+  try {
+    await ensureTable();
+    const items = await prisma.$queryRawUnsafe(
+      "SELECT id, title FROM supply_request_types ORDER BY id ASC"
+    );
+    return NextResponse.json({ items });
+  } catch (error) {
+    console.error("supply_request_types_get_error", error);
+    return NextResponse.json({ error: "internal_error" }, { status: 500 });
+  }
+}
+
+export async function POST(request) {
+  try {
+    await ensureTable();
+    const { title: rawTitle } = await request.json();
+    const title = String(rawTitle || "").trim();
+    if (!title) return NextResponse.json({ error: "title_required" }, { status: 400 });
+
+    const rows = await prisma.$queryRawUnsafe(
+      "INSERT INTO supply_request_types (title) VALUES ($1) RETURNING id, title",
+      title
+    );
+    return NextResponse.json({ item: rows[0] }, { status: 201 });
+  } catch (error) {
+    if (error?.code === "23505") return NextResponse.json({ error: "title_exists" }, { status: 409 });
+    console.error("supply_request_types_post_error", error);
+    return NextResponse.json({ error: "internal_error" }, { status: 500 });
+  }
+}
+
+export async function PATCH(request) {
+  try {
+    await ensureTable();
+    const { id: rawId, title: rawTitle } = await request.json();
+    const id = Number(rawId);
+    const title = String(rawTitle || "").trim();
+    if (!Number.isInteger(id) || id <= 0) return NextResponse.json({ error: "invalid_id" }, { status: 400 });
+    if (!title) return NextResponse.json({ error: "title_required" }, { status: 400 });
+    const rows = await prisma.$queryRawUnsafe("UPDATE supply_request_types SET title = $1, updated_at = CURRENT_TIMESTAMP WHERE id = $2 RETURNING id, title", title, id);
+    if (!rows[0]) return NextResponse.json({ error: "not_found" }, { status: 404 });
+    return NextResponse.json({ item: rows[0] });
+  } catch (error) {
+    if (error?.code === "23505") return NextResponse.json({ error: "title_exists" }, { status: 409 });
+    console.error("supply_request_types_patch_error", error);
+    return NextResponse.json({ error: "internal_error" }, { status: 500 });
+  }
+}
+
+export async function DELETE(request) {
+  try {
+    await ensureTable();
+    const { ids } = await request.json();
+    const selectedIds = Array.from(new Set((Array.isArray(ids) ? ids : []).map(Number).filter((id) => Number.isInteger(id) && id > 0)));
+    if (!selectedIds.length) return NextResponse.json({ error: "ids_required" }, { status: 400 });
+    await prisma.$executeRawUnsafe("DELETE FROM supply_request_types WHERE id = ANY($1::int[])", selectedIds);
+    return NextResponse.json({ ok: true });
+  } catch (error) {
+    console.error("supply_request_types_delete_error", error);
+    return NextResponse.json({ error: "internal_error" }, { status: 500 });
+  }
+}
