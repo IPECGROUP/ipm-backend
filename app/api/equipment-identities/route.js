@@ -77,15 +77,15 @@ export async function POST(request) {
     const user = await currentUser(request);
     if (!user) return json({ error: "unauthorized" }, 401);
     const body = await request.json().catch(() => ({}));
-    const code = String(body.code || "").trim().slice(0, 80);
-    const name = String(body.name || "").trim().slice(0, 255);
     const categoryId = Number(body.categoryId);
     const tagIds = [...new Set((Array.isArray(body.tagIds) ? body.tagIds : []).map(String).filter(Boolean))].slice(0, 100);
-    if (!code || !name) return json({ error: "code_and_name_required" }, 400);
     if (!Number.isSafeInteger(categoryId) || categoryId < 1) return json({ error: "category_required" }, 400);
     await ensureSchema();
     const categories = await prisma.$queryRaw`SELECT name FROM equipment_field_categories WHERE id = ${categoryId}`;
     if (!categories.length) return json({ error: "category_not_found" }, 400);
+    const id = randomUUID();
+    const code = String(body.code || "").trim().slice(0, 80) || `EQ-${id}`;
+    const name = String(body.name || "").trim().slice(0, 255) || `تجهیز ${categories[0].name}`;
     const definitions = await prisma.$queryRaw`SELECT id FROM equipment_field_definitions WHERE category_id = ${categoryId}`;
     const allowedFieldIds = new Set(definitions.map((field) => String(field.id)));
     const suppliedValues = body.fieldValues && typeof body.fieldValues === "object" && !Array.isArray(body.fieldValues) ? body.fieldValues : {};
@@ -101,7 +101,7 @@ export async function POST(request) {
     if (files.some((file) => !/^\/uploads\/equipment-identities\/[a-f0-9-]{36}\.[a-z0-9]+$/.test(file.url) || !Number.isFinite(file.size) || file.size < 0)) return json({ error: "invalid_files" }, 400);
     const rows = await prisma.$queryRaw`
       INSERT INTO "equipment_identities" ("id", "code", "name", "category", "category_id", "tag_ids", "field_values", "related_letter_ids", "files", "created_by_id")
-      VALUES (${randomUUID()}, ${code}, ${name}, ${categories[0].name}, ${categoryId}, ${JSON.stringify(tagIds)}::jsonb, ${JSON.stringify(fieldValues)}::jsonb, ${JSON.stringify(relatedLetterIds)}::jsonb, ${JSON.stringify(files)}::jsonb, ${Number(user.id)})
+      VALUES (${id}, ${code}, ${name}, ${categories[0].name}, ${categoryId}, ${JSON.stringify(tagIds)}::jsonb, ${JSON.stringify(fieldValues)}::jsonb, ${JSON.stringify(relatedLetterIds)}::jsonb, ${JSON.stringify(files)}::jsonb, ${Number(user.id)})
       RETURNING *
     `;
     return json({ item: mapItem(rows[0]) }, 201);

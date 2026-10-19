@@ -16,3 +16,20 @@
 2026-10-19 17:42:33.551 +0330 [5544] LOG:  checkpoint starting: shutdown immediate
 2026-10-19 17:42:35.130 +0330 [5544] LOG:  checkpoint complete: wrote 58 buffers (0.4%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.018 s, sync=1.467 s, total=1.595 s; sync files=49, longest=0.116 s, average=0.030 s; distance=218 kB, estimate=218 kB; lsn=0/1CDFBD0, redo lsn=0/1CDFBD0
 2026-10-19 17:42:35.240 +0330 [16800] LOG:  database system is shut down
+2026-10-19 17:49:55.271 +0330 [10948] LOG:  starting PostgreSQL 18.1 on x86_64-windows, compiled by msvc-19.44.35219, 64-bit
+2026-10-19 17:49:55.272 +0330 [10948] LOG:  listening on IPv4 address "127.0.0.1", port 55432
+2026-10-19 17:49:55.375 +0330 [3636] LOG:  database system was shut down at 2026-10-19 17:42:35 +0330
+2026-10-19 17:49:55.418 +0330 [10948] LOG:  database system is ready to accept connections
+2026-10-19 17:50:18.942 +0330 [8116] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-10-19 17:50:18.942 +0330 [14060] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-10-19 17:50:18.942 +0330 [7968] LOG:  could not receive data from client: An existing connection was forcibly closed by the remote host.
+	
+2026-10-19 17:50:22.171 +0330 [10948] LOG:  received fast shutdown request
+2026-10-19 17:50:22.192 +0330 [10948] LOG:  aborting any active transactions
+2026-10-19 17:50:22.211 +0330 [10948] LOG:  background worker "logical replication launcher" (PID 476) exited with exit code 1
+2026-10-19 17:50:22.213 +0330 [9324] LOG:  shutting down
+2026-10-19 17:50:22.233 +0330 [9324] LOG:  checkpoint starting: shutdown immediate
+2026-10-19 17:50:22.494 +0330 [9324] LOG:  checkpoint complete: wrote 7 buffers (0.0%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.006 s, sync=0.190 s, total=0.281 s; sync files=9, longest=0.026 s, average=0.022 s; distance=17 kB, estimate=17 kB; lsn=0/1CE4100, redo lsn=0/1CE4100
+2026-10-19 17:50:22.599 +0330 [10948] LOG:  database system is shut down
