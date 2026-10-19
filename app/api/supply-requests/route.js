@@ -6,6 +6,59 @@ import { requirePagePermission } from "../../../lib/pagePermissions";
 export const runtime = "nodejs";
 
 const REQUEST_DOC_ID = "supply_request";
+let requestTypesReady;
+async function ensureRequestTypeTables() {
+  if (!requestTypesReady) {
+    requestTypesReady = (async () => {
+      await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS supply_request_types (
+        id SERIAL PRIMARY KEY, title TEXT NOT NULL UNIQUE,
+        created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+        updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+      )`);
+      await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS supply_request_type_assignments (
+        request_id INTEGER PRIMARY KEY REFERENCES "PaymentRequest"(id) ON DELETE CASCADE,
+        type_id INTEGER REFERENCES supply_request_types(id) ON DELETE SET NULL,
+        type_title TEXT NOT NULL
+      )`);
+    })().catch((error) => { requestTypesReady = null; throw error; });
+  }
+  return requestTypesReady;
+}
+
+async function findRequestType(rawId) {
+  if (rawId === null || rawId === undefined || rawId === "") return null;
+  const id = Number(rawId);
+  if (!Number.isInteger(id) || id <= 0) return undefined;
+  await ensureRequestTypeTables();
+  const rows = await prisma.$queryRawUnsafe("SELECT id, title FROM supply_request_types WHERE id = $1", id);
+  return rows[0];
+}
+
+async function requestTypesForRequests(ids) {
+  if (!ids.length) return new Map();
+  await ensureRequestTypeTables();
+  const rows = await prisma.$queryRawUnsafe(`
+    SELECT a.request_id AS "requestId", a.type_id AS "typeId",
+           COALESCE(t.title, a.type_title) AS "typeTitle"
+    FROM supply_request_type_assignments a
+    LEFT JOIN supply_request_types t ON t.id = a.type_id
+    WHERE a.request_id = ANY($1::int[])
+  `, ids.map(Number));
+  return new Map(rows.map((row) => [Number(row.requestId), row]));
+}
+
+async function saveRequestType(tx, requestId, requestType) {
+  if (!requestType) {
+    await tx.$executeRawUnsafe("DELETE FROM supply_request_type_assignments WHERE request_id = $1", requestId);
+    return;
+  }
+  await tx.$executeRawUnsafe(`
+    INSERT INTO supply_request_type_assignments (request_id, type_id, type_title)
+    VALUES ($1, $2, $3)
+    ON CONFLICT (request_id) DO UPDATE SET type_id = EXCLUDED.type_id, type_title = EXCLUDED.type_title
+  `, requestId, requestType.id, requestType.title);
+}
+
 const SUPPLY_STEP = {
   REQUESTER: "requester",
   PROJECT_MANAGER: "project_manager",
@@ -584,6 +637,8 @@ function serializeItem(row) {
     projectCode: row.project?.code || null,
     projectName: row.project?.name || null,
     budgetCode: row.budgetCode,
+    requestTypeId: row.requestType?.typeId ?? null,
+    requestTypeTitle: row.requestType?.typeTitle || null,
     title: row.title,
     description: row.description,
     needDateJalali: row.docDateJalali,
@@ -737,6 +792,7 @@ export async function GET(req) {
         })
       : [];
     const projectById = new Map(projects.map((project) => [Number(project.id), project]));
+    const requestTypesById = await requestTypesForRequests(rows.map((row) => row.id));
 
     // Dashboard data is read-only. It intentionally uses the same supply-page
     // permission as the registry, while bypassing cartable filtering so the
@@ -758,7 +814,7 @@ export async function GET(req) {
       });
       return json({
         items: rows.map((row) => ({
-          ...serializeItem({ ...row, project: projectById.get(Number(row.projectId)) || null, canAct: false, canDelete: false }),
+          ...serializeItem({ ...row, requestType: requestTypesById.get(Number(row.id)), project: projectById.get(Number(row.projectId)) || null, canAct: false, canDelete: false }),
           supplyActions: actionsByRequestId.get(Number(row.id)) || [],
         })),
         supplyUsers: serializeWorkflowUsers(supplyUsers),
@@ -795,6 +851,7 @@ export async function GET(req) {
     return json({
       items: finalRows.map((row) => serializeItem({
         ...row,
+        requestType: requestTypesById.get(Number(row.id)),
         project: projectById.get(Number(row.projectId)) || null,
         canAct: canActOnSupplyStep({ row, userId, userCtx, mainAdmin }),
         canDelete: Number(row.createdById) === Number(userId),
@@ -957,8 +1014,10 @@ export async function POST(req) {
           currencyType: { select: { id: true, title: true } },
         },
       });
+      const requestType = (await requestTypesForRequests([id])).get(id);
       return json({ ok: true, item: serializeItem({
         ...updated,
+        requestType,
         canAct: canActOnSupplyStep({ row: updated, userId, userCtx, mainAdmin }),
         canDelete: Number(updated.createdById) === Number(userId),
       }) });
@@ -975,8 +1034,10 @@ export async function POST(req) {
     const description = cleanText(body.description, 2000);
     const amount = toBigIntAmount(body.amount);
     const currencyTypeId = toPositiveInt(body.currencyTypeId ?? body.currency_type_id);
+    const requestType = await findRequestType(body.requestTypeId);
     const targetAssigneeUserId = toPositiveInt(body.targetAssigneeUserId ?? body.target_assignee_user_id ?? body.assigneeUserId ?? body.assignee_user_id);
 
+    if (requestType === undefined) return json({ error: "invalid_request_type" }, 400);
     if (!title) return json({ error: "title_required" }, 400);
     if (!budgetCode) return json({ error: "budget_code_required" }, 400);
     if (amount <= 0n) return json({ error: "amount_must_be_positive" }, 400);
@@ -1044,42 +1105,47 @@ export async function POST(req) {
     } else {
       historyJson.push({ type: "step_clear", at: nowIso });
     }
-    const created = await prisma.paymentRequest.create({
-      data: {
-        serial,
-        dateJalali: effectiveDateJalali,
-        scope: "projects",
-        title,
-        description: description || null,
-        amount,
-        cashAmount: null,
-        cashDateJalali: null,
-        creditAmount: null,
-        creditPay: null,
-        beneficiaryName: null,
-        bankInfo: null,
-        docId: REQUEST_DOC_ID,
-        docOther: "درخواست تامین",
-        docNumber: null,
-        docDateJalali: needDateJalali || null,
-        currencyTypeId: currencyTypeId || null,
-        currencySourceId: null,
-        projectId,
-        budgetCode,
-        attachments: Array.isArray(body.attachments) ? body.attachments : [],
-        createdById: Number(userId),
-        currentAssigneeUserId: initialTargetRoleKey ? Number(initialAssignee.user.id) : Number(userId),
-        status: initialTargetRoleKey ? "pending" : "approved",
-        historyJson,
-      },
+    await ensureRequestTypeTables();
+    const created = await prisma.$transaction(async (tx) => {
+      const item = await tx.paymentRequest.create({
+        data: {
+          serial,
+          dateJalali: effectiveDateJalali,
+          scope: "projects",
+          title,
+          description: description || null,
+          amount,
+          cashAmount: null,
+          cashDateJalali: null,
+          creditAmount: null,
+          creditPay: null,
+          beneficiaryName: null,
+          bankInfo: null,
+          docId: REQUEST_DOC_ID,
+          docOther: "درخواست تامین",
+          docNumber: null,
+          docDateJalali: needDateJalali || null,
+          currencyTypeId: currencyTypeId || null,
+          currencySourceId: null,
+          projectId,
+          budgetCode,
+          attachments: Array.isArray(body.attachments) ? body.attachments : [],
+          createdById: Number(userId),
+          currentAssigneeUserId: initialTargetRoleKey ? Number(initialAssignee.user.id) : Number(userId),
+          status: initialTargetRoleKey ? "pending" : "approved",
+          historyJson,
+        },
         include: {
           createdBy: { select: { name: true, username: true, email: true } },
           currentAssigneeUser: { select: { name: true, username: true, email: true } },
           currencyType: { select: { id: true, title: true } },
-      },
+        },
+      });
+      if (requestType) await saveRequestType(tx, item.id, requestType);
+      return item;
     });
 
-    return json({ ok: true, item: serializeItem({ ...created, project, canAct: false, canDelete: true }) }, 201);
+    return json({ ok: true, item: serializeItem({ ...created, requestType: requestType ? { typeId: requestType.id, typeTitle: requestType.title } : null, project, canAct: false, canDelete: true }) }, 201);
   } catch (e) {
     console.error("supply_requests_post_error", e);
     const mapped = mapDbError(e);
@@ -1112,33 +1178,43 @@ export async function PATCH(req) {
     const budgetCode = cleanText(body.budgetCode ?? body.budget_code, 80);
     const amount = toBigIntAmount(body.amount);
     const currencyTypeId = toPositiveInt(body.currencyTypeId ?? body.currency_type_id);
+    const hasRequestType = Object.hasOwn(body, "requestTypeId");
+    const requestType = hasRequestType ? await findRequestType(body.requestTypeId) : null;
+    if (requestType === undefined) return json({ error: "invalid_request_type" }, 400);
     if (!title) return json({ error: "title_required" }, 400);
     if (!budgetCode) return json({ error: "budget_code_required" }, 400);
     if (amount <= 0n) return json({ error: "amount_must_be_positive" }, 400);
     if (currencyTypeId && !await prisma.currencyType.findUnique({ where: { id: currencyTypeId }, select: { id: true } })) return json({ error: "invalid_currency_type" }, 400);
 
-    const updated = await prisma.paymentRequest.update({
-      where: { id },
-      data: {
-        projectId,
-        budgetCode,
-        title,
-        description: cleanText(body.description, 2000) || null,
-        amount,
-        currencyTypeId: currencyTypeId || null,
-        docDateJalali: cleanText(body.needDateJalali ?? body.need_date_jalali, 20).replaceAll("-", "/") || null,
-        ...(Array.isArray(body.attachments) ? { attachments: body.attachments } : {}),
-      },
+    await ensureRequestTypeTables();
+    const updated = await prisma.$transaction(async (tx) => {
+      const item = await tx.paymentRequest.update({
+        where: { id },
+        data: {
+          projectId,
+          budgetCode,
+          title,
+          description: cleanText(body.description, 2000) || null,
+          amount,
+          currencyTypeId: currencyTypeId || null,
+          docDateJalali: cleanText(body.needDateJalali ?? body.need_date_jalali, 20).replaceAll("-", "/") || null,
+          ...(Array.isArray(body.attachments) ? { attachments: body.attachments } : {}),
+        },
         include: {
           createdBy: { select: { name: true, username: true, email: true } },
           currentAssigneeUser: { select: { name: true, username: true, email: true } },
           currencyType: { select: { id: true, title: true } },
-      },
+        },
+      });
+      if (hasRequestType) await saveRequestType(tx, id, requestType);
+      return item;
     });
+    const savedRequestType = (await requestTypesForRequests([id])).get(id);
     const { mainAdmin } = await userContext(userId);
     const userCtx = await userRoleAndUnitContext(userId);
     return json({ ok: true, item: serializeItem({
       ...updated,
+      requestType: savedRequestType,
       project,
       canAct: canActOnSupplyStep({ row: updated, userId, userCtx, mainAdmin }),
       canDelete: true,
