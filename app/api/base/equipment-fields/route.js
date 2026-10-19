@@ -42,10 +42,21 @@ async function ensureTables() {
       END IF;
     END $$`);
     await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS equipment_field_definitions (
-      id SERIAL PRIMARY KEY, title_id INTEGER NOT NULL REFERENCES equipment_field_titles(id) ON DELETE CASCADE,
+      id SERIAL PRIMARY KEY, category_id INTEGER REFERENCES equipment_field_categories(id) ON DELETE RESTRICT,
+      title_id INTEGER NOT NULL REFERENCES equipment_field_titles(id) ON DELETE CASCADE,
       name VARCHAR(120) NOT NULL, field_type VARCHAR(20) NOT NULL DEFAULT 'text',
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(title_id, name)
+      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(category_id, title_id, name)
     )`);
+    await prisma.$executeRawUnsafe(`ALTER TABLE equipment_field_definitions ADD COLUMN IF NOT EXISTS category_id INTEGER`);
+    await prisma.$executeRawUnsafe(`DO $$ BEGIN
+      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'equipment_field_definitions_category_id_fkey') THEN
+        ALTER TABLE equipment_field_definitions ADD CONSTRAINT equipment_field_definitions_category_id_fkey
+          FOREIGN KEY (category_id) REFERENCES equipment_field_categories(id) ON DELETE RESTRICT;
+      END IF;
+    END $$`);
+    await prisma.$executeRawUnsafe(`ALTER TABLE equipment_field_definitions DROP CONSTRAINT IF EXISTS equipment_field_definitions_title_id_name_key`);
+    await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS equipment_field_definitions_category_title_name_key
+      ON equipment_field_definitions (category_id, title_id, name)`);
     await prisma.$executeRawUnsafe(`UPDATE equipment_field_definitions SET field_type = 'text' WHERE field_type <> 'text'`);
   })().catch((error) => { ready = null; throw error; });
   return ready;
@@ -55,7 +66,7 @@ async function allItems() {
   const [categories, titles, fields] = await Promise.all([
     prisma.$queryRaw`SELECT id, name FROM equipment_field_categories ORDER BY id`,
     prisma.$queryRaw`SELECT id, name FROM equipment_field_titles ORDER BY id`,
-    prisma.$queryRaw`SELECT id, title_id AS "titleId", name FROM equipment_field_definitions ORDER BY id`,
+    prisma.$queryRaw`SELECT id, category_id AS "categoryId", title_id AS "titleId", name FROM equipment_field_definitions ORDER BY id`,
   ]);
   return { categories, titles, fields };
 }
@@ -85,9 +96,10 @@ export async function POST(request) {
       rows = await prisma.$queryRaw`INSERT INTO equipment_field_titles (name) VALUES (${name}) RETURNING id, name`;
     }
     if (kind === "field") {
+      const categoryId = idOf(body.categoryId);
       const titleId = idOf(body.titleId);
-      if (!titleId) return json({ error: "invalid_input" }, 400);
-      rows = await prisma.$queryRaw`INSERT INTO equipment_field_definitions (title_id, name, field_type) VALUES (${titleId}, ${name}, 'text') RETURNING id, title_id AS "titleId", name`;
+      if (!categoryId || !titleId) return json({ error: "invalid_input" }, 400);
+      rows = await prisma.$queryRaw`INSERT INTO equipment_field_definitions (category_id, title_id, name, field_type) VALUES (${categoryId}, ${titleId}, ${name}, 'text') RETURNING id, category_id AS "categoryId", title_id AS "titleId", name`;
     }
     return json({ item: rows[0] }, 201);
   } catch (error) {
@@ -113,9 +125,10 @@ export async function PATCH(request) {
       rows = await prisma.$queryRaw`UPDATE equipment_field_titles SET name = ${name} WHERE id = ${id} RETURNING id, name`;
     }
     if (kind === "field") {
+      const categoryId = idOf(body.categoryId);
       const titleId = idOf(body.titleId);
-      if (!titleId) return json({ error: "invalid_input" }, 400);
-      rows = await prisma.$queryRaw`UPDATE equipment_field_definitions SET name = ${name}, title_id = ${titleId}, field_type = 'text' WHERE id = ${id} RETURNING id, title_id AS "titleId", name`;
+      if (!categoryId || !titleId) return json({ error: "invalid_input" }, 400);
+      rows = await prisma.$queryRaw`UPDATE equipment_field_definitions SET name = ${name}, category_id = ${categoryId}, title_id = ${titleId}, field_type = 'text' WHERE id = ${id} RETURNING id, category_id AS "categoryId", title_id AS "titleId", name`;
     }
     return rows[0] ? json({ item: rows[0] }) : json({ error: "not_found" }, 404);
   } catch (error) {
@@ -140,6 +153,7 @@ export async function DELETE(request) {
     if (kind === "field") count = await prisma.$executeRaw`DELETE FROM equipment_field_definitions WHERE id = ${id}`;
     return count ? json({ ok: true }) : json({ error: "not_found" }, 404);
   } catch (error) {
+    if (["23503", "23001"].includes(error?.meta?.code || error?.code)) return json({ error: "category_in_use" }, 409);
     console.error("equipment_fields_delete_failed", error);
     return json({ error: "internal_error" }, 500);
   }
