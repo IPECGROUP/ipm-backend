@@ -1,10 +1,10 @@
 import { NextResponse } from "next/server";
 import { prisma } from "../../../../lib/prisma";
+import { ensureEquipmentFieldTables } from "../../../../lib/equipmentFieldsSchema";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
-let ready;
 const json = (data, status = 200) => NextResponse.json(data, { status, headers: { "Cache-Control": "no-store" } });
 const validKinds = new Set(["category", "title", "field"]);
 const idOf = (value) => { const id = Number(value); return Number.isInteger(id) && id > 0 ? id : null; };
@@ -22,46 +22,6 @@ async function currentUser(request) {
   return null;
 }
 
-async function ensureTables() {
-  if (!ready) ready = (async () => {
-    await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS equipment_field_categories (
-      id SERIAL PRIMARY KEY, name VARCHAR(120) NOT NULL UNIQUE,
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
-    )`);
-    await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS equipment_field_titles (
-      id SERIAL PRIMARY KEY, category_id INTEGER REFERENCES equipment_field_categories(id) ON DELETE SET NULL,
-      name VARCHAR(120) NOT NULL, created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-      UNIQUE(category_id, name)
-    )`);
-    await prisma.$executeRawUnsafe(`ALTER TABLE equipment_field_titles ALTER COLUMN category_id DROP NOT NULL`);
-    await prisma.$executeRawUnsafe(`DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'equipment_field_titles_category_id_fkey' AND confdeltype = 'n') THEN
-        ALTER TABLE equipment_field_titles DROP CONSTRAINT IF EXISTS equipment_field_titles_category_id_fkey;
-        ALTER TABLE equipment_field_titles ADD CONSTRAINT equipment_field_titles_category_id_fkey
-          FOREIGN KEY (category_id) REFERENCES equipment_field_categories(id) ON DELETE SET NULL;
-      END IF;
-    END $$`);
-    await prisma.$executeRawUnsafe(`CREATE TABLE IF NOT EXISTS equipment_field_definitions (
-      id SERIAL PRIMARY KEY, category_id INTEGER REFERENCES equipment_field_categories(id) ON DELETE RESTRICT,
-      title_id INTEGER NOT NULL REFERENCES equipment_field_titles(id) ON DELETE CASCADE,
-      name VARCHAR(120) NOT NULL, field_type VARCHAR(20) NOT NULL DEFAULT 'text',
-      created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), UNIQUE(category_id, title_id, name)
-    )`);
-    await prisma.$executeRawUnsafe(`ALTER TABLE equipment_field_definitions ADD COLUMN IF NOT EXISTS category_id INTEGER`);
-    await prisma.$executeRawUnsafe(`DO $$ BEGIN
-      IF NOT EXISTS (SELECT 1 FROM pg_constraint WHERE conname = 'equipment_field_definitions_category_id_fkey') THEN
-        ALTER TABLE equipment_field_definitions ADD CONSTRAINT equipment_field_definitions_category_id_fkey
-          FOREIGN KEY (category_id) REFERENCES equipment_field_categories(id) ON DELETE RESTRICT;
-      END IF;
-    END $$`);
-    await prisma.$executeRawUnsafe(`ALTER TABLE equipment_field_definitions DROP CONSTRAINT IF EXISTS equipment_field_definitions_title_id_name_key`);
-    await prisma.$executeRawUnsafe(`CREATE UNIQUE INDEX IF NOT EXISTS equipment_field_definitions_category_title_name_key
-      ON equipment_field_definitions (category_id, title_id, name)`);
-    await prisma.$executeRawUnsafe(`UPDATE equipment_field_definitions SET field_type = 'text' WHERE field_type <> 'text'`);
-  })().catch((error) => { ready = null; throw error; });
-  return ready;
-}
-
 async function allItems() {
   const [categories, titles, fields] = await Promise.all([
     prisma.$queryRaw`SELECT id, name FROM equipment_field_categories ORDER BY id`,
@@ -74,7 +34,7 @@ async function allItems() {
 export async function GET(request) {
   try {
     if (!await currentUser(request)) return json({ error: "unauthorized" }, 401);
-    await ensureTables();
+    await ensureEquipmentFieldTables();
     return json(await allItems());
   } catch (error) {
     console.error("equipment_fields_get_failed", error);
@@ -89,7 +49,7 @@ export async function POST(request) {
     const kind = String(body.kind || "");
     const name = nameOf(body.name);
     if (!validKinds.has(kind) || !name) return json({ error: "invalid_input" }, 400);
-    await ensureTables();
+    await ensureEquipmentFieldTables();
     let rows;
     if (kind === "category") rows = await prisma.$queryRaw`INSERT INTO equipment_field_categories (name) VALUES (${name}) RETURNING id, name`;
     if (kind === "title") {
@@ -118,7 +78,7 @@ export async function PATCH(request) {
     const id = idOf(body.id);
     const name = nameOf(body.name);
     if (!validKinds.has(kind) || !id || !name) return json({ error: "invalid_input" }, 400);
-    await ensureTables();
+    await ensureEquipmentFieldTables();
     let rows;
     if (kind === "category") rows = await prisma.$queryRaw`UPDATE equipment_field_categories SET name = ${name} WHERE id = ${id} RETURNING id, name`;
     if (kind === "title") {
@@ -146,7 +106,7 @@ export async function DELETE(request) {
     const kind = String(body.kind || "");
     const id = idOf(body.id);
     if (!validKinds.has(kind) || !id) return json({ error: "invalid_input" }, 400);
-    await ensureTables();
+    await ensureEquipmentFieldTables();
     let count;
     if (kind === "category") count = await prisma.$executeRaw`DELETE FROM equipment_field_categories WHERE id = ${id}`;
     if (kind === "title") count = await prisma.$executeRaw`DELETE FROM equipment_field_titles WHERE id = ${id}`;

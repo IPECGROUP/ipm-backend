@@ -1,0 +1,18 @@
+2026-10-19 17:41:07.588 +0330 [16800] LOG:  starting PostgreSQL 18.1 on x86_64-windows, compiled by msvc-19.44.35219, 64-bit
+2026-10-19 17:41:07.589 +0330 [16800] LOG:  listening on IPv4 address "127.0.0.1", port 55432
+2026-10-19 17:41:07.848 +0330 [11860] LOG:  database system was interrupted; last known up at 2026-10-19 17:24:49 +0330
+2026-10-19 17:41:17.866 +0330 [11860] LOG:  syncing data directory (fsync), elapsed time: 10.01 s, current path: ./base/4/2681
+2026-10-19 17:41:22.794 +0330 [11860] LOG:  database system was not properly shut down; automatic recovery in progress
+2026-10-19 17:41:22.846 +0330 [11860] LOG:  redo starts at 0/1C820E0
+2026-10-19 17:41:22.877 +0330 [11860] LOG:  invalid record length at 0/1CA9208: expected at least 24, got 0
+2026-10-19 17:41:22.877 +0330 [11860] LOG:  redo done at 0/1CA91D0 system usage: CPU: user: 0.00 s, system: 0.01 s, elapsed: 0.03 s
+2026-10-19 17:41:22.900 +0330 [5544] LOG:  checkpoint starting: end-of-recovery immediate wait
+2026-10-19 17:41:24.592 +0330 [5544] LOG:  checkpoint complete: wrote 44 buffers (0.3%), wrote 3 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.027 s, sync=1.449 s, total=1.712 s; sync files=39, longest=0.109 s, average=0.038 s; distance=156 kB, estimate=156 kB; lsn=0/1CA9208, redo lsn=0/1CA9208
+2026-10-19 17:41:24.723 +0330 [16800] LOG:  database system is ready to accept connections
+2026-10-19 17:42:33.486 +0330 [16800] LOG:  received fast shutdown request
+2026-10-19 17:42:33.519 +0330 [16800] LOG:  aborting any active transactions
+2026-10-19 17:42:33.535 +0330 [16800] LOG:  background worker "logical replication launcher" (PID 8932) exited with exit code 1
+2026-10-19 17:42:33.535 +0330 [5544] LOG:  shutting down
+2026-10-19 17:42:33.551 +0330 [5544] LOG:  checkpoint starting: shutdown immediate
+2026-10-19 17:42:35.130 +0330 [5544] LOG:  checkpoint complete: wrote 58 buffers (0.4%), wrote 1 SLRU buffers; 0 WAL file(s) added, 0 removed, 0 recycled; write=0.018 s, sync=1.467 s, total=1.595 s; sync files=49, longest=0.116 s, average=0.030 s; distance=218 kB, estimate=218 kB; lsn=0/1CDFBD0, redo lsn=0/1CDFBD0
+2026-10-19 17:42:35.240 +0330 [16800] LOG:  database system is shut down
