@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "../../../../lib/prisma";
 import { ensureEquipmentFieldTables } from "../../../../lib/equipmentFieldsSchema";
+import { ensureEquipmentSpecificationsTable } from "../../../../lib/equipmentSpecificationsSchema";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,7 +24,7 @@ async function currentUser(request) {
 }
 
 async function allItems() {
-  const [categories, titles, fields, rows] = await Promise.all([
+  const [categories, titles, fields, rows, specifications] = await Promise.all([
     prisma.$queryRaw`SELECT id, name FROM equipment_field_categories ORDER BY id`,
     prisma.$queryRaw`SELECT id, name FROM equipment_field_titles ORDER BY id`,
     prisma.$queryRaw`SELECT id, category_id AS "categoryId", title_id AS "titleId", name FROM equipment_field_definitions ORDER BY id`,
@@ -33,8 +34,10 @@ async function allItems() {
       JOIN equipment_field_categories c ON c.id = f.category_id
       JOIN equipment_field_titles t ON t.id = f.title_id
       ORDER BY f.id`,
+    prisma.$queryRaw`SELECT id, category_id AS "categoryId", parent_id AS "parentId", code, name
+      FROM equipment_specifications ORDER BY id`,
   ]);
-  return { categories, titles, fields, rows };
+  return { categories, titles, fields, rows, specifications };
 }
 
 async function parentIds(tx, categoryIdInput, categoryName, titleName) {
@@ -52,7 +55,7 @@ async function parentIds(tx, categoryIdInput, categoryName, titleName) {
 export async function GET(request) {
   try {
     if (!await currentUser(request)) return json({ error: "unauthorized" }, 401);
-    await ensureEquipmentFieldTables();
+    await ensureEquipmentSpecificationsTable();
     return json(await allItems());
   } catch (error) {
     console.error("equipment_fields_get_failed", error);

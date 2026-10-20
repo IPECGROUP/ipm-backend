@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { prisma } from "../../../lib/prisma";
 import { ensureEquipmentFieldTables } from "../../../lib/equipmentFieldsSchema";
+import { ensureEquipmentSpecificationsTable } from "../../../lib/equipmentSpecificationsSchema";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -23,7 +24,7 @@ async function currentUser(request) {
 
 async function ensureSchema() {
   if (!schemaPromise) schemaPromise = (async () => {
-    await ensureEquipmentFieldTables();
+    await ensureEquipmentSpecificationsTable();
     await prisma.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS "equipment_identities" (
       "id" TEXT PRIMARY KEY,
@@ -88,6 +89,8 @@ export async function POST(request) {
     const name = String(body.name || "").trim().slice(0, 255) || `تجهیز ${categories[0].name}`;
     const definitions = await prisma.$queryRaw`SELECT id FROM equipment_field_definitions WHERE category_id = ${categoryId}`;
     const allowedFieldIds = new Set(definitions.map((field) => String(field.id)));
+    const specifications = await prisma.$queryRaw`SELECT id FROM equipment_specifications WHERE category_id = ${categoryId}`;
+    specifications.forEach((item) => allowedFieldIds.add(`spec:${item.id}`));
     const suppliedValues = body.fieldValues && typeof body.fieldValues === "object" && !Array.isArray(body.fieldValues) ? body.fieldValues : {};
     if (Object.keys(suppliedValues).some((id) => !allowedFieldIds.has(id) || typeof suppliedValues[id] !== "string" || suppliedValues[id].length > 10000)) return json({ error: "invalid_field_values" }, 400);
     const fieldValues = Object.fromEntries(Object.entries(suppliedValues).map(([id, value]) => [id, value.trim()]));
