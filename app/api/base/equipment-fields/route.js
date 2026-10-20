@@ -37,9 +37,13 @@ async function allItems() {
   return { categories, titles, fields, rows };
 }
 
-async function parentIds(tx, categoryName, titleName) {
-  const [category] = await tx.$queryRaw`INSERT INTO equipment_field_categories (name) VALUES (${categoryName})
-    ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id`;
+async function parentIds(tx, categoryIdInput, categoryName, titleName) {
+  const categoryId = idOf(categoryIdInput);
+  const [category] = categoryId
+    ? await tx.$queryRaw`SELECT id FROM equipment_field_categories WHERE id = ${categoryId}`
+    : await tx.$queryRaw`INSERT INTO equipment_field_categories (name) VALUES (${categoryName})
+        ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id`;
+  if (!category) throw Object.assign(new Error("parent_not_found"), { code: "parent_not_found" });
   const [title] = await tx.$queryRaw`INSERT INTO equipment_field_titles (category_id, name) VALUES (${category.id}, ${titleName})
     ON CONFLICT (category_id, name) DO UPDATE SET name = EXCLUDED.name RETURNING id`;
   return { categoryId: category.id, titleId: title.id };
@@ -66,10 +70,10 @@ export async function POST(request) {
       const category = nameOf(body.category);
       const title = nameOf(body.title);
       const field = nameOf(body.field);
-      if (!category || !title || !field) return json({ error: "invalid_input" }, 400);
+      if ((!idOf(body.categoryId) && !category) || !title || !field) return json({ error: "invalid_input" }, 400);
       await ensureEquipmentFieldTables();
       const item = await prisma.$transaction(async (tx) => {
-        const { categoryId, titleId } = await parentIds(tx, category, title);
+        const { categoryId, titleId } = await parentIds(tx, body.categoryId, category, title);
         const inserted = await tx.$queryRaw`INSERT INTO equipment_field_definitions (category_id, title_id, name, field_type)
           VALUES (${categoryId}, ${titleId}, ${field}, 'text') ON CONFLICT DO NOTHING RETURNING id`;
         if (!inserted.length) throw Object.assign(new Error("duplicate_name"), { code: "duplicate_name" });
@@ -93,7 +97,7 @@ export async function POST(request) {
     return json({ item: rows[0] }, 201);
   } catch (error) {
     if (error?.meta?.code === "23505" || ["23505", "duplicate_name"].includes(error?.code)) return json({ error: "duplicate_name" }, 409);
-    if (error?.meta?.code === "23503" || error?.code === "23503") return json({ error: "parent_not_found" }, 404);
+    if (error?.meta?.code === "23503" || ["23503", "parent_not_found"].includes(error?.code)) return json({ error: "parent_not_found" }, 404);
     console.error("equipment_fields_post_failed", error);
     return json({ error: "internal_error" }, 500);
   }
@@ -110,12 +114,12 @@ export async function PATCH(request) {
       const category = nameOf(body.category);
       const title = nameOf(body.title);
       const field = nameOf(body.field);
-      if (!id || !category || !title || !field) return json({ error: "invalid_input" }, 400);
+      if (!id || (!idOf(body.categoryId) && !category) || !title || !field) return json({ error: "invalid_input" }, 400);
       await ensureEquipmentFieldTables();
       const item = await prisma.$transaction(async (tx) => {
         const existing = await tx.$queryRaw`SELECT id FROM equipment_field_definitions WHERE id = ${id}`;
         if (!existing.length) return null;
-        const { categoryId, titleId } = await parentIds(tx, category, title);
+        const { categoryId, titleId } = await parentIds(tx, body.categoryId, category, title);
         const updated = await tx.$queryRaw`UPDATE equipment_field_definitions
           SET category_id = ${categoryId}, title_id = ${titleId}, name = ${field}, field_type = 'text'
           WHERE id = ${id} RETURNING id`;
@@ -139,7 +143,7 @@ export async function PATCH(request) {
     return rows[0] ? json({ item: rows[0] }) : json({ error: "not_found" }, 404);
   } catch (error) {
     if (error?.meta?.code === "23505" || error?.code === "23505") return json({ error: "duplicate_name" }, 409);
-    if (error?.meta?.code === "23503" || error?.code === "23503") return json({ error: "parent_not_found" }, 404);
+    if (error?.meta?.code === "23503" || ["23503", "parent_not_found"].includes(error?.code)) return json({ error: "parent_not_found" }, 404);
     console.error("equipment_fields_patch_failed", error);
     return json({ error: "internal_error" }, 500);
   }
