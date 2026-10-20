@@ -23,12 +23,26 @@ async function currentUser(request) {
 }
 
 async function allItems() {
-  const [categories, titles, fields] = await Promise.all([
+  const [categories, titles, fields, rows] = await Promise.all([
     prisma.$queryRaw`SELECT id, name FROM equipment_field_categories ORDER BY id`,
     prisma.$queryRaw`SELECT id, name FROM equipment_field_titles ORDER BY id`,
     prisma.$queryRaw`SELECT id, category_id AS "categoryId", title_id AS "titleId", name FROM equipment_field_definitions ORDER BY id`,
+    prisma.$queryRaw`SELECT f.id, c.name AS category, t.name AS title, f.name AS field,
+      f.category_id AS "categoryId", f.title_id AS "titleId"
+      FROM equipment_field_definitions f
+      JOIN equipment_field_categories c ON c.id = f.category_id
+      JOIN equipment_field_titles t ON t.id = f.title_id
+      ORDER BY f.id`,
   ]);
-  return { categories, titles, fields };
+  return { categories, titles, fields, rows };
+}
+
+async function parentIds(tx, categoryName, titleName) {
+  const [category] = await tx.$queryRaw`INSERT INTO equipment_field_categories (name) VALUES (${categoryName})
+    ON CONFLICT (name) DO UPDATE SET name = EXCLUDED.name RETURNING id`;
+  const [title] = await tx.$queryRaw`INSERT INTO equipment_field_titles (category_id, name) VALUES (${category.id}, ${titleName})
+    ON CONFLICT (category_id, name) DO UPDATE SET name = EXCLUDED.name RETURNING id`;
+  return { categoryId: category.id, titleId: title.id };
 }
 
 export async function GET(request) {
@@ -48,6 +62,21 @@ export async function POST(request) {
     const body = await request.json().catch(() => ({}));
     const kind = String(body.kind || "");
     const name = nameOf(body.name);
+    if (kind === "triple") {
+      const category = nameOf(body.category);
+      const title = nameOf(body.title);
+      const field = nameOf(body.field);
+      if (!category || !title || !field) return json({ error: "invalid_input" }, 400);
+      await ensureEquipmentFieldTables();
+      const item = await prisma.$transaction(async (tx) => {
+        const { categoryId, titleId } = await parentIds(tx, category, title);
+        const inserted = await tx.$queryRaw`INSERT INTO equipment_field_definitions (category_id, title_id, name, field_type)
+          VALUES (${categoryId}, ${titleId}, ${field}, 'text') ON CONFLICT DO NOTHING RETURNING id`;
+        if (!inserted.length) throw Object.assign(new Error("duplicate_name"), { code: "duplicate_name" });
+        return inserted[0];
+      });
+      return json({ item }, 201);
+    }
     if (!validKinds.has(kind) || !name) return json({ error: "invalid_input" }, 400);
     await ensureEquipmentFieldTables();
     let rows;
@@ -63,7 +92,7 @@ export async function POST(request) {
     }
     return json({ item: rows[0] }, 201);
   } catch (error) {
-    if (error?.meta?.code === "23505" || error?.code === "23505") return json({ error: "duplicate_name" }, 409);
+    if (error?.meta?.code === "23505" || ["23505", "duplicate_name"].includes(error?.code)) return json({ error: "duplicate_name" }, 409);
     if (error?.meta?.code === "23503" || error?.code === "23503") return json({ error: "parent_not_found" }, 404);
     console.error("equipment_fields_post_failed", error);
     return json({ error: "internal_error" }, 500);
@@ -77,6 +106,23 @@ export async function PATCH(request) {
     const kind = String(body.kind || "");
     const id = idOf(body.id);
     const name = nameOf(body.name);
+    if (kind === "triple") {
+      const category = nameOf(body.category);
+      const title = nameOf(body.title);
+      const field = nameOf(body.field);
+      if (!id || !category || !title || !field) return json({ error: "invalid_input" }, 400);
+      await ensureEquipmentFieldTables();
+      const item = await prisma.$transaction(async (tx) => {
+        const existing = await tx.$queryRaw`SELECT id FROM equipment_field_definitions WHERE id = ${id}`;
+        if (!existing.length) return null;
+        const { categoryId, titleId } = await parentIds(tx, category, title);
+        const updated = await tx.$queryRaw`UPDATE equipment_field_definitions
+          SET category_id = ${categoryId}, title_id = ${titleId}, name = ${field}, field_type = 'text'
+          WHERE id = ${id} RETURNING id`;
+        return updated[0];
+      });
+      return item ? json({ item }) : json({ error: "not_found" }, 404);
+    }
     if (!validKinds.has(kind) || !id || !name) return json({ error: "invalid_input" }, 400);
     await ensureEquipmentFieldTables();
     let rows;
