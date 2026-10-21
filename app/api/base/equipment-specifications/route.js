@@ -42,7 +42,7 @@ async function parentIdFor(tx, categoryId, code) {
 
 async function allItems() {
   return prisma.$queryRaw`SELECT s.id, s.category_id AS "categoryId", c.name AS category,
-    s.parent_id AS "parentId", s.code, s.name
+    s.parent_id AS "parentId", s.code, s.name, s.english_name AS "englishName"
     FROM equipment_specifications s JOIN equipment_field_categories c ON c.id = s.category_id
     ORDER BY s.id`;
 }
@@ -73,13 +73,14 @@ export async function POST(request) {
     const categoryId = idOf(body.categoryId);
     const code = codeOf(body.code);
     const name = nameOf(body.name);
-    if (!categoryId || !validCode(code) || !name || name.length > 120) return json({ error: "invalid_input" }, 400);
+    const englishName = nameOf(body.englishName);
+    if (!categoryId || !validCode(code) || !name || name.length > 120 || englishName.length > 120) return json({ error: "invalid_input" }, 400);
     await ensureEquipmentSpecificationsTable();
     const item = await prisma.$transaction(async (tx) => {
       if (!await categoryExists(tx, categoryId)) throw Object.assign(new Error("category_not_found"), { code: "category_not_found" });
       const parentId = await parentIdFor(tx, categoryId, code);
-      const rows = await tx.$queryRaw`INSERT INTO equipment_specifications (category_id, parent_id, code, name)
-        VALUES (${categoryId}, ${parentId}, ${code}, ${name}) RETURNING id`;
+      const rows = await tx.$queryRaw`INSERT INTO equipment_specifications (category_id, parent_id, code, name, english_name)
+        VALUES (${categoryId}, ${parentId}, ${code}, ${name}, ${englishName}) RETURNING id`;
       return rows[0];
     });
     return json({ item }, 201);
@@ -100,7 +101,8 @@ export async function PATCH(request) {
     const categoryId = idOf(body.categoryId);
     const code = codeOf(body.code);
     const name = nameOf(body.name);
-    if (!id || !categoryId || !validCode(code) || !name || name.length > 120) return json({ error: "invalid_input" }, 400);
+    const englishName = nameOf(body.englishName);
+    if (!id || !categoryId || !validCode(code) || !name || name.length > 120 || englishName.length > 120) return json({ error: "invalid_input" }, 400);
     await ensureEquipmentSpecificationsTable();
     const item = await prisma.$transaction(async (tx) => {
       const [existing] = await tx.$queryRaw`SELECT id, category_id AS "categoryId", code FROM equipment_specifications WHERE id = ${id}`;
@@ -113,7 +115,7 @@ export async function PATCH(request) {
       }
       const parentId = await parentIdFor(tx, categoryId, code);
       const rows = await tx.$queryRaw`UPDATE equipment_specifications SET category_id = ${categoryId}, parent_id = ${parentId},
-        code = ${code}, name = ${name} WHERE id = ${id} RETURNING id`;
+        code = ${code}, name = ${name}, english_name = ${englishName} WHERE id = ${id} RETURNING id`;
       return rows[0];
     });
     return item ? json({ item }) : json({ error: "not_found" }, 404);

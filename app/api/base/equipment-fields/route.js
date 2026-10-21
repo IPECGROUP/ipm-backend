@@ -34,7 +34,7 @@ async function allItems() {
       JOIN equipment_field_categories c ON c.id = f.category_id
       JOIN equipment_field_titles t ON t.id = f.title_id
       ORDER BY f.id`,
-    prisma.$queryRaw`SELECT id, category_id AS "categoryId", parent_id AS "parentId", code, name
+    prisma.$queryRaw`SELECT id, category_id AS "categoryId", parent_id AS "parentId", code, name, english_name AS "englishName"
       FROM equipment_specifications ORDER BY id`,
   ]);
   return { categories, titles, fields, rows, specifications };
