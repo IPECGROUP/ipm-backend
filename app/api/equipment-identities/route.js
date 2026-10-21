@@ -34,7 +34,6 @@ async function ensureSchema() {
       "tag_ids" JSONB NOT NULL DEFAULT '[]'::jsonb,
       "category_id" INTEGER REFERENCES equipment_field_categories(id) ON DELETE RESTRICT,
       "field_values" JSONB NOT NULL DEFAULT '{}'::jsonb,
-      "field_units" JSONB NOT NULL DEFAULT '{}'::jsonb,
       "related_letter_ids" JSONB NOT NULL DEFAULT '[]'::jsonb,
       "files" JSONB NOT NULL DEFAULT '[]'::jsonb,
       "created_by_id" INTEGER,
@@ -43,7 +42,6 @@ async function ensureSchema() {
     `);
     await prisma.$executeRawUnsafe(`ALTER TABLE equipment_identities ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES equipment_field_categories(id) ON DELETE RESTRICT`);
     await prisma.$executeRawUnsafe(`ALTER TABLE equipment_identities ADD COLUMN IF NOT EXISTS field_values JSONB NOT NULL DEFAULT '{}'::jsonb`);
-    await prisma.$executeRawUnsafe(`ALTER TABLE equipment_identities ADD COLUMN IF NOT EXISTS field_units JSONB NOT NULL DEFAULT '{}'::jsonb`);
     await prisma.$executeRawUnsafe(`ALTER TABLE equipment_identities ADD COLUMN IF NOT EXISTS related_letter_ids JSONB NOT NULL DEFAULT '[]'::jsonb`);
     await prisma.$executeRawUnsafe(`ALTER TABLE equipment_identities ADD COLUMN IF NOT EXISTS files JSONB NOT NULL DEFAULT '[]'::jsonb`);
   })().catch((error) => { schemaPromise = null; throw error; });
@@ -57,7 +55,6 @@ const mapItem = (row) => ({
   category: row.category || "",
   categoryId: row.category_id,
   fieldValues: row.field_values && typeof row.field_values === "object" && !Array.isArray(row.field_values) ? row.field_values : {},
-  fieldUnits: row.field_units && typeof row.field_units === "object" && !Array.isArray(row.field_units) ? row.field_units : {},
   relatedLetterIds: Array.isArray(row.related_letter_ids) ? row.related_letter_ids.map(String) : [],
   files: Array.isArray(row.files) ? row.files : [],
   tagIds: Array.isArray(row.tag_ids) ? row.tag_ids.map(String) : [],
@@ -95,11 +92,8 @@ export async function POST(request) {
     const specifications = await prisma.$queryRaw`SELECT id FROM equipment_specifications WHERE category_id = ${categoryId}`;
     specifications.forEach((item) => allowedFieldIds.add(`spec:${item.id}`));
     const suppliedValues = body.fieldValues && typeof body.fieldValues === "object" && !Array.isArray(body.fieldValues) ? body.fieldValues : {};
-    const suppliedUnits = body.fieldUnits && typeof body.fieldUnits === "object" && !Array.isArray(body.fieldUnits) ? body.fieldUnits : {};
     if (Object.keys(suppliedValues).some((id) => !allowedFieldIds.has(id) || typeof suppliedValues[id] !== "string" || suppliedValues[id].length > 10000)) return json({ error: "invalid_field_values" }, 400);
-    if (Object.keys(suppliedUnits).some((id) => !allowedFieldIds.has(id) || typeof suppliedUnits[id] !== "string" || suppliedUnits[id].length > 80)) return json({ error: "invalid_field_units" }, 400);
     const fieldValues = Object.fromEntries(Object.entries(suppliedValues).map(([id, value]) => [id, value.trim()]));
-    const fieldUnits = Object.fromEntries(Object.entries(suppliedUnits).map(([id, value]) => [id, value.trim()]).filter(([, value]) => value));
     const relatedLetterIds = [...new Set((Array.isArray(body.relatedLetterIds) ? body.relatedLetterIds : []).map(String))].filter((id) => /^\d+$/.test(id)).slice(0, 200);
     const files = (Array.isArray(body.files) ? body.files : []).slice(0, 100).map((file) => ({
       name: String(file?.name || "").slice(0, 180),
@@ -109,8 +103,8 @@ export async function POST(request) {
     }));
     if (files.some((file) => !/^\/uploads\/equipment-identities\/[a-f0-9-]{36}\.[a-z0-9]+$/.test(file.url) || !Number.isFinite(file.size) || file.size < 0)) return json({ error: "invalid_files" }, 400);
     const rows = await prisma.$queryRaw`
-      INSERT INTO "equipment_identities" ("id", "code", "name", "category", "category_id", "tag_ids", "field_values", "field_units", "related_letter_ids", "files", "created_by_id")
-      VALUES (${id}, ${code}, ${name}, ${categories[0].name}, ${categoryId}, ${JSON.stringify(tagIds)}::jsonb, ${JSON.stringify(fieldValues)}::jsonb, ${JSON.stringify(fieldUnits)}::jsonb, ${JSON.stringify(relatedLetterIds)}::jsonb, ${JSON.stringify(files)}::jsonb, ${Number(user.id)})
+      INSERT INTO "equipment_identities" ("id", "code", "name", "category", "category_id", "tag_ids", "field_values", "related_letter_ids", "files", "created_by_id")
+      VALUES (${id}, ${code}, ${name}, ${categories[0].name}, ${categoryId}, ${JSON.stringify(tagIds)}::jsonb, ${JSON.stringify(fieldValues)}::jsonb, ${JSON.stringify(relatedLetterIds)}::jsonb, ${JSON.stringify(files)}::jsonb, ${Number(user.id)})
       RETURNING *
     `;
     return json({ item: mapItem(rows[0]) }, 201);
