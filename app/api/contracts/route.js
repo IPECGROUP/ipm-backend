@@ -59,6 +59,8 @@ function normalizeGeneralPayload(body) {
   const normalized = { ...general };
   delete normalized.contractTitle;
   delete normalized.contract_title;
+  delete normalized.mainContractors;
+  normalized.sajatRegistered = general.sajatRegistered === true;
   return normalized;
 }
 
