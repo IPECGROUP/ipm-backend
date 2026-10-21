@@ -28,14 +28,15 @@ async function ensureSchema() {
       receipt_type TEXT NOT NULL,
       title TEXT NOT NULL,
       recipient TEXT NOT NULL,
+      files JSONB NOT NULL DEFAULT '[]'::jsonb,
       created_by_id INTEGER,
       created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
     )
-  `).catch((error) => { schemaPromise = null; throw error; });
+  `).then(() => prisma.$executeRawUnsafe(`ALTER TABLE delivery_receipts ADD COLUMN IF NOT EXISTS files JSONB NOT NULL DEFAULT '[]'::jsonb`)).catch((error) => { schemaPromise = null; throw error; });
   return schemaPromise;
 }
 
-const mapItem = (row) => ({ id: row.id, date: row.date_fa, type: row.receipt_type, title: row.title, recipient: row.recipient, createdAt: row.created_at });
+const mapItem = (row) => ({ id: row.id, date: row.date_fa, type: row.receipt_type, title: row.title, recipient: row.recipient, files: Array.isArray(row.files) ? row.files : [], createdAt: row.created_at });
 
 export async function GET(request) {
   try {
@@ -54,16 +55,22 @@ export async function POST(request) {
     const user = await currentUser(request);
     if (!user) return json({ error: "unauthorized" }, 401);
     const body = await request.json().catch(() => ({}));
-    const date = String(body.date || "").trim();
+    const date = String(body.date || "").trim().replaceAll("-", "/");
     const type = String(body.type || "").trim();
     const title = String(body.title || "").trim();
     const recipient = String(body.recipient || "").trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(date) || !type || type.length > 100 || !title || title.length > 300 || !recipient || recipient.length > 200) return json({ error: "invalid_delivery_receipt" }, 400);
+    const files = (Array.isArray(body.files) ? body.files : []).slice(0, 30).map((file) => ({
+      name: String(file?.name || "").slice(0, 180),
+      url: String(file?.url || ""),
+      size: Number(file?.size || 0),
+      type: String(file?.type || "").slice(0, 120),
+    }));
+    if (!/^\d{4}\/\d{2}\/\d{2}$/.test(date) || !type || type.length > 100 || !title || title.length > 300 || !recipient || recipient.length > 200 || files.some((file) => !/^\/uploads\/delivery-receipts\/[a-f0-9-]{36}\.[a-z0-9]+$/.test(file.url) || !Number.isFinite(file.size) || file.size < 0)) return json({ error: "invalid_delivery_receipt" }, 400);
     await ensureSchema();
     const id = randomUUID();
     const rows = await prisma.$queryRaw`
-      INSERT INTO delivery_receipts (id, date_fa, receipt_type, title, recipient, created_by_id)
-      VALUES (${id}, ${date}, ${type}, ${title}, ${recipient}, ${Number(user.id)})
+      INSERT INTO delivery_receipts (id, date_fa, receipt_type, title, recipient, files, created_by_id)
+      VALUES (${id}, ${date}, ${type}, ${title}, ${recipient}, ${JSON.stringify(files)}::jsonb, ${Number(user.id)})
       RETURNING *
     `;
     return json({ item: mapItem(rows[0]) }, 201);
