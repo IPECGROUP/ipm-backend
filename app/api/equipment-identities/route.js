@@ -118,3 +118,18 @@ export async function POST(request) {
     return json({ error: "equipment_identities_post_failed" }, 500);
   }
 }
+
+export async function DELETE(request) {
+  try {
+    if (!await currentUser(request)) return json({ error: "unauthorized" }, 401);
+    const body = await request.json().catch(() => ({}));
+    const ids = [...new Set((Array.isArray(body.ids) ? body.ids : []).map(String))];
+    if (!ids.length || ids.length > 200 || ids.some((id) => !/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(id))) return json({ error: "invalid_ids" }, 400);
+    await ensureSchema();
+    const rows = await prisma.$queryRawUnsafe('DELETE FROM "equipment_identities" WHERE "id" = ANY($1::text[]) RETURNING "id"', ids);
+    return json({ ok: true, deleted: rows.length });
+  } catch (error) {
+    console.error("equipment_identities_delete_failed", error);
+    return json({ error: "equipment_identities_delete_failed" }, 500);
+  }
+}
