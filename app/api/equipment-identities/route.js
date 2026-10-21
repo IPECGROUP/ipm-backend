@@ -35,6 +35,7 @@ async function ensureSchema() {
       "category_id" INTEGER REFERENCES equipment_field_categories(id) ON DELETE RESTRICT,
       "field_values" JSONB NOT NULL DEFAULT '{}'::jsonb,
       "related_letter_ids" JSONB NOT NULL DEFAULT '[]'::jsonb,
+      "library_item_ids" JSONB NOT NULL DEFAULT '[]'::jsonb,
       "files" JSONB NOT NULL DEFAULT '[]'::jsonb,
       "created_by_id" INTEGER,
       "created_at" TIMESTAMPTZ NOT NULL DEFAULT NOW()
@@ -43,6 +44,7 @@ async function ensureSchema() {
     await prisma.$executeRawUnsafe(`ALTER TABLE equipment_identities ADD COLUMN IF NOT EXISTS category_id INTEGER REFERENCES equipment_field_categories(id) ON DELETE RESTRICT`);
     await prisma.$executeRawUnsafe(`ALTER TABLE equipment_identities ADD COLUMN IF NOT EXISTS field_values JSONB NOT NULL DEFAULT '{}'::jsonb`);
     await prisma.$executeRawUnsafe(`ALTER TABLE equipment_identities ADD COLUMN IF NOT EXISTS related_letter_ids JSONB NOT NULL DEFAULT '[]'::jsonb`);
+    await prisma.$executeRawUnsafe(`ALTER TABLE equipment_identities ADD COLUMN IF NOT EXISTS library_item_ids JSONB NOT NULL DEFAULT '[]'::jsonb`);
     await prisma.$executeRawUnsafe(`ALTER TABLE equipment_identities ADD COLUMN IF NOT EXISTS files JSONB NOT NULL DEFAULT '[]'::jsonb`);
   })().catch((error) => { schemaPromise = null; throw error; });
   return schemaPromise;
@@ -56,6 +58,7 @@ const mapItem = (row) => ({
   categoryId: row.category_id,
   fieldValues: row.field_values && typeof row.field_values === "object" && !Array.isArray(row.field_values) ? row.field_values : {},
   relatedLetterIds: Array.isArray(row.related_letter_ids) ? row.related_letter_ids.map(String) : [],
+  libraryItemIds: Array.isArray(row.library_item_ids) ? row.library_item_ids.map(String) : [],
   files: Array.isArray(row.files) ? row.files : [],
   tagIds: Array.isArray(row.tag_ids) ? row.tag_ids.map(String) : [],
   createdAt: row.created_at,
@@ -95,6 +98,7 @@ export async function POST(request) {
     if (Object.keys(suppliedValues).some((id) => !allowedFieldIds.has(id) || typeof suppliedValues[id] !== "string" || suppliedValues[id].length > 10000)) return json({ error: "invalid_field_values" }, 400);
     const fieldValues = Object.fromEntries(Object.entries(suppliedValues).map(([id, value]) => [id, value.trim()]));
     const relatedLetterIds = [...new Set((Array.isArray(body.relatedLetterIds) ? body.relatedLetterIds : []).map(String))].filter((id) => /^\d+$/.test(id)).slice(0, 200);
+    const libraryItemIds = [...new Set((Array.isArray(body.libraryItemIds) ? body.libraryItemIds : []).map(String))].filter((value) => /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(value)).slice(0, 200);
     const files = (Array.isArray(body.files) ? body.files : []).slice(0, 100).map((file) => ({
       name: String(file?.name || "").slice(0, 180),
       url: String(file?.url || ""),
@@ -103,8 +107,8 @@ export async function POST(request) {
     }));
     if (files.some((file) => !/^\/uploads\/equipment-identities\/[a-f0-9-]{36}\.[a-z0-9]+$/.test(file.url) || !Number.isFinite(file.size) || file.size < 0)) return json({ error: "invalid_files" }, 400);
     const rows = await prisma.$queryRaw`
-      INSERT INTO "equipment_identities" ("id", "code", "name", "category", "category_id", "tag_ids", "field_values", "related_letter_ids", "files", "created_by_id")
-      VALUES (${id}, ${code}, ${name}, ${categories[0].name}, ${categoryId}, ${JSON.stringify(tagIds)}::jsonb, ${JSON.stringify(fieldValues)}::jsonb, ${JSON.stringify(relatedLetterIds)}::jsonb, ${JSON.stringify(files)}::jsonb, ${Number(user.id)})
+      INSERT INTO "equipment_identities" ("id", "code", "name", "category", "category_id", "tag_ids", "field_values", "related_letter_ids", "library_item_ids", "files", "created_by_id")
+      VALUES (${id}, ${code}, ${name}, ${categories[0].name}, ${categoryId}, ${JSON.stringify(tagIds)}::jsonb, ${JSON.stringify(fieldValues)}::jsonb, ${JSON.stringify(relatedLetterIds)}::jsonb, ${JSON.stringify(libraryItemIds)}::jsonb, ${JSON.stringify(files)}::jsonb, ${Number(user.id)})
       RETURNING *
     `;
     return json({ item: mapItem(rows[0]) }, 201);
