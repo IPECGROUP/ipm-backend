@@ -1,7 +1,8 @@
 import { prisma } from "../../../lib/prisma";
 import { hasPagePermission, requirePagePermission } from "../../../lib/pagePermissions";
 import { formatMinorUnits, parseRequestedAmount } from "../../../lib/paymentAmount";
-import { isProjectCommitment } from "../../../lib/projectCommitment";
+import { isProjectCommitment, paymentCommitmentWhere } from "../../../lib/projectCommitment";
+import { lockProjectLiquidities } from "../../../lib/projectLiquidityLock";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -174,7 +175,7 @@ export async function GET(request) {
         ? prisma.$queryRawUnsafe("SELECT DISTINCT project_id AS \"projectId\" FROM liquidity_allocations WHERE project_id IS NOT NULL AND created_at > $1", resetAt)
         : prisma.$queryRawUnsafe("SELECT DISTINCT project_id AS \"projectId\" FROM liquidity_allocations WHERE project_id IS NOT NULL"),
       prisma.paymentRequest.findMany({
-        where: { projectId: { not: null }, ...(resetAt ? { createdAt: { gt: resetAt } } : {}) },
+         where: { projectId: { not: null }, ...paymentCommitmentWhere, ...(resetAt ? { createdAt: { gt: resetAt } } : {}) },
         select: { projectId: true, currencyTypeId: true, amount: true, cashAmount: true, creditAmount: true, status: true, historyJson: true },
       }),
       dashboardView ? Promise.resolve([]) : prisma.$queryRawUnsafe(`
@@ -305,7 +306,31 @@ export async function POST(request) {
     if (existingBatchTotal + allocationTotal > availableAmount) {
       return json({ error: "allocation_total_exceeds_available_amount" }, 400);
     }
-    await prisma.$transaction(async (tx) => {
+    const allocationResult = await prisma.$transaction(async (tx) => {
+      const changesByProject = new Map();
+      for (const row of parsedRows) {
+        changesByProject.set(row.projectId, (changesByProject.get(row.projectId) || 0n) + row.amount);
+      }
+      await lockProjectLiquidities(tx, [...changesByProject.keys()]);
+      for (const [projectId, change] of changesByProject) {
+        if (change >= 0n) continue;
+        const [allocatedRows, requests] = await Promise.all([
+          tx.$queryRawUnsafe("SELECT COALESCE(SUM(amount), 0)::text AS amount FROM liquidity_allocations WHERE project_id = $1", projectId),
+          tx.paymentRequest.findMany({
+            where: { projectId, ...paymentCommitmentWhere },
+            select: { amount: true, status: true, historyJson: true },
+          }),
+        ]);
+        const committed = requests.reduce((total, request) => {
+          if (!isProjectCommitment(request)) return total;
+          const created = Array.isArray(request.historyJson)
+            ? request.historyJson.find((entry) => entry?.type === "created")
+            : null;
+          return total + (parseRequestedAmount(created?.rialAmount ?? request.amount, true)?.minorUnits ?? 0n);
+        }, 0n);
+        const allocationAfterChange = (BigInt(allocatedRows?.[0]?.amount || 0) + change) * 100n;
+        if (allocationAfterChange < committed) return { error: "allocation_below_commitments" };
+      }
       for (const row of parsedRows) {
         await tx.$executeRawUnsafe(
           "INSERT INTO liquidity_allocations (allocation_date, source, available_amount, description, project_id, amount, created_by, batch_id) VALUES ($1, $2, $3::bigint, $4, $5, $6::bigint, $7, $8)",
@@ -329,7 +354,9 @@ export async function POST(request) {
         userId,
         batchId,
       );
+      return { ok: true };
     });
+    if (allocationResult.error) return json(allocationResult, 400);
     return json({ ok: true });
   } catch (error) {
     return json({ error: "internal_error", message: String(error?.message || "internal_error") }, 500);

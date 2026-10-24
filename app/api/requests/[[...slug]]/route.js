@@ -6,7 +6,8 @@ import path from "node:path";
 import { requirePagePermission } from "../../../../lib/pagePermissions";
 import { nextSharedPaymentSerial } from "../../../../lib/paymentSerial";
 import { convertedRialMinorUnits, formatMinorUnits, parseRequestedAmount } from "../../../../lib/paymentAmount";
-import { isProjectCommitment } from "../../../../lib/projectCommitment";
+import { isProjectCommitment, paymentCommitmentWhere } from "../../../../lib/projectCommitment";
+import { lockProjectLiquidity, lockProjectLiquidities } from "../../../../lib/projectLiquidityLock";
 
 export const runtime = "nodejs";
 
@@ -163,11 +164,11 @@ function toBigIntSafe(v) {
   }
 }
 
-async function getProjectLiquidityRemaining(projectId) {
+async function getProjectLiquidityRemaining(projectId, client = prisma) {
   // Keep this table available even when the liquidity screen has not been
   // opened yet. It is deliberately the same source used by the financial
-  // dashboard: allocated budget minus project-manager-approved commitments.
-  await prisma.$executeRawUnsafe(`
+  // dashboard: allocated budget minus pending and approved requests.
+  await client.$executeRawUnsafe(`
     CREATE TABLE IF NOT EXISTS liquidity_allocations (
       id SERIAL PRIMARY KEY,
       allocation_date VARCHAR(20) NOT NULL,
@@ -182,12 +183,12 @@ async function getProjectLiquidityRemaining(projectId) {
   `);
 
   const [allocatedRows, requests] = await Promise.all([
-    prisma.$queryRawUnsafe(
+    client.$queryRawUnsafe(
       "SELECT COALESCE(SUM(amount), 0)::text AS amount FROM liquidity_allocations WHERE project_id = $1",
       Number(projectId)
     ),
-    prisma.paymentRequest.findMany({
-      where: { projectId: Number(projectId) },
+    client.paymentRequest.findMany({
+      where: { projectId: Number(projectId), ...paymentCommitmentWhere },
       select: { amount: true, status: true, historyJson: true },
     }),
   ]);
@@ -202,6 +203,27 @@ async function getProjectLiquidityRemaining(projectId) {
     0n
   );
   return allocatedMinorUnits - committedMinorUnits;
+}
+
+async function updateApprovalWithLiquidityCheck(row, data) {
+  return prisma.$transaction(async (tx) => {
+    await lockProjectLiquidity(tx, row.projectId);
+    const current = await tx.paymentRequest.findUnique({ where: { id: row.id } });
+    if (!current || current.status !== row.status || JSON.stringify(current.historyJson) !== JSON.stringify(row.historyJson)) {
+      return { error: "request_changed" };
+    }
+    const created = Array.isArray(current.historyJson)
+      ? current.historyJson.find((entry) => entry?.type === "created")
+      : null;
+    const requestedMinorUnits = parseRequestedAmount(created?.rialAmount ?? current.amount, true)?.minorUnits ?? 0n;
+    const liquidityRemaining = await getProjectLiquidityRemaining(current.projectId, tx);
+    const startsCommitment = !isProjectCommitment(current)
+      && isProjectCommitment({ ...current, status: data.status, historyJson: data.historyJson });
+    if ((startsCommitment && requestedMinorUnits > liquidityRemaining) || (!startsCommitment && liquidityRemaining < 0n)) {
+      return { error: "amount_exceeds_project_liquidity", liquidityRemaining: formatMinorUnits(liquidityRemaining) };
+    }
+    return { updated: await tx.paymentRequest.update({ where: { id: row.id }, data }) };
+  }, { maxWait: 5000, timeout: 15000 });
 }
 
 function normalizeDigits(value = "") {
@@ -1324,17 +1346,15 @@ export async function POST(req, ctx) {
           },
         };
 
-        const updated = await prisma.paymentRequest.update({
-          where: { id },
-          data: {
-            status: "approved",
-            currentAssigneeUserId: null,
-            historyJson: history,
-            cashAmount: finalCashAmount?.legacyWholeAmount ?? row.cashAmount,
-            creditAmount: finalCreditAmount?.legacyWholeAmount ?? row.creditAmount,
-          },
+        const approval = await updateApprovalWithLiquidityCheck(row, {
+          status: "approved",
+          currentAssigneeUserId: null,
+          historyJson: history,
+          cashAmount: finalCashAmount?.legacyWholeAmount ?? row.cashAmount,
+          creditAmount: finalCreditAmount?.legacyWholeAmount ?? row.creditAmount,
         });
-        return json({ ok: true, item: normalizeOut(updated) });
+        if (approval.error) return json({ error: approval.error, ...(approval.liquidityRemaining != null ? { liquidityRemaining: approval.liquidityRemaining } : {}) }, approval.error === "request_changed" ? 409 : 400);
+        return json({ ok: true, item: normalizeOut(approval.updated) });
       }
 
       const nextRoleKey = resumeRoleKey || chain[nextIndex];
@@ -1358,16 +1378,13 @@ export async function POST(req, ctx) {
         ...(nextAssignee ? { assignedToUserId: Number(nextAssignee.id) } : { assignedToUnit: nextRoleKey }),
       });
 
-      const updated = await prisma.paymentRequest.update({
-        where: { id },
-        data: {
-          status: "pending",
-          currentAssigneeUserId: nextAssignee ? Number(nextAssignee.id) : null,
-          historyJson: history,
-        },
+      const approval = await updateApprovalWithLiquidityCheck(row, {
+        status: "pending",
+        currentAssigneeUserId: nextAssignee ? Number(nextAssignee.id) : null,
+        historyJson: history,
       });
-
-      return json({ ok: true, item: normalizeOut(updated) });
+      if (approval.error) return json({ error: approval.error, ...(approval.liquidityRemaining != null ? { liquidityRemaining: approval.liquidityRemaining } : {}) }, approval.error === "request_changed" ? 409 : 400);
+      return json({ ok: true, item: normalizeOut(approval.updated) });
     }
 
     // returned/rejected
@@ -1433,11 +1450,6 @@ export async function POST(req, ctx) {
   if (rialAmountMinorUnits <= 0n) return json({ error: "rial_amount_must_be_positive" }, 400);
   const rialAmount = formatMinorUnits(rialAmountMinorUnits);
 
-  const liquidityRemaining = await getProjectLiquidityRemaining(data.projectId);
-  if (rialAmountMinorUnits > liquidityRemaining) {
-    return json({ error: "amount_exceeds_project_liquidity", liquidityRemaining: formatMinorUnits(liquidityRemaining) }, 400);
-  }
-
   const targetAssigneeUserId = Number(body?.targetAssigneeUserId ?? body?.target_assignee_user_id);
   const initialTarget = await resolveInitialWorkflowTarget(uctx, data.projectId);
   const initialRoleKey = initialTarget.roleKey;
@@ -1462,7 +1474,13 @@ export async function POST(req, ctx) {
     roleName: uctx.roleName,
   };
 
-  const created = await prisma.paymentRequest.create({
+  const creation = await prisma.$transaction(async (tx) => {
+    await lockProjectLiquidity(tx, data.projectId);
+    const liquidityRemaining = await getProjectLiquidityRemaining(data.projectId, tx);
+    if (rialAmountMinorUnits > liquidityRemaining) {
+      return { error: "amount_exceeds_project_liquidity", liquidityRemaining: formatMinorUnits(liquidityRemaining) };
+    }
+    return { created: await tx.paymentRequest.create({
     data: {
       serial: generatedSerial,
       dateJalali: data.dateJalali ?? null,
@@ -1526,9 +1544,11 @@ export async function POST(req, ctx) {
         },
       ],
     },
-  });
+    }) };
+  }, { maxWait: 5000, timeout: 15000 });
+  if (creation.error) return json({ error: creation.error, liquidityRemaining: creation.liquidityRemaining }, 400);
 
-  return json({ ok: true, item: normalizeOut(created) }, 201);
+  return json({ ok: true, item: normalizeOut(creation.created) }, 201);
 }
 
 export async function PATCH(req, ctx) {
@@ -1631,11 +1651,28 @@ export async function PATCH(req, ctx) {
     at: new Date().toISOString(),
   });
 
-  const updated = await prisma.paymentRequest.update({
-    where: { id },
-    data: { ...data, historyJson: history },
-  });
+  const projectChanged = data.projectId !== undefined && Number(data.projectId) !== Number(row.projectId);
+  if (projectChanged && (!Number.isInteger(data.projectId) || data.projectId <= 0)) return json({ error: "project_required" }, 400);
+  if (projectChanged && isProjectCommitment(row)) {
+    const result = await prisma.$transaction(async (tx) => {
+      await lockProjectLiquidities(tx, [row.projectId, data.projectId].filter((projectId) => Number(projectId) > 0));
+      const current = await tx.paymentRequest.findUnique({ where: { id } });
+      if (!current || current.status !== row.status || JSON.stringify(current.historyJson) !== JSON.stringify(row.historyJson)) {
+        return { error: "request_changed" };
+      }
+      const created = Array.isArray(current.historyJson)
+        ? current.historyJson.find((entry) => entry?.type === "created")
+        : null;
+      const amount = parseRequestedAmount(created?.rialAmount ?? current.amount, true)?.minorUnits ?? 0n;
+      const liquidityRemaining = await getProjectLiquidityRemaining(data.projectId, tx);
+      if (amount > liquidityRemaining) return { error: "amount_exceeds_project_liquidity", liquidityRemaining: formatMinorUnits(liquidityRemaining) };
+      return { updated: await tx.paymentRequest.update({ where: { id }, data: { ...data, historyJson: history } }) };
+    }, { maxWait: 5000, timeout: 15000 });
+    if (result.error) return json({ error: result.error, ...(result.liquidityRemaining != null ? { liquidityRemaining: result.liquidityRemaining } : {}) }, result.error === "request_changed" ? 409 : 400);
+    return json({ ok: true, item: normalizeOut(result.updated) });
+  }
 
+  const updated = await prisma.paymentRequest.update({ where: { id }, data: { ...data, historyJson: history } });
   return json({ ok: true, item: normalizeOut(updated) });
 }
 

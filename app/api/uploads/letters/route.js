@@ -104,6 +104,7 @@ function parseMultipartUpload(req, uploadDir) {
     try {
       bb = Busboy({
         headers: requestHeaders(req),
+        defParamCharset: "utf8",
         limits: {
           fieldSize: 64 * 1024,
           fileSize: MAX_UPLOAD_BYTES,
