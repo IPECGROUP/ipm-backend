@@ -152,7 +152,7 @@ export async function GET(r) {
       // optional lookup isolated: a legacy/missing expense table must never
       // prevent the core balance endpoint from responding.
       try {
-        const expenses = await prisma.$queryRawUnsafe(`SELECT COALESCE(SUM(amount),0)::text AS "registeredAmount",COALESCE(SUM(amount) FILTER (WHERE stage='completed' AND project_manager_status='approved'),0)::text AS "approvedAmount" FROM petty_cash_expenses WHERE created_by_id=$1`, balanceBeneficiaryId);
+        const expenses = await prisma.$queryRawUnsafe(`SELECT COALESCE(SUM(amount),0)::text AS "registeredAmount",COALESCE(SUM(amount) FILTER (WHERE stage='completed' AND project_manager_status='approved'),0)::text AS "approvedAmount" FROM petty_cash_expenses WHERE created_by_id=$1 AND stage<>'draft'`, balanceBeneficiaryId);
         const pettyCash = expenses[0] || {};
         const remaining = (value, deducted) => {
           const result = BigInt(value || "0") - BigInt(deducted || "0");
