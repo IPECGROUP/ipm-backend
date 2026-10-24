@@ -8,6 +8,12 @@ export const runtime = "nodejs";
 
 const json = (data, status = 200) => Response.json(data, { status, headers: { "Cache-Control": "no-store" } });
 const cookie = (request, name) => String(request.headers.get("cookie") || "").match(new RegExp(`(?:^|;\\s*)${name}=([^;]+)`))?.[1] || "";
+const attachmentUrlPattern = /^\/uploads\/petty-cash-expenses\/[a-f0-9-]+\.(jpg|jpeg|png|webp|pdf)$/;
+const expenseFiles = (entry) => Array.isArray(entry.files) && entry.files.length ? entry.files.map((file) => ({
+  name: String(file?.name || "").trim(), url: String(file?.url || "").trim(),
+})) : [{ name: String(entry.fileName || "").trim(), url: String(entry.fileUrl || "").trim() }];
+const validExpenseFiles = (files) => files.length > 0 && files.length <= 20 && files.every((file) =>
+  file.name && file.name.length <= 180 && attachmentUrlPattern.test(file.url));
 
 class RouteError extends Error {
   constructor(code, status = 400) {
@@ -178,6 +184,7 @@ async function ensureTable() {
     await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS rejected_by_id INTEGER");
     await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS file_name VARCHAR(180)");
     await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS file_url TEXT");
+    await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS files JSONB NOT NULL DEFAULT '[]'::jsonb");
     await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS currency_type_id INTEGER");
     await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS currency_name VARCHAR(100)");
     await prisma.$executeRawUnsafe("ALTER TABLE petty_cash_expenses ADD COLUMN IF NOT EXISTS currency_amount NUMERIC(22,2)");
@@ -286,7 +293,7 @@ async function expenseReportsFor(userId, roster, inbox = false) {
     SELECT e.id,e.expense_report_id AS "reportId",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",
       e.amount::text AS amount,e.currency_type_id AS "currencyTypeId",COALESCE(e.currency_name,'ریال') AS "currencyName",
       COALESCE(e.currency_amount::text,e.amount::text) AS "currencyAmount",COALESCE(e.exchange_rate::text,'1') AS "exchangeRate",
-      e.file_name AS "fileName",e.file_url AS "fileUrl",e.stage,e.review_status AS "reviewStatus",e.review_note AS "reviewNote",
+      e.file_name AS "fileName",e.file_url AS "fileUrl",e.files AS "files",e.stage,e.review_status AS "reviewStatus",e.review_note AS "reviewNote",
       e.project_manager_id AS "projectManagerId",manager.name AS "projectManagerName"
     FROM petty_cash_expenses e LEFT JOIN "User" manager ON manager.id=e.project_manager_id
     WHERE e.expense_report_id=ANY($1::int[]) ORDER BY e.id
@@ -296,7 +303,8 @@ async function expenseReportsFor(userId, roster, inbox = false) {
   const actors = actorIds.length ? await prisma.user.findMany({ where: { id: { in: actorIds } }, select: { id: true, name: true, username: true } }) : [];
   const actorNames = new Map(actors.map((actor) => [actor.id, actor.name || actor.username || `کاربر ${actor.id}`]));
   return reports.map((report) => {
-    const items = expenses.filter((e) => Number(e.reportId) === Number(report.id)).map((e) => ({ ...e, id: Number(e.id), canAct: canReviewExpense(e, userId, roster) }));
+    const items = expenses.filter((e) => Number(e.reportId) === Number(report.id)).map((e) => ({ ...e, id: Number(e.id),
+      files: e.files?.length ? e.files : e.fileUrl ? [{ name: e.fileName, url: e.fileUrl }] : [], canAct: canReviewExpense(e, userId, roster) }));
     const canRevise = Number(report.createdById) === userId && items.some((e) => e.stage === "revision");
     const canAct = items.some((e) => e.canAct);
     const history = Array.isArray(report.historyJson) ? report.historyJson : [];
@@ -318,7 +326,7 @@ function itemFromRow(row) {
   return {
     id: Number(row.id), projectId: Number(row.projectId), projectCode: row.projectCode, projectName: row.projectName,
     expenseDate: row.expenseDate, description: row.description, budgetCode: row.budgetCode, amount: String(row.amount),
-    fileName: row.fileName || null, fileUrl: row.fileUrl || null,
+    fileName: row.fileName || null, fileUrl: row.fileUrl || null, files: row.files?.length ? row.files : row.fileUrl ? [{ name: row.fileName, url: row.fileUrl }] : [],
     stage: row.stage, planningStatus: row.planningStatus, planningById: row.planningById,
     planningByName: row.planningByName, planningByUsername: row.planningByUsername, planningAt: row.planningAt,
     projectManagerId: row.projectManagerId, projectManagerStatus: row.projectManagerStatus,
@@ -462,7 +470,7 @@ export async function GET(request) {
       if (reportId && !reportRows.length) return json({ error: "report_not_found" }, 404);
       if (!reportId) return json({ items: reportRows.map(reportFromRow) });
       const expenseRows = await prisma.$queryRawUnsafe(`
-        SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,e.file_name AS "fileName",e.file_url AS "fileUrl",
+        SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,e.file_name AS "fileName",e.file_url AS "fileUrl",e.files AS "files",
           e.stage,e.planning_status AS "planningStatus",e.planning_by_id AS "planningById",planner.name AS "planningByName",planner.username AS "planningByUsername",e.planning_at AS "planningAt",
           e.project_manager_id AS "projectManagerId",e.project_manager_status AS "projectManagerStatus",e.project_manager_by_id AS "projectManagerById",manager.name AS "projectManagerByName",manager.username AS "projectManagerByUsername",e.project_manager_at AS "projectManagerAt",
           e.created_by_id AS "createdById",expense_creator.name AS "createdByName",expense_creator.username AS "createdByUsername",r.id AS "settlementReportId",r.report_number AS "settlementReportNumber"
@@ -483,7 +491,7 @@ export async function GET(request) {
     const expenseId = Number(url.searchParams.get("expenseId")) || 0;
     if (inbox) {
       const rows = await prisma.$queryRawUnsafe(`
-        SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,e.file_name AS "fileName",e.file_url AS "fileUrl",
+        SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,e.file_name AS "fileName",e.file_url AS "fileUrl",e.files AS "files",
           e.stage,e.planning_status AS "planningStatus",e.planning_by_id AS "planningById",planner.name AS "planningByName",planner.username AS "planningByUsername",e.planning_at AS "planningAt",
           e.project_manager_id AS "projectManagerId",e.project_manager_status AS "projectManagerStatus",e.project_manager_by_id AS "projectManagerById",manager.name AS "projectManagerByName",manager.username AS "projectManagerByUsername",e.project_manager_at AS "projectManagerAt",
           e.created_by_id AS "createdById",creator.name AS "createdByName",creator.username AS "createdByUsername",NULL::int AS "settlementReportId",NULL::text AS "settlementReportNumber"
@@ -503,7 +511,7 @@ export async function GET(request) {
 
     const projectId = Number(url.searchParams.get("projectId")) || 0;
     const rows = await prisma.$queryRawUnsafe(`
-      SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,e.file_name AS "fileName",e.file_url AS "fileUrl",
+      SELECT e.id,e.project_id AS "projectId",p.code AS "projectCode",p.name AS "projectName",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",e.amount::text AS amount,e.file_name AS "fileName",e.file_url AS "fileUrl",e.files AS "files",
         e.stage,e.planning_status AS "planningStatus",e.planning_by_id AS "planningById",planner.name AS "planningByName",planner.username AS "planningByUsername",e.planning_at AS "planningAt",
         e.project_manager_id AS "projectManagerId",e.project_manager_status AS "projectManagerStatus",e.project_manager_by_id AS "projectManagerById",manager.name AS "projectManagerByName",manager.username AS "projectManagerByUsername",e.project_manager_at AS "projectManagerAt",
         e.created_by_id AS "createdById",creator.name AS "createdByName",creator.username AS "createdByUsername",report.id AS "settlementReportId",report.report_number AS "settlementReportNumber"
@@ -542,16 +550,16 @@ export async function POST(request) {
       const expenses = entries.map((entry) => ({
         expenseDate: normalizeDigits(entry.expenseDate).trim(), description: String(entry.description || "").trim(),
         budgetCode: String(entry.budgetCode || "").trim(), ...expenseMoney(entry),
-        fileName: String(entry.fileName || "").trim(), fileUrl: String(entry.fileUrl || "").trim(),
+        files: expenseFiles(entry),
       }));
       if (expenses.some((expense) => !/^\d{4}[/-](0[1-9]|1[0-2])[/-](0[1-9]|[12]\d|3[01])$/.test(expense.expenseDate) ||
         !expense.description || !expense.budgetCode || expense.budgetCode.length > 80 || !expense.valid || expense.amount <= 0n || expense.amount > 9223372036854775807n ||
-        !expense.fileName || expense.fileName.length > 180 || !/^\/uploads\/petty-cash-expenses\/[a-f0-9-]+\.(jpg|jpeg|png|webp|pdf)$/.test(expense.fileUrl))) return json({ error: "required_expense_fields" }, 400);
+        !validExpenseFiles(expense.files))) return json({ error: "required_expense_fields" }, 400);
       const currencyIds = [...new Set(expenses.map((expense) => expense.currencyTypeId).filter(Boolean))];
       const currencies = currencyIds.length ? await prisma.currencyType.findMany({ where: { id: { in: currencyIds } }, select: { id: true, title: true } }) : [];
       if (currencies.length !== currencyIds.length || currencies.some((currency) => /ریال|rial|﷼/i.test(currency.title))) return json({ error: "invalid_currency" }, 400);
       const currencyNames = new Map(currencies.map((currency) => [currency.id, currency.title]));
-      expenses.forEach((expense) => { expense.currencyName = expense.currencyTypeId ? currencyNames.get(expense.currencyTypeId) : "ریال"; });
+      expenses.forEach((expense) => { expense.currencyName = expense.currencyTypeId ? currencyNames.get(expense.currencyTypeId) : "ریال"; expense.fileName = expense.files[0].name; expense.fileUrl = expense.files[0].url; });
       const roster = await workflowRoster();
       const initialStage = roster.finance.some((user) => user.id === userId) ? "management" : "planning";
       if (!roster[initialStage].length) return json({ error: "workflow_recipients_missing" }, 400);
@@ -602,9 +610,9 @@ export async function POST(request) {
         const reportId = Number(inserted[0].id);
         // One bulk insert keeps the complete report atomic, including every expense.
         await tx.$executeRawUnsafe(`
-          INSERT INTO petty_cash_expenses (project_id,expense_date,description,budget_code,amount,currency_type_id,currency_name,currency_amount,exchange_rate,created_by_id,file_name,file_url,expense_report_id,stage)
-          SELECT $1,x."expenseDate",x.description,x."budgetCode",x.amount::bigint,x."currencyTypeId"::int,x."currencyName",x."currencyAmount"::numeric,x."exchangeRate"::bigint,$2,x."fileName",x."fileUrl",$3,$5
-          FROM jsonb_to_recordset($4::jsonb) AS x("expenseDate" text,description text,"budgetCode" text,amount text,"currencyTypeId" text,"currencyName" text,"currencyAmount" text,"exchangeRate" text,"fileName" text,"fileUrl" text)
+          INSERT INTO petty_cash_expenses (project_id,expense_date,description,budget_code,amount,currency_type_id,currency_name,currency_amount,exchange_rate,created_by_id,file_name,file_url,files,expense_report_id,stage)
+          SELECT $1,x."expenseDate",x.description,x."budgetCode",x.amount::bigint,x."currencyTypeId"::int,x."currencyName",x."currencyAmount"::numeric,x."exchangeRate"::bigint,$2,x."fileName",x."fileUrl",x.files,$3,$5
+          FROM jsonb_to_recordset($4::jsonb) AS x("expenseDate" text,description text,"budgetCode" text,amount text,"currencyTypeId" text,"currencyName" text,"currencyAmount" text,"exchangeRate" text,"fileName" text,"fileUrl" text,files jsonb)
         `, projectId, userId, reportId, JSON.stringify(expenses.map((expense) => ({ ...expense, amount: String(expense.amount), exchangeRate: String(expense.exchangeRate) }))), initialStage);
         return { id: reportId, reportNumber, documentType: "petty_cash_report", stage: initialStage };
       });
@@ -744,14 +752,14 @@ export async function PATCH(request) {
       if (!Number.isInteger(reportId) || reportId <= 0 || !Number.isInteger(version) || !reportName || reportName.length > 180 || !entries.length || entries.length > 500) return json({ error: "invalid_report" }, 400);
       const normalizedEntries = entries.map((entry) => ({ id: Number(entry.id) || 0, expenseDate: normalizeDigits(entry.expenseDate).trim(),
         description: String(entry.description || "").trim(), budgetCode: String(entry.budgetCode || "").trim(), ...expenseMoney(entry),
-        fileName: String(entry.fileName || "").trim(), fileUrl: String(entry.fileUrl || "").trim() }));
+        files: expenseFiles(entry) }));
       if (normalizedEntries.some((entry) => !/^\d{4}[/-](0[1-9]|1[0-2])[/-](0[1-9]|[12]\d|3[01])$/.test(entry.expenseDate) || !entry.description || !entry.budgetCode || entry.budgetCode.length > 80 ||
-        !entry.valid || entry.amount <= 0n || entry.amount > 9223372036854775807n || !entry.fileName || entry.fileName.length > 180 || !/^\/uploads\/petty-cash-expenses\/[a-f0-9-]+\.(jpg|jpeg|png|webp|pdf)$/.test(entry.fileUrl))) return json({ error: "required_expense_fields" }, 400);
+        !entry.valid || entry.amount <= 0n || entry.amount > 9223372036854775807n || !validExpenseFiles(entry.files))) return json({ error: "required_expense_fields" }, 400);
       const currencyIds = [...new Set(normalizedEntries.map((entry) => entry.currencyTypeId).filter(Boolean))];
       const currencies = currencyIds.length ? await prisma.currencyType.findMany({ where: { id: { in: currencyIds } }, select: { id: true, title: true } }) : [];
       if (currencies.length !== currencyIds.length || currencies.some((currency) => /ریال|rial|﷼/i.test(currency.title))) return json({ error: "invalid_currency" }, 400);
       const currencyNames = new Map(currencies.map((currency) => [currency.id, currency.title]));
-      normalizedEntries.forEach((entry) => { entry.currencyName = entry.currencyTypeId ? currencyNames.get(entry.currencyTypeId) : "ریال"; });
+      normalizedEntries.forEach((entry) => { entry.currencyName = entry.currencyTypeId ? currencyNames.get(entry.currencyTypeId) : "ریال"; entry.fileName = entry.files[0].name; entry.fileUrl = entry.files[0].url; });
       const roster = await workflowRoster();
       await prisma.$transaction(async (tx) => {
         const reports = await tx.$queryRawUnsafe("SELECT * FROM petty_cash_expense_reports WHERE id=$1 FOR UPDATE", reportId);
@@ -783,7 +791,7 @@ export async function PATCH(request) {
               currencyAmount: previous.currency_amount, exchangeRate: previous.exchange_rate });
             if (entry.expenseDate !== previous.expense_date || entry.description !== previous.description || entry.budgetCode !== previous.budget_code || String(entry.amount) !== String(previous.amount) ||
               entry.currencyTypeId !== previousMoney.currencyTypeId || entry.currencyAmount !== previousMoney.currencyAmount || entry.exchangeRate !== previousMoney.exchangeRate ||
-              entry.fileUrl !== previous.file_url || entry.fileName !== previous.file_name) throw new RouteError("not_allowed", 403);
+              JSON.stringify(entry.files) !== JSON.stringify(previous.files?.length ? previous.files : [{ name: previous.file_name, url: previous.file_url }])) throw new RouteError("not_allowed", 403);
             continue;
           }
           const stage = previous?.return_stage || report.initial_stage;
@@ -791,15 +799,15 @@ export async function PATCH(request) {
           if (!roster[stage].length) throw new RouteError("workflow_recipients_missing", 400);
           if (stage === "project_manager" && !roster.project_manager.some((u) => u.id === Number(previous?.project_manager_id))) throw new RouteError("invalid_project_manager", 400);
           if (previous) {
-            await tx.$executeRawUnsafe(`UPDATE petty_cash_expenses SET expense_date=$1,description=$2,budget_code=$3,amount=$4::bigint,file_name=$5,file_url=$6,
+            await tx.$executeRawUnsafe(`UPDATE petty_cash_expenses SET expense_date=$1,description=$2,budget_code=$3,amount=$4::bigint,file_name=$5,file_url=$6,files=$13::jsonb,
               stage=$7,return_stage=NULL,review_status='pending',review_note='',currency_type_id=$9::int,currency_name=$10,
               currency_amount=$11::numeric,exchange_rate=$12::bigint,updated_at=CURRENT_TIMESTAMP WHERE id=$8`,
             entry.expenseDate, entry.description, entry.budgetCode, String(entry.amount), entry.fileName, entry.fileUrl, stage, entry.id,
-            entry.currencyTypeId, entry.currencyName, entry.currencyAmount, String(entry.exchangeRate));
+            entry.currencyTypeId, entry.currencyName, entry.currencyAmount, String(entry.exchangeRate), JSON.stringify(entry.files));
           } else {
-            await tx.$executeRawUnsafe(`INSERT INTO petty_cash_expenses (project_id,expense_date,description,budget_code,amount,created_by_id,file_name,file_url,expense_report_id,stage,currency_type_id,currency_name,currency_amount,exchange_rate)
-              VALUES ($1,$2,$3,$4,$5::bigint,$6,$7,$8,$9,$10,$11::int,$12,$13::numeric,$14::bigint)`, Number(report.project_id), entry.expenseDate, entry.description, entry.budgetCode, String(entry.amount), userId, entry.fileName, entry.fileUrl, reportId, stage,
-            entry.currencyTypeId, entry.currencyName, entry.currencyAmount, String(entry.exchangeRate));
+            await tx.$executeRawUnsafe(`INSERT INTO petty_cash_expenses (project_id,expense_date,description,budget_code,amount,created_by_id,file_name,file_url,files,expense_report_id,stage,currency_type_id,currency_name,currency_amount,exchange_rate)
+              VALUES ($1,$2,$3,$4,$5::bigint,$6,$7,$8,$15::jsonb,$9,$10,$11::int,$12,$13::numeric,$14::bigint)`, Number(report.project_id), entry.expenseDate, entry.description, entry.budgetCode, String(entry.amount), userId, entry.fileName, entry.fileUrl, reportId, stage,
+            entry.currencyTypeId, entry.currencyName, entry.currencyAmount, String(entry.exchangeRate), JSON.stringify(entry.files));
           }
           changes.push({ id: entry.id, toStage: stage });
         }
