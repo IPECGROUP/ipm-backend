@@ -290,7 +290,19 @@ async function expenseReportsFor(userId, roster, inbox = false) {
        AND (r.initial_stage<>'draft' OR r.created_by_id=$1)
     ORDER BY r.created_at DESC,r.id DESC
   `, userId, roster.planning.some((u) => u.id === userId), roster.project_manager.some((u) => u.id === userId), roster.finance.some((u) => u.id === userId), roster.management.some((u) => u.id === userId));
-  if (!reports.length) return [];
+  // Read personal drafts explicitly so the main report list does not depend on
+  // workflow membership or notification history to find them.
+  const drafts = inbox ? [] : await prisma.$queryRawUnsafe(`
+    SELECT r.id,r.report_name AS "reportName",r.report_number AS "reportNumber",r.document_type AS "documentType",r.project_id AS "projectId",r.created_at AS "createdAt",
+      r.created_by_id AS "createdById",r.initial_stage AS "initialStage",r.draft_payload AS "draftPayload",r.workflow_version AS version,r.review_history AS "historyJson",r.review_notes AS "reviewNotes",r.updated_at AS "updatedAt",
+      p.code AS "projectCode",p.name AS "projectName",creator.name AS "createdByName",creator.username AS "createdByUsername"
+    FROM petty_cash_expense_reports r INNER JOIN projects p ON p.id=r.project_id
+    LEFT JOIN "User" creator ON creator.id=r.created_by_id
+    WHERE r.created_by_id=$1 AND r.initial_stage='draft'
+  `, userId);
+  const allReports = [...reports.filter((report) => report.initialStage !== "draft"), ...drafts]
+    .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt) || Number(b.id) - Number(a.id));
+  if (!allReports.length) return [];
   const expenses = await prisma.$queryRawUnsafe(`
     SELECT e.id,e.expense_report_id AS "reportId",e.expense_date AS "expenseDate",e.description,e.budget_code AS "budgetCode",
       e.amount::text AS amount,e.currency_type_id AS "currencyTypeId",COALESCE(e.currency_name,'ریال') AS "currencyName",
@@ -299,12 +311,12 @@ async function expenseReportsFor(userId, roster, inbox = false) {
       e.project_manager_id AS "projectManagerId",manager.name AS "projectManagerName"
     FROM petty_cash_expenses e LEFT JOIN "User" manager ON manager.id=e.project_manager_id
     WHERE e.expense_report_id=ANY($1::int[]) ORDER BY e.id
-  `, reports.map((r) => Number(r.id)));
-  const actorIds = [...new Set(reports.flatMap((report) => (Array.isArray(report.historyJson) ? report.historyJson : [])
+  `, allReports.map((r) => Number(r.id)));
+  const actorIds = [...new Set(allReports.flatMap((report) => (Array.isArray(report.historyJson) ? report.historyJson : [])
     .map((entry) => Number(entry?.userId)).filter((id) => Number.isInteger(id) && id > 0)))];
   const actors = actorIds.length ? await prisma.user.findMany({ where: { id: { in: actorIds } }, select: { id: true, name: true, username: true } }) : [];
   const actorNames = new Map(actors.map((actor) => [actor.id, actor.name || actor.username || `کاربر ${actor.id}`]));
-  return reports.map((report) => {
+  return allReports.map((report) => {
     const items = expenses.filter((e) => Number(e.reportId) === Number(report.id)).map((e) => ({ ...e, id: Number(e.id),
       files: e.files?.length ? e.files : e.fileUrl ? [{ name: e.fileName, url: e.fileUrl }] : [], canAct: canReviewExpense(e, userId, roster) }));
     const canRevise = Number(report.createdById) === userId && items.some((e) => e.stage === "revision");
@@ -559,7 +571,9 @@ export async function POST(request) {
       })) : [];
       if (attachments.length && !validExpenseFiles(attachments)) return json({ error: "invalid_attachment" }, 400);
       const draftPayload = { reportName, form, attachments, manualEntryOpen: Boolean(body.draftPayload?.manualEntryOpen),
-        editingExpenseId: Number(body.draftPayload?.editingExpenseId) || null };
+        editingExpenseId: Number(body.draftPayload?.editingExpenseId) || null,
+        editingExpenseIndex: Number.isInteger(body.draftPayload?.editingExpenseIndex) && body.draftPayload.editingExpenseIndex >= 0
+          ? body.draftPayload.editingExpenseIndex : null };
       const expenses = entries.map((entry) => ({ expenseDate: normalizeDigits(entry.expenseDate).trim(),
         description: String(entry.description || "").trim(), budgetCode: String(entry.budgetCode || "").trim(),
         ...expenseMoney(entry), files: expenseFiles(entry) }));
