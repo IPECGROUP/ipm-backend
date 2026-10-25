@@ -119,6 +119,49 @@ export async function POST(request) {
   }
 }
 
+export async function PATCH(request) {
+  try {
+    if (!await currentUser(request)) return json({ error: "unauthorized" }, 401);
+    const body = await request.json().catch(() => ({}));
+    const id = String(body.id || "");
+    const categoryId = Number(body.categoryId);
+    if (!/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(id)) return json({ error: "invalid_id" }, 400);
+    if (!Number.isSafeInteger(categoryId) || categoryId < 1) return json({ error: "category_required" }, 400);
+    await ensureSchema();
+    const categories = await prisma.$queryRaw`SELECT name FROM equipment_field_categories WHERE id = ${categoryId}`;
+    if (!categories.length) return json({ error: "category_not_found" }, 400);
+    const definitions = await prisma.$queryRaw`SELECT id FROM equipment_field_definitions WHERE category_id = ${categoryId}`;
+    const allowedFieldIds = new Set(definitions.map((field) => String(field.id)));
+    const specifications = await prisma.$queryRaw`SELECT id FROM equipment_specifications WHERE category_id = ${categoryId}`;
+    specifications.forEach((item) => allowedFieldIds.add(`spec:${item.id}`));
+    const suppliedValues = body.fieldValues && typeof body.fieldValues === "object" && !Array.isArray(body.fieldValues) ? body.fieldValues : {};
+    if (Object.keys(suppliedValues).some((fieldId) => !allowedFieldIds.has(fieldId) || typeof suppliedValues[fieldId] !== "string" || suppliedValues[fieldId].length > 10000)) return json({ error: "invalid_field_values" }, 400);
+    const fieldValues = Object.fromEntries(Object.entries(suppliedValues).map(([fieldId, value]) => [fieldId, value.trim()]));
+    const relatedLetterIds = [...new Set((Array.isArray(body.relatedLetterIds) ? body.relatedLetterIds : []).map(String))].filter((value) => /^\d+$/.test(value)).slice(0, 200);
+    const libraryItemIds = [...new Set((Array.isArray(body.libraryItemIds) ? body.libraryItemIds : []).map(String))].filter((value) => /^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(value)).slice(0, 200);
+    const files = (Array.isArray(body.files) ? body.files : []).slice(0, 100).map((file) => ({
+      name: String(file?.name || "").slice(0, 180), url: String(file?.url || ""),
+      size: Number(file?.size || 0), type: String(file?.type || "").slice(0, 120),
+    }));
+    if (files.some((file) => !/^\/uploads\/equipment-identities\/[a-f0-9-]{36}\.[a-z0-9]+$/.test(file.url) || !Number.isFinite(file.size) || file.size < 0)) return json({ error: "invalid_files" }, 400);
+    const rows = await prisma.$queryRaw`
+      UPDATE "equipment_identities" SET "category_id" = ${categoryId},
+        "name" = CASE WHEN "name" = CONCAT('تجهیز ', "category") THEN ${`تجهیز ${categories[0].name}`} ELSE "name" END,
+        "category" = ${categories[0].name},
+        "field_values" = ${JSON.stringify(fieldValues)}::jsonb,
+        "related_letter_ids" = ${JSON.stringify(relatedLetterIds)}::jsonb,
+        "library_item_ids" = ${JSON.stringify(libraryItemIds)}::jsonb,
+        "files" = ${JSON.stringify(files)}::jsonb
+      WHERE "id" = ${id} RETURNING *
+    `;
+    if (!rows.length) return json({ error: "equipment_not_found" }, 404);
+    return json({ item: mapItem(rows[0]) });
+  } catch (error) {
+    console.error("equipment_identities_patch_failed", error);
+    return json({ error: "equipment_identities_patch_failed" }, 500);
+  }
+}
+
 export async function DELETE(request) {
   try {
     if (!await currentUser(request)) return json({ error: "unauthorized" }, 401);
