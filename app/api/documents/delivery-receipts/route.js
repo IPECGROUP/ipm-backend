@@ -6,7 +6,20 @@ export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 let schemaPromise;
+let typesPromise;
 const json = (body, status = 200) => NextResponse.json(body, { status, headers: { "Cache-Control": "no-store" } });
+
+async function ensureTypes() {
+  if (!typesPromise) typesPromise = prisma.$executeRawUnsafe(`
+    CREATE TABLE IF NOT EXISTS delivery_receipt_types (
+      id SERIAL PRIMARY KEY,
+      title TEXT NOT NULL UNIQUE,
+      created_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
+      updated_at TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
+    )
+  `).catch((error) => { typesPromise = null; throw error; });
+  return typesPromise;
+}
 
 async function currentUser(request) {
   const cookie = request.headers.get("cookie") || "";
@@ -67,6 +80,9 @@ export async function POST(request) {
     }));
     if (!/^\d{4}\/\d{2}\/\d{2}$/.test(date) || !type || type.length > 100 || !title || title.length > 300 || !recipient || recipient.length > 200 || files.some((file) => !/^\/uploads\/delivery-receipts\/[a-f0-9-]{36}\.[a-z0-9]+$/.test(file.url) || !Number.isFinite(file.size) || file.size < 0)) return json({ error: "invalid_delivery_receipt" }, 400);
     await ensureSchema();
+    await ensureTypes();
+    const matchingTypes = await prisma.$queryRawUnsafe("SELECT id FROM delivery_receipt_types WHERE title = $1", type);
+    if (!matchingTypes.length) return json({ error: "invalid_delivery_receipt_type" }, 400);
     const id = randomUUID();
     const rows = await prisma.$queryRaw`
       INSERT INTO delivery_receipts (id, date_fa, receipt_type, title, recipient, files, created_by_id)
