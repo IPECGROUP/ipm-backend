@@ -417,6 +417,10 @@ export async function POST(req) {
         Number(userId)
       );
 
+      // Editing the details of a completed action must not append another
+      // approval/step change to the request history.
+      if (existing && nextStatus === existingStatus) return row;
+
       const workflowData = statusData(nextStatus, row, history, userId, actorName);
       return tx.paymentRequest.update({
         where: { id: requestId },
