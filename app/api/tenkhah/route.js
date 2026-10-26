@@ -2,6 +2,7 @@ import { prisma } from "../../../lib/prisma";
 import { isSessionExpired } from "../../../lib/security";
 import { nextSharedPaymentSerial } from "../../../lib/paymentSerial";
 import { requirePagePermission } from "../../../lib/pagePermissions";
+import { pettyCashLimitStatus, readPettyCashBalance } from "../../../lib/pettyCashLimit";
 
 export const runtime = "nodejs";
 const json = (data, status = 200) => Response.json(data, { status });
@@ -139,6 +140,7 @@ export async function GET(r) {
       return json({ users });
     }
     if (url.searchParams.get("currentUserFinance") === "1") return json({ isFinance: await isFinanceUser(uid) });
+    if (url.searchParams.get("limit") === "1") return json(await pettyCashLimitStatus(uid));
     if (recipientStage === "finance_request_management") return json({ users: await financeRequesterManagementRecipients() });
     if (["control_project", "finance", "project_manager", "management"].includes(recipientStage)) return json({ users: await settlementRecipients(recipientStage, uid) });
     // A petty-cash debt belongs to its beneficiary, not to the project that
@@ -146,24 +148,7 @@ export async function GET(r) {
     // request for budgeting and workflow, while every balance shown to the
     // user is the aggregate across that beneficiary's projects.
     if (balanceBeneficiaryId) {
-      const rows = await prisma.$queryRawUnsafe(`SELECT COALESCE(SUM(GREATEST(0,COALESCE(t.charged_amount,0)-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id),0))),0)::text AS "unregisteredBalance",COALESCE(SUM(GREATEST(0,COALESCE(t.charged_amount,0)-COALESCE((SELECT SUM(e.amount) FROM tenkhah_settlements s JOIN tenkhah_settlement_entries e ON e.settlement_id=s.id WHERE s.tenkhah_request_id=t.id AND s.status='completed'),0))),0)::text AS "unsettledBalance",COALESCE(SUM(COALESCE(t.charged_amount,0)),0)::text AS "receivedAmount" FROM tenkhah_requests t WHERE COALESCE(t.beneficiary_user_id,t.created_by_id)=$1 AND t.status='charged'`, balanceBeneficiaryId);
-      const balances = rows[0] || { unregisteredBalance: "0", unsettledBalance: "0", receivedAmount: "0" };
-      // Expenses are owned by the current petty-cash holder.  Keep this
-      // optional lookup isolated: a legacy/missing expense table must never
-      // prevent the core balance endpoint from responding.
-      try {
-        const expenses = await prisma.$queryRawUnsafe(`SELECT COALESCE(SUM(amount),0)::text AS "registeredAmount",COALESCE(SUM(amount) FILTER (WHERE stage='completed' AND project_manager_status='approved'),0)::text AS "approvedAmount" FROM petty_cash_expenses WHERE created_by_id=$1 AND stage<>'draft'`, balanceBeneficiaryId);
-        const pettyCash = expenses[0] || {};
-        const remaining = (value, deducted) => {
-          const result = BigInt(value || "0") - BigInt(deducted || "0");
-          return (result > 0n ? result : 0n).toString();
-        };
-        balances.unregisteredBalance = remaining(balances.unregisteredBalance, pettyCash.registeredAmount);
-        balances.unsettledBalance = remaining(balances.unsettledBalance, pettyCash.approvedAmount);
-      } catch {
-        // The main balance above remains valid until the expense subsystem is available.
-      }
-      return json(balances);
+      return json(await readPettyCashBalance(balanceBeneficiaryId));
     }
     const inbox = url.searchParams.get("inbox") === "1";
     const financeMember = dashboardReport ? false : await isFinanceUser(uid);
@@ -241,6 +226,7 @@ export async function POST(r) {
     const pid = +b.projectId, selectedRecipientId = +b.projectManagerId, beneficiaryId = +b.beneficiaryUserId, w = amount(b.amount);
     const beneficiary = beneficiaryId ? await prisma.user.findUnique({ where: { id: beneficiaryId }, select: { id: true } }) : null;
     if (!String(b.requestDate || "").trim() || !String(b.purpose || "").trim() || !pid || !selectedRecipientId || !beneficiary || w <= 0n) return json({ error: "invalid_input" }, 400);
+    if ((await pettyCashLimitStatus(uid)).blocked) return json({ error: "petty_cash_limit_reached" }, 409);
     const requesterIsFinance = await isFinanceUser(uid);
     const validRecipients = requesterIsFinance
       ? await financeRequesterManagementRecipients()
