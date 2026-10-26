@@ -49,7 +49,23 @@ async function ensureSchema() {
   return schemaPromise;
 }
 
-const mapItem = (row) => ({ id: row.id, date: row.date_fa, type: row.receipt_type, title: row.title, recipient: row.recipient, files: Array.isArray(row.files) ? row.files : [], createdAt: row.created_at });
+const mapItem = (row) => ({ id: row.id, date: row.date_fa, type: row.receipt_type, title: row.title, recipient: row.recipient, files: Array.isArray(row.files) ? row.files : [], createdById: row.created_by_id, createdAt: row.created_at });
+
+function receiptFields(body) {
+  const date = String(body.date || "").trim().replaceAll("-", "/");
+  const type = String(body.type || "").trim();
+  const title = String(body.title || "").trim();
+  const recipient = String(body.recipient || "").trim();
+  const rawFiles = Array.isArray(body.files) ? body.files : [];
+  const files = rawFiles.map((file) => ({
+    name: String(file?.name || "").slice(0, 180),
+    url: String(file?.url || ""),
+    size: Number(file?.size || 0),
+    type: String(file?.type || "").slice(0, 120),
+  }));
+  const valid = /^\d{4}\/\d{2}\/\d{2}$/.test(date) && type && type.length <= 100 && title && title.length <= 300 && recipient && recipient.length <= 200 && rawFiles.length <= 30 && files.every((file) => /^\/uploads\/delivery-receipts\/[a-f0-9-]{36}\.[a-z0-9]+$/.test(file.url) && Number.isFinite(file.size) && file.size >= 0);
+  return { date, type, title, recipient, files, valid };
+}
 
 export async function GET(request) {
   try {
@@ -68,17 +84,8 @@ export async function POST(request) {
     const user = await currentUser(request);
     if (!user) return json({ error: "unauthorized" }, 401);
     const body = await request.json().catch(() => ({}));
-    const date = String(body.date || "").trim().replaceAll("-", "/");
-    const type = String(body.type || "").trim();
-    const title = String(body.title || "").trim();
-    const recipient = String(body.recipient || "").trim();
-    const files = (Array.isArray(body.files) ? body.files : []).slice(0, 30).map((file) => ({
-      name: String(file?.name || "").slice(0, 180),
-      url: String(file?.url || ""),
-      size: Number(file?.size || 0),
-      type: String(file?.type || "").slice(0, 120),
-    }));
-    if (!/^\d{4}\/\d{2}\/\d{2}$/.test(date) || !type || type.length > 100 || !title || title.length > 300 || !recipient || recipient.length > 200 || files.some((file) => !/^\/uploads\/delivery-receipts\/[a-f0-9-]{36}\.[a-z0-9]+$/.test(file.url) || !Number.isFinite(file.size) || file.size < 0)) return json({ error: "invalid_delivery_receipt" }, 400);
+    const { date, type, title, recipient, files, valid } = receiptFields(body);
+    if (!valid) return json({ error: "invalid_delivery_receipt" }, 400);
     await ensureSchema();
     await ensureTypes();
     const matchingTypes = await prisma.$queryRawUnsafe("SELECT id FROM delivery_receipt_types WHERE title = $1", type);
@@ -93,5 +100,31 @@ export async function POST(request) {
   } catch (error) {
     console.error("delivery_receipts_post_failed", error);
     return json({ error: "delivery_receipts_post_failed" }, 500);
+  }
+}
+
+export async function PATCH(request) {
+  try {
+    const user = await currentUser(request);
+    if (!user) return json({ error: "unauthorized" }, 401);
+    const body = await request.json().catch(() => ({}));
+    const id = String(body.id || "");
+    const { date, type, title, recipient, files, valid } = receiptFields(body);
+    if (!/^[a-f0-9-]{36}$/.test(id) || !valid) return json({ error: "invalid_delivery_receipt" }, 400);
+    await ensureSchema();
+    await ensureTypes();
+    const matchingTypes = await prisma.$queryRawUnsafe("SELECT id FROM delivery_receipt_types WHERE title = $1", type);
+    if (!matchingTypes.length) return json({ error: "invalid_delivery_receipt_type" }, 400);
+    const rows = await prisma.$queryRaw`
+      UPDATE delivery_receipts
+      SET date_fa = ${date}, receipt_type = ${type}, title = ${title}, recipient = ${recipient}, files = ${JSON.stringify(files)}::jsonb
+      WHERE id = ${id} AND created_by_id = ${Number(user.id)}
+      RETURNING *
+    `;
+    if (!rows.length) return json({ error: "delivery_receipt_not_found_or_forbidden" }, 404);
+    return json({ item: mapItem(rows[0]) });
+  } catch (error) {
+    console.error("delivery_receipts_patch_failed", error);
+    return json({ error: "delivery_receipts_patch_failed" }, 500);
   }
 }

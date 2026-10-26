@@ -1269,7 +1269,10 @@ export async function POST(req, ctx) {
     if (!row || isSupplyRequest(row)) return json({ error: "not_found" }, 404);
 
     const uctx = await getUserContext(req, userId);
-    const history = Array.isArray(row.historyJson) ? row.historyJson : [];
+    // Keep the fetched row intact for the concurrency check in
+    // updateApprovalWithLiquidityCheck. Appending to row.historyJson would
+    // make every approval look like the database row changed meanwhile.
+    const history = Array.isArray(row.historyJson) ? [...row.historyJson] : [];
     const step = getCurrentStep(history);
     if (!step) return json({ error: "no_active_step" }, 400);
     if (!uctx.isSuperAdmin && nextStatus === "rejected" && !canRejectAtStep(step.roleKey)) {
