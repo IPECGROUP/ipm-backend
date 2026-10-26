@@ -1166,10 +1166,13 @@ export async function PATCH(req) {
 
     const row = await prisma.paymentRequest.findFirst({
       where: { id, docId: REQUEST_DOC_ID },
-      select: { id: true, createdById: true },
+      select: { id: true, createdById: true, historyJson: true },
     });
     if (!row) return json({ error: "not_found" }, 404);
     if (Number(row.createdById) !== Number(userId)) return json({ error: "forbidden" }, 403);
+    if (Array.isArray(row.historyJson) && row.historyJson.some((entry) => entry?.type === "approved" || entry?.status === "approved")) {
+      return json({ error: "approval_already_recorded" }, 409);
+    }
 
     const projectId = toPositiveInt(body.projectId ?? body.project_id);
     const project = await resolveProject(projectId);
@@ -1188,6 +1191,13 @@ export async function PATCH(req) {
 
     await ensureRequestTypeTables();
     const updated = await prisma.$transaction(async (tx) => {
+      const lockedRows = await tx.$queryRawUnsafe(
+        `SELECT "historyJson" FROM "PaymentRequest" WHERE "id" = $1 FOR UPDATE`,
+        id,
+      );
+      if (Array.isArray(lockedRows?.[0]?.historyJson) && lockedRows[0].historyJson.some((entry) => entry?.type === "approved" || entry?.status === "approved")) {
+        throw new Error("approval_already_recorded");
+      }
       const item = await tx.paymentRequest.update({
         where: { id },
         data: {
@@ -1221,6 +1231,7 @@ export async function PATCH(req) {
     }) });
   } catch (e) {
     console.error("supply_requests_patch_error", e);
+    if (e?.message === "approval_already_recorded") return json({ error: "approval_already_recorded" }, 409);
     const mapped = mapDbError(e);
     if (mapped) return json({ error: mapped.error }, mapped.status);
     return json(internalErrorPayload(e), 500);
