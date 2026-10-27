@@ -20,6 +20,7 @@ const IP_LOGIN_MAX_ATTEMPTS = 10;
 const USERNAME_MAX_FAILURES = 5;
 const LOCK_DURATIONS_MS = [15, 30, 60, 120, 240].map((minutes) => minutes * 60 * 1000);
 const ipLoginAttempts = new Map();
+const testLoginAttempts = new Map();
 const usernameFailures = new Map();
 
 function normalizedUsername(username) {
@@ -152,6 +153,38 @@ async function ensureHardcodedSuperAdmin(username) {
       access: [SUPER_ADMIN_ACCESS],
     },
   });
+}
+
+async function handleTestLogin(request) {
+  const body = await readBody(request);
+  const ip = requestMetadata(request).ip || "unknown";
+  const attempts = (testLoginAttempts.get(ip) || []).filter((at) => at >= Date.now() - IP_LOGIN_WINDOW_MS);
+  if (attempts.length >= IP_LOGIN_MAX_ATTEMPTS) return json({ error: "too_many_login_attempts" }, 429);
+  attempts.push(Date.now());
+  testLoginAttempts.set(ip, attempts);
+  const siteKey = process.env.ARCAPTCHA_SITE_KEY;
+  const secretKey = process.env.ARCAPTCHA_SECRET_KEY;
+  if (!siteKey || !secretKey) return json({ error: "captcha_unavailable" }, 503);
+  if (typeof body.captchaToken !== "string" || !body.captchaToken || body.captchaToken.length > 4096) {
+    return json({ error: "captcha_invalid" }, 400);
+  }
+  try {
+    const response = await fetch("https://api.arcaptcha.ir/arcaptcha/api/verify", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ site_key: siteKey, secret_key: secretKey, challenge_id: body.captchaToken }),
+      signal: AbortSignal.timeout(10000),
+      cache: "no-store",
+    });
+    if (!response.ok) return json({ error: "captcha_unavailable" }, 503);
+    const result = await response.json();
+    if (result.success !== true) return json({ error: "captcha_invalid" }, 400);
+  } catch {
+    return json({ error: "captcha_unavailable" }, 503);
+  }
+
+  if (body.username !== "test" || body.password !== "test") return json({ error: "invalid_credentials" }, 401);
+  return json({ ok: true });
 }
 
 async function handleLogin(request) {
@@ -331,6 +364,7 @@ export async function POST(request, { params }) {
   try {
     const action = pickAction(request, params);
 
+    if (action === "test-login") return await handleTestLogin(request);
     if (action === "login") return await handleLogin(request);
     if (action === "logout") return await handleLogout(request);
 
