@@ -1,14 +1,15 @@
 ﻿import { NextResponse } from "next/server";
 import { prisma } from "@/lib/prisma";
 import { getAuthenticatedUser } from "@/lib/security";
+import { hasPagePermission } from "@/lib/pagePermissions";
 import initial from "./initial.json";
 
 export const dynamic = "force-dynamic";
 
-async function authorize(request) {
+async function authorize(request, allowProjectAccess = false) {
   const user = await getAuthenticatedUser(request);
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
-  if (!["ali", "marandi", "nouri"].includes(String(user.username || "").trim().toLowerCase())) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!["ali", "marandi", "nouri"].includes(String(user.username || "").trim().toLowerCase()) && !(allowProjectAccess && await hasPagePermission(request, "ساختار شکست هزینه‌ها", "نمایش منو"))) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   return null;
 }
 
@@ -22,7 +23,7 @@ async function ensureTemplate() {
 }
 
 export async function GET(request) {
-  const denied = await authorize(request);
+  const denied = await authorize(request, true);
   if (denied) return denied;
   try {
     await ensureTemplate();
