@@ -185,6 +185,9 @@ async function handleLogin(request) {
   }
   noteIpLoginAttempt(ip);
 
+  const captcha = await verifyTestCaptcha(request.headers.get("host"), body.captchaToken);
+  if (!captcha.ok) return json({ error: captcha.error }, captcha.status);
+
   const existingLock = lockState(usernameKey);
   if (existingLock.lockedUntil > Date.now()) {
     const retryAfterSeconds = Math.ceil((existingLock.lockedUntil - Date.now()) / 1000);
