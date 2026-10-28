@@ -1,3 +1,4 @@
+import { canDeleteFinancialRecords } from "../../../../lib/deleteAccess";
 // app/api/requests/[[...slug]]/route.js
 import { prisma } from "../../../../lib/prisma";
 import { fallbackUnitsForRoleNames } from "../../../../lib/orgStructureFallback";
@@ -1143,12 +1144,12 @@ export async function GET(req, ctx) {
     });
     // دسترسی مدیریتی نباید کارتابل مرحله‌ای را دور بزند. مشاهدهٔ درخواست
     // فقط برای عضو مرحلهٔ جاری یا فردی است که قبلاً در همان درخواست درگیر بوده.
-    const canView = uctx.isSuperAdmin || canAct || wasInvolvedInRequest(row, userId, uctx);
+    const canView = uctx.isSuperAdmin || await canDeleteFinancialRecords(userId) || canAct || wasInvolvedInRequest(row, userId, uctx);
     if (!canView) return json({ error: "forbidden" }, 403);
 
     const userNamesById = await userNameMapForRows([row]);
     const relatedLettersByRequest = await relatedLettersForRows([row]);
-    return json({ item: { ...normalizeOut(row, userNamesById), relatedLetters: relatedLettersByRequest.get(String(row.id)) || [], canAct, canEdit: uctx.isSuperAdmin || row.createdById === userId, canDelete: uctx.isSuperAdmin || (row.createdById === userId && (uctx.isMainAdmin || !["approved", "rejected", "canceled", "cancelled"].includes(row.status))) } });
+    return json({ item: { ...normalizeOut(row, userNamesById), relatedLetters: relatedLettersByRequest.get(String(row.id)) || [], canAct, canEdit: uctx.isSuperAdmin || row.createdById === userId, canDelete: await canDeleteFinancialRecords(userId) || ((uctx.isSuperAdmin || row.createdById === userId) && !["approved", "rejected", "canceled", "cancelled"].includes(row.status)) } });
   }
 
   // GET /api/requests (list)
@@ -1200,6 +1201,7 @@ export async function GET(req, ctx) {
     });
   }
 
+  const canDelete = await canDeleteFinancialRecords(userId);
   const rowsWithFlags = rows.map((r) => {
     const canAct = uctx.isSuperAdmin || canActOnStep({
       row: r,
@@ -1211,7 +1213,7 @@ export async function GET(req, ctx) {
     });
     const isMine = r.createdById === userId;
     const wasInvolved = wasInvolvedInRequest(r, userId, uctx);
-    const canView = uctx.isSuperAdmin || canAct || wasInvolved;
+    const canView = uctx.isSuperAdmin || canDelete || canAct || wasInvolved;
     return { row: r, canAct, isMine, wasInvolved, canView };
   });
 
@@ -1239,7 +1241,7 @@ export async function GET(req, ctx) {
       relatedLetters: relatedLettersByRequest.get(String(x.row.id)) || [],
       canAct: x.canAct,
       canEdit: uctx.isSuperAdmin || x.isMine,
-      canDelete: uctx.isSuperAdmin || (x.isMine && (uctx.isMainAdmin || !["approved", "rejected", "canceled", "cancelled"].includes(x.row.status))),
+      canDelete: canDelete || ((uctx.isSuperAdmin || x.isMine) && !["approved", "rejected", "canceled", "cancelled"].includes(x.row.status)),
     })),
   });
 }
@@ -1710,11 +1712,7 @@ export async function DELETE(req, ctx) {
   if (!row || isSupplyRequest(row)) return json({ error: "not_found" }, 404);
 
   // فقط سازنده
-  const uctx = await getUserContext(req, userId);
-  if (row.createdById !== userId && !uctx.isSuperAdmin) return json({ error: "forbidden" }, 403);
-  // `isMainAdmin` is deliberately restricted to the marandi account. It only
-  // bypasses the post-workflow status lock; ownership checks above remain intact.
-  if (!uctx.isSuperAdmin && !uctx.isMainAdmin && ["approved", "rejected", "canceled", "cancelled"].includes(row.status)) return json({ error: "delete_not_allowed" }, 400);
+  if (!(await canDeleteFinancialRecords(userId))) return json({ error: "forbidden" }, 403);
 
   await prisma.paymentRequest.delete({ where: { id } });
   return json({ ok: true });

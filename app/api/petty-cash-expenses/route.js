@@ -1,3 +1,4 @@
+import { canDeleteFinancialRecords } from "../../../lib/deleteAccess";
 import { prisma } from "../../../lib/prisma";
 import { isSessionExpired } from "../../../lib/security";
 import { reportNotificationState } from "../../../lib/pettyCashNotifications.mjs";
@@ -271,13 +272,14 @@ function canReviewExpense(expense, userId, roster) {
 }
 
 async function expenseReportsFor(userId, roster, inbox = false) {
+  const canDelete = await canDeleteFinancialRecords(userId);
   const reports = await prisma.$queryRawUnsafe(`
     SELECT r.id,r.report_name AS "reportName",r.report_number AS "reportNumber",r.document_type AS "documentType",r.project_id AS "projectId",r.created_at AS "createdAt",
       r.created_by_id AS "createdById",r.initial_stage AS "initialStage",r.draft_payload AS "draftPayload",r.workflow_version AS version,r.review_history AS "historyJson",r.review_notes AS "reviewNotes",r.updated_at AS "updatedAt",
       p.code AS "projectCode",p.name AS "projectName",creator.name AS "createdByName",creator.username AS "createdByUsername"
     FROM petty_cash_expense_reports r INNER JOIN projects p ON p.id=r.project_id
     LEFT JOIN "User" creator ON creator.id=r.created_by_id
-     WHERE (r.created_by_id=$1 OR EXISTS (
+     WHERE ($6::boolean OR r.created_by_id=$1 OR EXISTS (
       SELECT 1 FROM petty_cash_expenses e WHERE e.expense_report_id=r.id AND (
         (e.stage='planning' AND $2::boolean) OR (e.stage='project_manager' AND e.project_manager_id=$1 AND $3::boolean)
          OR e.project_manager_id=$1
@@ -289,7 +291,7 @@ async function expenseReportsFor(userId, roster, inbox = false) {
          OR ($5::boolean AND (h->>'stage'='management' OR (h->'changes') @> '[{"toStage":"management"}]'::jsonb))))
        AND (r.initial_stage<>'draft' OR r.created_by_id=$1)
     ORDER BY r.created_at DESC,r.id DESC
-  `, userId, roster.planning.some((u) => u.id === userId), roster.project_manager.some((u) => u.id === userId), roster.finance.some((u) => u.id === userId), roster.management.some((u) => u.id === userId));
+  `, userId, roster.planning.some((u) => u.id === userId), roster.project_manager.some((u) => u.id === userId), roster.finance.some((u) => u.id === userId), roster.management.some((u) => u.id === userId), canDelete);
   // Read personal drafts explicitly so the main report list does not depend on
   // workflow membership or notification history to find them.
   const drafts = inbox ? [] : await prisma.$queryRawUnsafe(`
@@ -329,7 +331,7 @@ async function expenseReportsFor(userId, roster, inbox = false) {
         || (roster.management.some((u) => u.id === userId) && (entry.stage === "management" || entry.changes?.some((change) => change.toStage === "management"))));
     const { creatorDecision, notificationVersion } = report.initialStage === "draft"
       ? { creatorDecision: null, notificationVersion: null } : reportNotificationState(report, items, userId, canAct);
-    return { ...report, id: Number(report.id), historyJson: history.map((entry) => ({ ...entry, actorName: actorNames.get(Number(entry.userId)) || null })), canAct, canRevise, wasSentToMe, creatorDecision, notificationVersion, items, notificationTarget: "petty_cash_report", title: report.reportName, requestNumber: report.reportNumber || report.reportName };
+    return { ...report, id: Number(report.id), historyJson: history.map((entry) => ({ ...entry, actorName: actorNames.get(Number(entry.userId)) || null })), canAct, canRevise, canDelete: canDelete || canRevise || (report.initialStage === "draft" && Number(report.createdById) === userId), wasSentToMe, creatorDecision, notificationVersion, items, notificationTarget: "petty_cash_report", title: report.reportName, requestNumber: report.reportNumber || report.reportName };
   }).filter((report) => !inbox || report.canAct || report.canRevise || report.creatorDecision);
 }
 
@@ -964,6 +966,7 @@ export async function DELETE(request) {
     await ensureTable();
     const userId = await userIdOf(request);
     if (!userId) return json({ error: "unauthorized" }, 401);
+    const privileged = await canDeleteFinancialRecords(userId);
     const body = await request.json().catch(() => ({}));
     if (body.action === "delete_draft_report") {
       const reportId = Number(body.reportId);
@@ -984,12 +987,14 @@ export async function DELETE(request) {
       const deleted = await prisma.$transaction(async (tx) => {
         const reports = await tx.$queryRawUnsafe("SELECT id,created_by_id,workflow_version FROM petty_cash_expense_reports WHERE id=$1 FOR UPDATE", reportId);
         const report = reports[0];
-        if (!report || Number(report.created_by_id) !== userId) throw new RouteError("not_allowed", 403);
+        if (!report || (!privileged && Number(report.created_by_id) !== userId)) throw new RouteError("not_allowed", 403);
         if (Number(report.workflow_version) !== version) throw new RouteError("workflow_changed", 409);
         const expenses = await tx.$queryRawUnsafe("SELECT id,stage FROM petty_cash_expenses WHERE expense_report_id=$1 ORDER BY id FOR UPDATE", reportId);
-        if (!expenses.length || expenses.some((expense) => expense.stage !== "revision")) throw new RouteError("not_allowed", 403);
-        const linked = await tx.$queryRawUnsafe("SELECT expense_id FROM petty_cash_settlement_report_items WHERE expense_id=ANY($1::int[])", expenses.map((expense) => Number(expense.id)));
-        if (linked.length) throw new RouteError("not_allowed", 403);
+        if (!privileged) {
+          if (!expenses.length || expenses.some((expense) => expense.stage !== "revision")) throw new RouteError("not_allowed", 403);
+          const linked = await tx.$queryRawUnsafe("SELECT expense_id FROM petty_cash_settlement_report_items WHERE expense_id=ANY($1::int[])", expenses.map((expense) => Number(expense.id)));
+          if (linked.length) throw new RouteError("not_allowed", 403);
+        } else if (expenses.length) await tx.$executeRawUnsafe("DELETE FROM petty_cash_settlement_report_items WHERE expense_id=ANY($1::int[])", expenses.map((expense) => Number(expense.id)));
         await tx.$executeRawUnsafe("DELETE FROM petty_cash_expenses WHERE expense_report_id=$1", reportId);
         await tx.$executeRawUnsafe("DELETE FROM petty_cash_expense_reports WHERE id=$1", reportId);
         return expenses.length;

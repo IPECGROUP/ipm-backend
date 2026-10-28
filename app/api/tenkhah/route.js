@@ -1,3 +1,4 @@
+import { canDeleteFinancialRecords } from "../../../lib/deleteAccess";
 import { prisma } from "../../../lib/prisma";
 import { isSessionExpired } from "../../../lib/security";
 import { nextSharedPaymentSerial } from "../../../lib/paymentSerial";
@@ -128,7 +129,7 @@ export async function GET(r) {
     const url = new URL(r.url), recipientStage = url.searchParams.get("recipients"), balanceBeneficiaryId = +url.searchParams.get("beneficiaryId");
     const dashboardReport = url.searchParams.get("dashboard") === "1";
     if (dashboardReport) { const denied = await requirePagePermission(r, "پیش‌بینی جریان نقدی", "داشبورد مدیریت مالی"); if (denied) return denied; }
-    const canViewAllRequests = dashboardReport || await isTenkhahRequestAdmin(uid);
+    const canViewAllRequests = dashboardReport || await canDeleteFinancialRecords(uid);
     // Beneficiary selection is intentionally independent from administrative
     // role-management access. Return only the profile fields needed by the
     // request form, never users' roles or unit assignments.
@@ -358,15 +359,11 @@ export async function DELETE(r) {
 
     const row = (await requests("WHERE t.id=$1", [id]))[0];
     if (!row) return json({ error: "not_found" }, 404);
-    const canManageAllRequests = await isTenkhahRequestAdmin(uid);
-    if (Number(row.createdById) !== Number(uid) && !canManageAllRequests) return json({ error: "forbidden" }, 403);
-
+    const privileged = await canDeleteFinancialRecords(uid);
+    if (!privileged && Number(row.createdById) !== Number(uid)) return json({ error: "forbidden" }, 403);
     const history = Array.isArray(row.workflowHistory) ? row.workflowHistory : [];
     const hasWorkflowAction = history.some((event) => String(event?.type || "") !== "created");
-    const isUntouchedPending = row.status === "pending" && !hasWorkflowAction;
-    // Elevated request administrators may remove any tenkhah request,
-    // including a request that has progressed through the workflow.
-    if (!isUntouchedPending && !canManageAllRequests) return json({ error: "delete_not_allowed" }, 409);
+    if (!privileged && (row.status !== "pending" || hasWorkflowAction)) return json({ error: "delete_not_allowed" }, 409);
 
     await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(

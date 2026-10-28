@@ -1,3 +1,4 @@
+import { canDeleteFinancialRecords } from "../../../lib/deleteAccess";
 import { NextResponse } from "next/server";
 import { prisma } from "../../../lib/prisma";
 import { fallbackUnitsForRoleNames } from "../../../lib/orgStructureFallback";
@@ -826,6 +827,7 @@ export async function GET(req) {
     const actionParticipantRequestIds = cartableOnly
       ? new Set()
       : await supplyActionRequestIdsForUser(userId, rows.map((row) => row.id));
+    const canDelete = await canDeleteFinancialRecords(userId);
     const visibleRows = rows.filter((row) => {
       const canAct = canActOnSupplyStep({ row, userId, userCtx, mainAdmin });
       const currentStep = getCurrentStep(row.historyJson);
@@ -835,7 +837,7 @@ export async function GET(req) {
         ["approved", "rejected"].includes(row.status);
       if (cartableOnly) return canAct && Number(row.currentAssigneeUserId) === Number(userId);
       return (
-        Number(row.createdById) === Number(userId) ||
+        canDelete || Number(row.createdById) === Number(userId) ||
         hasPerformedWorkflowAction(row, userId) ||
         actionParticipantRequestIds.has(Number(row.id)) ||
         isCompletedCommercialOwner ||
@@ -854,7 +856,7 @@ export async function GET(req) {
         requestType: requestTypesById.get(Number(row.id)),
         project: projectById.get(Number(row.projectId)) || null,
         canAct: canActOnSupplyStep({ row, userId, userCtx, mainAdmin }),
-        canDelete: Number(row.createdById) === Number(userId),
+        canDelete: canDelete || Number(row.createdById) === Number(userId),
       })),
       pagination: { page, pageSize, total, hasMore: page * pageSize < total },
     });
@@ -1019,7 +1021,7 @@ export async function POST(req) {
         ...updated,
         requestType,
         canAct: canActOnSupplyStep({ row: updated, userId, userCtx, mainAdmin }),
-        canDelete: Number(updated.createdById) === Number(userId),
+        canDelete: await canDeleteFinancialRecords(userId) || Number(updated.createdById) === Number(userId),
       }) });
     }
 
@@ -1252,20 +1254,14 @@ export async function DELETE(req) {
       select: { id: true, createdById: true, historyJson: true },
     });
     if (!row) return json({ error: "not_found" }, 404);
-    if (Number(row.createdById) !== Number(userId)) return json({ error: "forbidden" }, 403);
-
-    const { mainAdmin } = await userContext(userId);
-    const workflowHistory = Array.isArray(row.historyJson) ? row.historyJson : [];
-    const hasWorkflowAction = workflowHistory.some((entry) => ["approved", "returned", "rejected"].includes(entry?.type));
-    const actionRows = await prisma.$queryRawUnsafe(
-      `SELECT 1 FROM "supply_action_entries" WHERE "request_id" = $1 LIMIT 1`,
-      id,
-    ).catch(() => []);
-    const hasSupplyAction = actionRows.length > 0;
-
-    // Only marandi may delete an own supply request after a workflow or supply
-    // action. Other users retain the existing pre-action deletion behaviour.
-    if ((hasWorkflowAction || hasSupplyAction) && !mainAdmin) return json({ error: "delete_not_allowed" }, 409);
+    const privileged = await canDeleteFinancialRecords(userId);
+    if (!privileged && Number(row.createdById) !== Number(userId)) return json({ error: "forbidden" }, 403);
+    if (!privileged) {
+      const history = Array.isArray(row.historyJson) ? row.historyJson : [];
+      const hasWorkflowAction = history.some((entry) => ["approved", "returned", "rejected"].includes(entry?.type));
+      const actionRows = await prisma.$queryRawUnsafe(`SELECT 1 FROM "supply_action_entries" WHERE "request_id" = $1 LIMIT 1`, id).catch(() => []);
+      if (hasWorkflowAction || actionRows.length) return json({ error: "delete_not_allowed" }, 409);
+    }
 
     await prisma.$transaction(async (tx) => {
       await tx.$executeRawUnsafe(`DELETE FROM "supply_action_entries" WHERE "request_id" = $1`, id);
