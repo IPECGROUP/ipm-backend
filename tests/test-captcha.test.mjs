@@ -7,9 +7,9 @@ const env = { ARCAPTCHA_SITE_KEY: "external-site", ARCAPTCHA_SECRET_KEY: "extern
 test("each allowed host uses its own pair", async () => {
   for (const [host, prefix] of [["ips.ipecgroup.net", "external"], ["ips.ipec.com:443", "internal"]]) {
     let calls = 0;
-    const result = await verifyTestCaptcha(host, "valid", { env, verifyFetch: async (url, options) => {
+    const result = await verifyTestCaptcha(host, `${prefix}-valid`, { env, verifyFetch: async (url, options) => {
       calls++;
-      assert.deepEqual(JSON.parse(options.body), { site_key: `${prefix}-site`, secret_key: `${prefix}-secret`, challenge_id: "valid" });
+      assert.deepEqual(JSON.parse(options.body), { site_key: `${prefix}-site`, secret_key: `${prefix}-secret`, challenge_id: `${prefix}-valid` });
       return { ok: true, json: async () => ({ success: true }) };
     } });
     assert.deepEqual(result, { ok: true });
@@ -38,4 +38,32 @@ test("verification failure, malformed response and network failure never pass", 
     const result = await verifyTestCaptcha("ips.ipec.com", "invalid", { env, verifyFetch });
     assert.equal(result.ok, false);
   }
+});
+
+test("a verified challenge cannot be reused", async () => {
+  const challengeCache = new Map();
+  let calls = 0;
+  const verifyFetch = async () => {
+    calls++;
+    return { ok: true, json: async () => ({ success: true }) };
+  };
+  assert.deepEqual(await verifyTestCaptcha("ips.ipec.com", "once", { env, verifyFetch, challengeCache }), { ok: true });
+  assert.equal((await verifyTestCaptcha("ips.ipec.com", "once", { env, verifyFetch, challengeCache })).error, "captcha_invalid");
+  assert.equal(calls, 1);
+});
+
+test("concurrent submissions reserve the challenge before verification", async () => {
+  const challengeCache = new Map();
+  let finish;
+  let calls = 0;
+  const verifyFetch = () => {
+    calls++;
+    return new Promise((resolve) => { finish = () => resolve({ ok: true, json: async () => ({ success: true }) }); });
+  };
+  const first = verifyTestCaptcha("ips.ipec.com", "concurrent", { env, verifyFetch, challengeCache });
+  const second = await verifyTestCaptcha("ips.ipec.com", "concurrent", { env, verifyFetch, challengeCache });
+  assert.equal(second.error, "captcha_invalid");
+  finish();
+  assert.deepEqual(await first, { ok: true });
+  assert.equal(calls, 1);
 });
