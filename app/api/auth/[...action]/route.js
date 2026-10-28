@@ -4,6 +4,7 @@ export const dynamic = "force-dynamic";
 import { prisma } from "../../../../lib/prisma";
 import { cookies } from "next/headers";
 import crypto from "crypto";
+import { verifyTestCaptcha } from "../../../../lib/testCaptcha.mjs";
 import bcrypt from "bcryptjs";
 import { writeAuditLog } from "../../../../lib/auditLog";
 import { logSessionEnd, logSessionStart } from "../../../../lib/sessionActivityLog";
@@ -162,26 +163,8 @@ async function handleTestLogin(request) {
   if (attempts.length >= IP_LOGIN_MAX_ATTEMPTS) return json({ error: "too_many_login_attempts" }, 429);
   attempts.push(Date.now());
   testLoginAttempts.set(ip, attempts);
-  const siteKey = process.env.ARCAPTCHA_SITE_KEY;
-  const secretKey = process.env.ARCAPTCHA_SECRET_KEY;
-  if (!siteKey || !secretKey) return json({ error: "captcha_unavailable" }, 503);
-  if (typeof body.captchaToken !== "string" || !body.captchaToken || body.captchaToken.length > 4096) {
-    return json({ error: "captcha_invalid" }, 400);
-  }
-  try {
-    const response = await fetch("https://api.arcaptcha.ir/arcaptcha/api/verify", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ site_key: siteKey, secret_key: secretKey, challenge_id: body.captchaToken }),
-      signal: AbortSignal.timeout(10000),
-      cache: "no-store",
-    });
-    if (!response.ok) return json({ error: "captcha_unavailable" }, 503);
-    const result = await response.json();
-    if (result.success !== true) return json({ error: "captcha_invalid" }, 400);
-  } catch {
-    return json({ error: "captcha_unavailable" }, 503);
-  }
+  const captcha = await verifyTestCaptcha(request.headers.get("host"), body.captchaToken);
+  if (!captcha.ok) return json({ error: captcha.error }, captcha.status);
 
   if (body.username !== "test" || body.password !== "test") return json({ error: "invalid_credentials" }, 401);
   return json({ ok: true });

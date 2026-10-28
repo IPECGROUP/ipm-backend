@@ -1,0 +1,7 @@
+# Overlay for ~/ibpm-stack/docker-compose.yml; no services or volumes replaced.
+services:
+  frontend:
+    build:
+      args:
+        VITE_ARCAPTCHA_SITE_KEY: ${VITE_ARCAPTCHA_SITE_KEY:?Set the existing external public site key for the Vite build}
+        VITE_ARCAPTCHA_SITE_KEY_INTERNAL: ${VITE_ARCAPTCHA_SITE_KEY_INTERNAL:?Set the internal public site key for the Vite build}
