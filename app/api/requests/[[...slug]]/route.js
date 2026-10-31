@@ -209,7 +209,8 @@ async function getProjectLiquidityRemaining(projectId, client = prisma) {
 
 async function updateApprovalWithLiquidityCheck(row, data) {
   return prisma.$transaction(async (tx) => {
-    await lockProjectLiquidity(tx, row.projectId);
+    const { planningEdit, ...approvalData } = data;
+    await lockProjectLiquidities(tx, [row.projectId, planningEdit?.projectId].filter((projectId) => Number(projectId) > 0));
     const current = await tx.paymentRequest.findUnique({ where: { id: row.id } });
     if (!current || current.status !== row.status || JSON.stringify(current.historyJson) !== JSON.stringify(row.historyJson)) {
       return { error: "request_changed" };
@@ -218,13 +219,35 @@ async function updateApprovalWithLiquidityCheck(row, data) {
       ? current.historyJson.find((entry) => entry?.type === "created")
       : null;
     const requestedMinorUnits = parseRequestedAmount(created?.rialAmount ?? current.amount, true)?.minorUnits ?? 0n;
-    const liquidityRemaining = await getProjectLiquidityRemaining(current.projectId, tx);
+    const nextProjectId = planningEdit?.projectId ?? current.projectId;
+    if (planningEdit) {
+      const project = await tx.project.findFirst({ where: { id: nextProjectId, isActive: true }, select: { code: true } });
+      const projectCode = normalizeDigits(String(project?.code || "").trim());
+      if (!/^\d{3}$/.test(projectCode)) return { error: "active_project_not_found" };
+      const budgets = await tx.costBreakdownItem.findMany({ where: { projectId: nextProjectId }, select: { budgetCode: true } });
+      if (!budgets.some((budget) => {
+        const code = normalizeDigits(String(budget.budgetCode || "").trim()).toUpperCase()
+          .replace(/[^\d.-]/g, "-").replace(/[.-]+/g, "-").replace(/^-|-$/g, "");
+        return code && (planningEdit.budgetCode === code || planningEdit.budgetCode === `${projectCode}-${code}`);
+      })) return { error: "budget_code_not_found" };
+      approvalData.projectId = nextProjectId;
+      approvalData.budgetCode = planningEdit.budgetCode;
+      if (nextProjectId !== Number(current.projectId)) {
+        const serialParts = normalizeDigits(String(current.serial || "")).match(/^(\d{2})\/(?:\d{3}\/)?(\d{4,})$/);
+        if (!serialParts) return { error: "invalid_serial" };
+        approvalData.serial = `${serialParts[1]}/${projectCode}/${serialParts[2]}`;
+        const duplicate = await tx.paymentRequest.findFirst({ where: { serial: approvalData.serial, id: { not: current.id } }, select: { id: true } });
+        if (duplicate) return { error: "serial_conflict" };
+      }
+    }
+    const liquidityRemaining = await getProjectLiquidityRemaining(nextProjectId, tx);
     const startsCommitment = !isProjectCommitment(current)
-      && isProjectCommitment({ ...current, status: data.status, historyJson: data.historyJson });
-    if ((startsCommitment && requestedMinorUnits > liquidityRemaining) || (!startsCommitment && liquidityRemaining < 0n)) {
+       && isProjectCommitment({ ...current, status: approvalData.status, historyJson: approvalData.historyJson });
+    const movesCommitment = nextProjectId !== Number(current.projectId) && isProjectCommitment(current);
+    if (((startsCommitment || movesCommitment) && requestedMinorUnits > liquidityRemaining) || (!startsCommitment && !movesCommitment && liquidityRemaining < 0n)) {
       return { error: "amount_exceeds_project_liquidity", liquidityRemaining: formatMinorUnits(liquidityRemaining) };
     }
-    return { updated: await tx.paymentRequest.update({ where: { id: row.id }, data }) };
+    return { updated: await tx.paymentRequest.update({ where: { id: row.id }, data: approvalData }) };
   }, { maxWait: 5000, timeout: 15000 });
 }
 
@@ -1154,7 +1177,9 @@ export async function GET(req, ctx) {
 
     const userNamesById = await userNameMapForRows([row]);
     const relatedLettersByRequest = await relatedLettersForRows([row]);
-    return json({ item: { ...normalizeOut(row, userNamesById), relatedLetters: relatedLettersByRequest.get(String(row.id)) || [], canAct, canEdit: uctx.isSuperAdmin || row.createdById === userId, canDelete: await canDeleteFinancialRecords(userId) || ((uctx.isSuperAdmin || row.createdById === userId) && !["approved", "rejected", "canceled", "cancelled"].includes(row.status)) } });
+    return json({ item: { ...normalizeOut(row, userNamesById), relatedLetters: relatedLettersByRequest.get(String(row.id)) || [], canAct,
+      canEditPlanning: canAct && hasWorkflowUnitForRole({ roleKey: ROLE_KEYS.PROJECT_CONTROL, userUnitNames: uctx.userUnitNames, roleUnitNames: uctx.roleUnitNames }),
+      canEdit: uctx.isSuperAdmin || row.createdById === userId, canDelete: await canDeleteFinancialRecords(userId) || ((uctx.isSuperAdmin || row.createdById === userId) && !["approved", "rejected", "canceled", "cancelled"].includes(row.status)) } });
   }
 
   // GET /api/requests (list)
@@ -1245,6 +1270,7 @@ export async function GET(req, ctx) {
       ...normalizeOut(x.row, userNamesById),
       relatedLetters: relatedLettersByRequest.get(String(x.row.id)) || [],
       canAct: x.canAct,
+       canEditPlanning: x.canAct && hasWorkflowUnitForRole({ roleKey: ROLE_KEYS.PROJECT_CONTROL, userUnitNames: uctx.userUnitNames, roleUnitNames: uctx.roleUnitNames }),
       canEdit: uctx.isSuperAdmin || x.isMine,
       canDelete: canDelete || ((uctx.isSuperAdmin || x.isMine) && !["approved", "rejected", "canceled", "cancelled"].includes(x.row.status)),
     })),
@@ -1298,6 +1324,18 @@ export async function POST(req, ctx) {
       isFinanceAppointmentMember: uctx.isFinanceAppointmentMember,
     })) {
       return json({ error: "forbidden" }, 403);
+    }
+
+    const hasPlanningEdit = body?.projectId !== undefined || body?.budgetCode !== undefined;
+    let planningEdit = null;
+    if (hasPlanningEdit) {
+      const planningUsers = await findWorkflowUsersForRole(ROLE_KEYS.PROJECT_CONTROL);
+      if (nextStatus !== "approved" || step.roleKey !== ROLE_KEYS.PROJECT_CONTROL ||
+        !planningUsers.some((member) => Number(member.id) === userId)) return json({ error: "forbidden" }, 403);
+      const projectId = Number(body.projectId);
+      const budgetCode = String(body.budgetCode || "").trim();
+      if (!Number.isSafeInteger(projectId) || projectId <= 0 || !budgetCode || budgetCode.length > 80) return json({ error: "invalid_input" }, 400);
+      planningEdit = { projectId, budgetCode };
     }
 
     if (nextStatus === "approved") {
@@ -1360,6 +1398,7 @@ export async function POST(req, ctx) {
           status: "approved",
           currentAssigneeUserId: null,
           historyJson: history,
+          planningEdit,
           cashAmount: finalCashAmount?.legacyWholeAmount ?? row.cashAmount,
           creditAmount: finalCreditAmount?.legacyWholeAmount ?? row.creditAmount,
         });
@@ -1392,6 +1431,7 @@ export async function POST(req, ctx) {
         status: "pending",
         currentAssigneeUserId: nextAssignee ? Number(nextAssignee.id) : null,
         historyJson: history,
+        planningEdit,
       });
       if (approval.error) return json({ error: approval.error, ...(approval.liquidityRemaining != null ? { liquidityRemaining: approval.liquidityRemaining } : {}) }, approval.error === "request_changed" ? 409 : 400);
       return json({ ok: true, item: normalizeOut(approval.updated) });
