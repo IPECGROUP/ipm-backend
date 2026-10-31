@@ -6,7 +6,6 @@ import { prisma } from "../../../../lib/prisma";
 import { validateUpload } from "../../../../lib/uploadSecurity";
 
 export const runtime = "nodejs";
-const allowedExtensions = new Set([".pdf", ".doc", ".docx", ".rtf", ".xls", ".xlsx", ".xlsm", ".csv"]);
 const json = (data, status = 200) => NextResponse.json(data, { status });
 
 async function isAuthenticated(request) {
@@ -25,7 +24,7 @@ export async function POST(request) {
     const file = (await request.formData()).get("file");
     if (!file || typeof file.arrayBuffer !== "function") return json({ error: "no_file" }, 400);
     const buffer = Buffer.from(await file.arrayBuffer());
-    const checked = validateUpload({ name: file.name, size: Number(file.size || 0), buffer });
+    const checked = validateUpload({ name: file.name, size: Number(file.size || 0), buffer, profile: "training_resources" });
     if (!checked.ok) return json({ error: checked.error }, 415);
     const { originalName, extension } = checked;
     const storedName = `${crypto.randomUUID()}${extension}`;

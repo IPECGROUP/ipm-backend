@@ -1,3 +1,4 @@
+import { workflowColleagueIds, colleagueHandledWorkflow } from "../../../../lib/workflowUnitVisibility";
 import { canDeleteFinancialRecords } from "../../../../lib/deleteAccess";
 // app/api/requests/[[...slug]]/route.js
 import { prisma } from "../../../../lib/prisma";
@@ -682,7 +683,7 @@ function legacyHistoryMentionsUser(entry, userId, knownNames) {
   return scan(entry);
 }
 
-function wasInvolvedInRequest(row, userId, { userUnitNames = [], roleUnitNames = [], isFinanceAppointmentMember = false, actorName = "", userName = "" } = {}) {
+function wasInvolvedInRequest(row, userId, { userUnitNames = [], roleUnitNames = [], isFinanceAppointmentMember = false, actorName = "", userName = "", colleagueIds = new Set() } = {}) {
   const targetId = Number(userId);
   if (!Number.isFinite(targetId) || !row) return false;
   if (Number(row.createdById) === targetId || Number(row.currentAssigneeUserId) === targetId) return true;
@@ -738,8 +739,11 @@ function wasInvolvedInRequest(row, userId, { userUnitNames = [], roleUnitNames =
   // visibility accidentally.
   if (history.some((entry) => legacyHistoryMentionsUser(entry, targetId, knownNames))) return true;
 
-  // Shared-unit recipients remain involved after the request advances.
-  return history.some((entry) => entry?.assignedToUnit === ROLE_KEYS.ACCOUNTING) && isFinanceAppointmentMember;
+  if (colleagueHandledWorkflow(history, colleagueIds)) return true;
+  // Unit queues remain visible after their step has advanced.
+  return history.some((entry) => entry?.type === "step_set" && isSharedUnitRole(entry.assignedToUnit) &&
+    (entry.assignedToUnit === ROLE_KEYS.ACCOUNTING ? isFinanceAppointmentMember :
+      hasWorkflowUnitForRole({ roleKey: entry.assignedToUnit, userUnitNames, roleUnitNames })));
 }
 
 function canRejectAtStep(roleKey) {
@@ -1029,6 +1033,7 @@ async function getUserContext(req, userId) {
     userUnitNames,
     roleUnitNames,
     isFinanceAppointmentMember,
+    colleagueIds: await workflowColleagueIds(prisma, userId),
     roleNames,
     roleKeys: detectUserRoleKeys(roleNames),
   };

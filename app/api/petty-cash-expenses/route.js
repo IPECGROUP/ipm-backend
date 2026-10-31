@@ -1,3 +1,4 @@
+import { workflowColleagueIds } from "../../../lib/workflowUnitVisibility";
 import { canDeleteFinancialRecords } from "../../../lib/deleteAccess";
 import { prisma } from "../../../lib/prisma";
 import { isSessionExpired } from "../../../lib/security";
@@ -273,6 +274,7 @@ function canReviewExpense(expense, userId, roster) {
 
 async function expenseReportsFor(userId, roster, inbox = false) {
   const canDelete = await canDeleteFinancialRecords(userId);
+  const colleagueIds = Array.from(await workflowColleagueIds(prisma, userId));
   const reports = await prisma.$queryRawUnsafe(`
     SELECT r.id,r.report_name AS "reportName",r.report_number AS "reportNumber",r.document_type AS "documentType",r.project_id AS "projectId",r.created_at AS "createdAt",
       r.created_by_id AS "createdById",r.initial_stage AS "initialStage",r.draft_payload AS "draftPayload",r.workflow_version AS version,r.review_history AS "historyJson",r.review_notes AS "reviewNotes",r.updated_at AS "updatedAt",
@@ -285,13 +287,13 @@ async function expenseReportsFor(userId, roster, inbox = false) {
          OR e.project_manager_id=$1
          OR (e.stage='finance' AND $4::boolean) OR (e.stage='management' AND $5::boolean)))
       OR EXISTS (SELECT 1 FROM jsonb_array_elements(r.review_history) h WHERE
-        (h->>'userId')::int=$1 OR (h->'assignedToUserIds') @> jsonb_build_array($1::int)
+        (h->>'userId')::int=$1 OR (h->>'stage' = 'project_manager' AND h->>'userId' = ANY($7::text[])) OR (h->'assignedToUserIds') @> jsonb_build_array($1::int)
         OR ($2::boolean AND (h->>'stage'='planning' OR (h->'changes') @> '[{"toStage":"planning"}]'::jsonb))
         OR ($4::boolean AND (h->>'stage'='finance' OR (h->'changes') @> '[{"toStage":"finance"}]'::jsonb))
          OR ($5::boolean AND (h->>'stage'='management' OR (h->'changes') @> '[{"toStage":"management"}]'::jsonb))))
        AND (r.initial_stage<>'draft' OR r.created_by_id=$1)
     ORDER BY r.created_at DESC,r.id DESC
-  `, userId, roster.planning.some((u) => u.id === userId), roster.project_manager.some((u) => u.id === userId), roster.finance.some((u) => u.id === userId), roster.management.some((u) => u.id === userId), canDelete);
+  `, userId, roster.planning.some((u) => u.id === userId), roster.project_manager.some((u) => u.id === userId), roster.finance.some((u) => u.id === userId), roster.management.some((u) => u.id === userId), canDelete, colleagueIds.map(String));
   // Read personal drafts explicitly so the main report list does not depend on
   // workflow membership or notification history to find them.
   const drafts = inbox ? [] : await prisma.$queryRawUnsafe(`
@@ -325,7 +327,7 @@ async function expenseReportsFor(userId, roster, inbox = false) {
     const canAct = items.some((e) => e.canAct);
     const history = Array.isArray(report.historyJson) ? report.historyJson : [];
     const wasSentToMe = items.some((e) => Number(e.projectManagerId) === userId)
-      || history.some((entry) => Number(entry.userId) === userId || (entry.assignedToUserIds || []).some((id) => Number(id) === userId)
+      || history.some((entry) => Number(entry.userId) === userId || (entry.stage === "project_manager" && colleagueIds.includes(Number(entry.userId))) || (entry.assignedToUserIds || []).some((id) => Number(id) === userId)
         || (roster.planning.some((u) => u.id === userId) && (entry.stage === "planning" || entry.changes?.some((change) => change.toStage === "planning")))
         || (roster.finance.some((u) => u.id === userId) && (entry.stage === "finance" || entry.changes?.some((change) => change.toStage === "finance")))
         || (roster.management.some((u) => u.id === userId) && (entry.stage === "management" || entry.changes?.some((change) => change.toStage === "management"))));

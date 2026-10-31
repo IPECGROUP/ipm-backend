@@ -1,3 +1,4 @@
+import { workflowColleagueIds } from "../../../lib/workflowUnitVisibility";
 import { canDeleteFinancialRecords } from "../../../lib/deleteAccess";
 import { prisma } from "../../../lib/prisma";
 import { isSessionExpired } from "../../../lib/security";
@@ -152,6 +153,7 @@ export async function GET(r) {
       return json(await readPettyCashBalance(balanceBeneficiaryId));
     }
     const inbox = url.searchParams.get("inbox") === "1";
+    const colleagueIds = canViewAllRequests ? [] : Array.from(await workflowColleagueIds(prisma, uid));
     const financeMember = dashboardReport ? false : await isFinanceUser(uid);
     // Finance is a shared queue.  Do not let an old individual assignee hide
     // the request from the other members of the finance unit.
@@ -164,10 +166,13 @@ export async function GET(r) {
     // even when another user created the request and they are not part of its
     // approval workflow.  This grants visibility only; `canAct` below keeps
     // workflow actions restricted to the current assignee/unit.
+    const colleagueHistoryWhere = ` OR EXISTS (SELECT 1 FROM jsonb_array_elements(COALESCE(t.workflow_history,'[]'::jsonb)) h
+      WHERE h->>'type' IN ('approved','returned','rejected','approve','return','reject')
+        AND COALESCE(h->>'stage','') <> 'requester' AND h->>'byUserId' = ANY($2::text[]))`;
     const beneficiaryWhere = " OR COALESCE(t.beneficiary_user_id,t.created_by_id)=$1";
     const items = await requests(canViewAllRequests ? "" : inbox
-      ? `WHERE t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${beneficiaryWhere}${sharedFinanceWhere}${sharedManagementWhere}${historicalFinanceWhere}${historicalManagementWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND s.current_assignee_user_id=$1)`
-      : `WHERE t.created_by_id=$1 OR t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${beneficiaryWhere}${sharedFinanceWhere}${sharedManagementWhere}${historicalFinanceWhere}${historicalManagementWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND (s.current_assignee_user_id=$1 OR s.created_by_id=$1))`, canViewAllRequests ? [] : [uid]);
+      ? `WHERE t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${beneficiaryWhere}${sharedFinanceWhere}${sharedManagementWhere}${historicalFinanceWhere}${historicalManagementWhere}${colleagueHistoryWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND s.current_assignee_user_id=$1)`
+      : `WHERE t.created_by_id=$1 OR t.current_assignee_user_id=$1 OR t.project_manager_id=$1 OR t.finance_user_id=$1${beneficiaryWhere}${sharedFinanceWhere}${sharedManagementWhere}${historicalFinanceWhere}${historicalManagementWhere}${colleagueHistoryWhere} OR COALESCE(t.workflow_history,'[]'::jsonb) @> jsonb_build_array(jsonb_build_object('byUserId', $1)) OR EXISTS (SELECT 1 FROM tenkhah_settlements s WHERE s.tenkhah_request_id=t.id AND (s.current_assignee_user_id=$1 OR s.created_by_id=$1))`, canViewAllRequests ? [] : [uid, colleagueIds.map(String)]);
     // Workflow entries retain the actor id. Resolve it here so the client can
     // show the same person/date/note audit trail as payment requests.
     const workflowActorIds = [...new Set(items.flatMap((item) => (Array.isArray(item.workflowHistory) ? item.workflowHistory : [])

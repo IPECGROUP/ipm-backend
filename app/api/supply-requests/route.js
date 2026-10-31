@@ -1,3 +1,4 @@
+import { workflowColleagueIds, colleagueHandledWorkflow } from "../../../lib/workflowUnitVisibility";
 import { canDeleteFinancialRecords } from "../../../lib/deleteAccess";
 import { NextResponse } from "next/server";
 import { prisma } from "../../../lib/prisma";
@@ -311,13 +312,13 @@ function hasPerformedWorkflowAction(row, userId) {
   );
 }
 
-async function supplyActionRequestIdsForUser(userId, requestIds) {
+async function supplyActionRequestIdsForUser(userIds, requestIds) {
   const ids = Array.from(new Set((requestIds || []).map(Number).filter((id) => id > 0)));
   if (!ids.length) return new Set();
   try {
     const rows = await prisma.$queryRawUnsafe(
-      `SELECT DISTINCT "request_id" FROM "supply_action_entries" WHERE "created_by"=$1 AND "request_id" = ANY($2::int[])`,
-      Number(userId),
+      `SELECT DISTINCT "request_id" FROM "supply_action_entries" WHERE "created_by" = ANY($1::int[]) AND "request_id" = ANY($2::int[])`,
+      Array.from(userIds),
       ids
     );
     return new Set((rows || []).map((row) => Number(row.request_id)).filter(Boolean));
@@ -824,9 +825,11 @@ export async function GET(req) {
 
     const userCtx = await userRoleAndUnitContext(userId);
     const cartableOnly = url.searchParams.get("cartable") === "1";
+    const colleagueIds = await workflowColleagueIds(prisma, userId);
+    colleagueIds.add(Number(userId));
     const actionParticipantRequestIds = cartableOnly
       ? new Set()
-      : await supplyActionRequestIdsForUser(userId, rows.map((row) => row.id));
+      : await supplyActionRequestIdsForUser(colleagueIds, rows.map((row) => row.id));
     const canDelete = await canDeleteFinancialRecords(userId);
     const visibleRows = rows.filter((row) => {
       const canAct = canActOnSupplyStep({ row, userId, userCtx, mainAdmin });
@@ -838,7 +841,7 @@ export async function GET(req) {
       if (cartableOnly) return canAct && Number(row.currentAssigneeUserId) === Number(userId);
       return (
         canDelete || Number(row.createdById) === Number(userId) ||
-        hasPerformedWorkflowAction(row, userId) ||
+        hasPerformedWorkflowAction(row, userId) || colleagueHandledWorkflow(row.historyJson, colleagueIds) ||
         actionParticipantRequestIds.has(Number(row.id)) ||
         isCompletedCommercialOwner ||
         (canAct && Number(row.currentAssigneeUserId) === Number(userId))
