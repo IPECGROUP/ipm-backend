@@ -6,6 +6,8 @@ import initial from "./initial.json";
 
 export const dynamic = "force-dynamic";
 
+const TYPES = { engineering: "طراحی و مهندسی", procurement: "تامین تجهیزات", execution: "نصب و اجرا" };
+
 async function authorize(request, allowProjectAccess = false) {
   const user = await getAuthenticatedUser(request);
   if (!user) return NextResponse.json({ error: "unauthorized" }, { status: 401 });
@@ -20,15 +22,23 @@ async function ensureTemplate() {
   )`;
   const initialRows = JSON.stringify(initial.rows);
   await prisma.$executeRaw`INSERT INTO sample_cost_structure (id, rows) VALUES (1, ${initialRows}::jsonb) ON CONFLICT (id) DO NOTHING`;
+  await prisma.$executeRaw`CREATE TABLE IF NOT EXISTS sample_cost_structure_types (
+    type TEXT PRIMARY KEY,
+    rows JSONB NOT NULL DEFAULT '[]'::jsonb
+  )`;
+  await prisma.$executeRaw`INSERT INTO sample_cost_structure_types (type, rows) SELECT 'engineering', rows FROM sample_cost_structure WHERE id = 1 ON CONFLICT (type) DO NOTHING`;
+  await prisma.$executeRaw`INSERT INTO sample_cost_structure_types (type) VALUES ('procurement'), ('execution') ON CONFLICT (type) DO NOTHING`;
 }
 
 export async function GET(request) {
   const denied = await authorize(request, true);
   if (denied) return denied;
+  const type = new URL(request.url).searchParams.get("type") || "engineering";
+  if (!Object.hasOwn(TYPES, type)) return NextResponse.json({ error: "invalid_type" }, { status: 400 });
   try {
     await ensureTemplate();
-    const result = await prisma.$queryRaw`SELECT rows FROM sample_cost_structure WHERE id = 1`;
-    return NextResponse.json({ project: initial.project, rows: result[0].rows }, { headers: { "Cache-Control": "no-store" } });
+    const result = await prisma.$queryRaw`SELECT rows FROM sample_cost_structure_types WHERE type = ${type}`;
+    return NextResponse.json({ project: TYPES[type], type, rows: result[0].rows }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
     console.error("sample_cost_structure_get_failed", error);
     return NextResponse.json({ error: "load_failed" }, { status: 500 });
@@ -39,6 +49,8 @@ export async function POST(request) {
   const denied = await authorize(request);
   if (denied) return denied;
   const body = await request.json().catch(() => null);
+  const type = body?.type || "engineering";
+  if (!Object.hasOwn(TYPES, type)) return NextResponse.json({ error: "invalid_type" }, { status: 400 });
   const code = String(body?.budgetCode || "").trim();
   const name = String(body?.budgetName || "").trim();
   if (!/^159(?:-\d+)+$/.test(code) || code.length > 80 || !name || name.length > 255) {
@@ -48,8 +60,8 @@ export async function POST(request) {
     await ensureTemplate();
     const item = { budgetCode: code, budgetName: name, baseBudget: 0 };
     const json = JSON.stringify([item]);
-    const result = await prisma.$queryRaw`UPDATE sample_cost_structure SET rows = rows || ${json}::jsonb
-      WHERE id = 1 AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(rows) AS item WHERE item->>'budgetCode' = ${code})
+    const result = await prisma.$queryRaw`UPDATE sample_cost_structure_types SET rows = rows || ${json}::jsonb
+      WHERE type = ${type} AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(rows) AS item WHERE item->>'budgetCode' = ${code})
       RETURNING rows`;
     if (!result.length) return NextResponse.json({ error: "duplicate_code" }, { status: 409 });
     return NextResponse.json({ item }, { status: 201 });
