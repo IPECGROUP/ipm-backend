@@ -799,13 +799,41 @@ export async function PATCH(request) {
         const actionable = expenses.filter((expense) => canReviewExpense(expense, userId, roster));
         if (!expenses.length || actionable.length !== expenses.length) throw new RouteError("not_allowed", 403);
         if (expenses.some((expense) => expense.stage !== expenses[0].stage)) throw new RouteError("workflow_changed", 409);
+        const hasPlanningEdits = body.projectId !== undefined || body.budgetCodes !== undefined;
+        if (hasPlanningEdits && (decision !== "approve" || expenses[0].stage !== "planning" ||
+          !roster.planning.some((member) => member.id === userId))) throw new RouteError("not_allowed", 403);
+        let nextProjectId = Number(report.project_id);
+        let nextReportNumber = report.report_number;
+        let nextBudgetCodes = null;
+        if (hasPlanningEdits) {
+          nextProjectId = Number(body.projectId);
+          const suppliedCodes = body.budgetCodes;
+          if (!Number.isSafeInteger(nextProjectId) || nextProjectId <= 0 || !suppliedCodes ||
+            typeof suppliedCodes !== "object" || Array.isArray(suppliedCodes) ||
+            Object.keys(suppliedCodes).length !== expenses.length ||
+            expenses.some((expense) => !Object.hasOwn(suppliedCodes, String(expense.id)))) throw new RouteError("invalid_input", 400);
+          const project = await tx.project.findFirst({ where: { id: nextProjectId, isActive: true }, select: { code: true } });
+          const projectCode = normalizeDigits(String(project?.code || "").trim());
+          if (!/^\d{3}$/.test(projectCode)) throw new RouteError("active_project_not_found", 400);
+          nextBudgetCodes = expenses.map((expense) => String(suppliedCodes[expense.id] || "").trim());
+          if (nextBudgetCodes.some((code) => !code || code.length > 80)) throw new RouteError("budget_code_not_found", 400);
+          const budgets = await tx.costBreakdownItem.findMany({ where: { projectId: nextProjectId, budgetCode: { in: [...new Set(nextBudgetCodes)] } }, select: { budgetCode: true } });
+          if (nextBudgetCodes.some((code) => !budgets.some((budget) => budget.budgetCode === code))) throw new RouteError("budget_code_not_found", 400);
+          if (nextProjectId !== Number(report.project_id)) {
+            const numberParts = normalizeDigits(String(report.report_number || "")).match(/^(\d{2})\/[^/]+\/(\d{4,})$/);
+            if (!numberParts) throw new RouteError("invalid_report_number", 409);
+            nextReportNumber = `${numberParts[1]}/${projectCode}/${numberParts[2]}`;
+            const collision = await tx.$queryRawUnsafe("SELECT id FROM petty_cash_expense_reports WHERE report_number=$1 AND id<>$2 LIMIT 1", nextReportNumber, reportId);
+            if (collision.length) throw new RouteError("report_number_conflict", 409);
+          }
+        }
         const choices = expenses.map((expense) => ({ expense, decision }));
         const projectManagerId = Number(body.projectManagerId) || null;
         if (choices.some((choice) => choice.expense.stage === "planning" && choice.decision === "approve") &&
           !roster.project_manager.some((user) => user.id === projectManagerId)) throw new RouteError("invalid_project_manager", 400);
         if (choices.some((choice) => choice.expense.stage === "project_manager" && choice.decision === "approve") && !roster.finance.length) throw new RouteError("workflow_recipients_missing", 400);
         const changes = [];
-        for (const choice of choices) {
+        for (const [index, choice] of choices.entries()) {
           const expense = choice.expense;
           const choiceNote = note;
           const returnStage = ["planning", "project_manager", "finance", "management"].includes(expense.stage) ? expense.stage
@@ -826,17 +854,20 @@ export async function PATCH(request) {
               rejected_by_id=CASE WHEN $2='rejected' THEN $5::int ELSE rejected_by_id END,updated_at=CURRENT_TIMESTAMP
             WHERE id=$6
           `, nextStage, status, choiceNote, projectManagerId, userId, Number(expense.id), returnStage);
+          if (hasPlanningEdits) await tx.$executeRawUnsafe(
+            "UPDATE petty_cash_expenses SET project_id=$1,budget_code=$2,updated_at=CURRENT_TIMESTAMP WHERE id=$3",
+            nextProjectId, nextBudgetCodes[index], Number(expense.id));
           changes.push({ id: Number(expense.id), fromStage: expense.stage, toStage: nextStage, decision: choice.decision, note: choiceNote });
         }
         const assignedToUserIds = [...new Set(changes.flatMap((change) => change.toStage === "project_manager"
           ? [projectManagerId] : ["revision", "rejected"].includes(change.toStage)
             ? [Number(report.created_by_id)] : (roster[change.toStage] || []).map((user) => user.id)))];
         await tx.$executeRawUnsafe(`UPDATE petty_cash_expense_reports SET workflow_version=workflow_version+1,
-          review_history=review_history || $1::jsonb,review_notes=$2,updated_at=CURRENT_TIMESTAMP WHERE id=$3`,
+          review_history=review_history || $1::jsonb,review_notes=$2,project_id=$4,report_number=$5,updated_at=CURRENT_TIMESTAMP WHERE id=$3`,
         JSON.stringify([{ userId, action: decision, note,
           reportWide: true, stage: expenses[0].stage,
-          changes, assignedToUserIds, at: new Date().toISOString() }]),
-        note, reportId);
+          changes, assignedToUserIds, ...(hasPlanningEdits ? { projectId: nextProjectId, reportNumber: nextReportNumber } : {}), at: new Date().toISOString() }]),
+        note, reportId, nextProjectId, nextReportNumber);
       });
       return json({ ok: true });
     }
