@@ -33,6 +33,11 @@ async function ensureTemplate() {
     await tx.$executeRaw`CREATE TABLE IF NOT EXISTS sample_cost_structure_migrations (
       name TEXT PRIMARY KEY
     )`;
+    await tx.$executeRaw`CREATE TABLE IF NOT EXISTS sample_cost_structure_templates (
+      id SERIAL PRIMARY KEY,
+      name TEXT NOT NULL UNIQUE,
+      rows JSONB NOT NULL DEFAULT '[]'::jsonb
+    )`;
 
     const migration = await tx.$queryRaw`SELECT name FROM sample_cost_structure_migrations WHERE name = 'engineering_to_execution'`;
     if (migration.length) return;
@@ -52,10 +57,22 @@ async function ensureTemplate() {
 export async function GET(request) {
   const denied = await authorize(request, true);
   if (denied) return denied;
-  const type = new URL(request.url).searchParams.get("type") || "engineering";
-  if (!Object.hasOwn(TYPES, type)) return NextResponse.json({ error: "invalid_type" }, { status: 400 });
+  const params = new URL(request.url).searchParams;
+  const type = params.get("type") || "execution";
+  const templateId = params.get("templateId");
+  if (templateId && (!/^\d+$/.test(templateId) || Number(templateId) < 1)) return NextResponse.json({ error: "invalid_template" }, { status: 400 });
+  if (!templateId && !params.has("list") && !Object.hasOwn(TYPES, type)) return NextResponse.json({ error: "invalid_type" }, { status: 400 });
   try {
     await ensureTemplate();
+    if (params.has("list")) {
+      const templates = await prisma.$queryRaw`SELECT id, name FROM sample_cost_structure_templates ORDER BY id`;
+      return NextResponse.json({ templates: [{ id: "execution", name: TYPES.execution }, ...templates.map((item) => ({ id: String(item.id), name: item.name }))] }, { headers: { "Cache-Control": "no-store" } });
+    }
+    if (templateId) {
+      const result = await prisma.$queryRaw`SELECT name, rows FROM sample_cost_structure_templates WHERE id = ${Number(templateId)}`;
+      if (!result.length) return NextResponse.json({ error: "template_not_found" }, { status: 404 });
+      return NextResponse.json({ project: result[0].name, templateId, rows: result[0].rows }, { headers: { "Cache-Control": "no-store" } });
+    }
     const result = await prisma.$queryRaw`SELECT rows FROM sample_cost_structure_types WHERE type = ${type}`;
     return NextResponse.json({ project: TYPES[type], type, rows: result[0].rows }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) {
@@ -68,8 +85,23 @@ export async function POST(request) {
   const denied = await authorize(request);
   if (denied) return denied;
   const body = await request.json().catch(() => null);
-  const type = body?.type || "engineering";
-  if (!Object.hasOwn(TYPES, type)) return NextResponse.json({ error: "invalid_type" }, { status: 400 });
+  if (body?.action === "create_template") {
+    const templateName = String(body.name || "").trim();
+    if (!templateName || templateName.length > 100 || templateName === TYPES.execution) return NextResponse.json({ error: "invalid_name" }, { status: 400 });
+    try {
+      await ensureTemplate();
+      const created = await prisma.$queryRaw`INSERT INTO sample_cost_structure_templates (name) VALUES (${templateName}) ON CONFLICT (name) DO NOTHING RETURNING id, name`;
+      if (!created.length) return NextResponse.json({ error: "duplicate_name" }, { status: 409 });
+      return NextResponse.json({ template: { id: String(created[0].id), name: created[0].name } }, { status: 201 });
+    } catch (error) {
+      console.error("sample_cost_structure_template_create_failed", error);
+      return NextResponse.json({ error: "save_failed" }, { status: 500 });
+    }
+  }
+  const type = body?.type || "execution";
+  const templateId = body?.templateId;
+  if (templateId && (!/^\d+$/.test(String(templateId)) || Number(templateId) < 1)) return NextResponse.json({ error: "invalid_template" }, { status: 400 });
+  if (!templateId && !Object.hasOwn(TYPES, type)) return NextResponse.json({ error: "invalid_type" }, { status: 400 });
   const code = String(body?.budgetCode || "").trim();
   const name = String(body?.budgetName || "").trim();
   if (!/^159(?:-\d+)+$/.test(code) || code.length > 80 || !name || name.length > 255) {
@@ -79,10 +111,14 @@ export async function POST(request) {
     await ensureTemplate();
     const item = { budgetCode: code, budgetName: name, baseBudget: 0 };
     const json = JSON.stringify([item]);
-    const result = await prisma.$queryRaw`UPDATE sample_cost_structure_types SET rows = rows || ${json}::jsonb
-      WHERE type = ${type} AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(rows) AS item WHERE item->>'budgetCode' = ${code})
-      RETURNING rows`;
-    if (!result.length) return NextResponse.json({ error: "duplicate_code" }, { status: 409 });
+    const result = templateId
+      ? await prisma.$queryRaw`UPDATE sample_cost_structure_templates SET rows = rows || ${json}::jsonb
+          WHERE id = ${Number(templateId)} AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(rows) AS item WHERE item->>'budgetCode' = ${code})
+          RETURNING rows`
+      : await prisma.$queryRaw`UPDATE sample_cost_structure_types SET rows = rows || ${json}::jsonb
+          WHERE type = ${type} AND NOT EXISTS (SELECT 1 FROM jsonb_array_elements(rows) AS item WHERE item->>'budgetCode' = ${code})
+          RETURNING rows`;
+    if (!result.length) return NextResponse.json({ error: templateId ? "duplicate_code_or_template_not_found" : "duplicate_code" }, { status: 409 });
     return NextResponse.json({ item }, { status: 201 });
   } catch (error) {
     console.error("sample_cost_structure_post_failed", error);
