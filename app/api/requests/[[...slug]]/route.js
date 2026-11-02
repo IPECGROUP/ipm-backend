@@ -343,8 +343,10 @@ function normalizeOut(row, userNamesById = null) {
     exchangeRate: createdMeta.exchangeRate ?? null,
     rialAmount: createdMeta.rialAmount ?? bigintToJson(row.amount),
     cashText: finalPayment.cashAmount ?? bigintToJson(row.cashAmount),
+    cashReceipts: Array.isArray(finalPayment.cashReceipts) ? finalPayment.cashReceipts : [],
     cashDate: row.cashDateJalali,
     creditSection: finalPayment.creditAmount ?? bigintToJson(row.creditAmount),
+    creditReceipts: Array.isArray(finalPayment.creditReceipts) ? finalPayment.creditReceipts : [],
     creditPay: row.creditPay,
 
     beneficiaryName: row.beneficiaryName,
@@ -1388,9 +1390,11 @@ export async function POST(req, ctx) {
             cashAmount: finalCashAmount ? formatMinorUnits(finalCashAmount.minorUnits) : null,
             cashCurrencyTypeId: cashIsForeign ? Number(body.cashCurrencyTypeId) : null,
             paymentMethod: String(body?.paymentMethod || ""),
+            cashReceipts: finalCashAmount && Array.isArray(body?.cashReceipts) ? body.cashReceipts : [],
             creditAmount: finalCreditAmount ? formatMinorUnits(finalCreditAmount.minorUnits) : null,
             creditCurrencyTypeId: creditIsForeign ? Number(body.creditCurrencyTypeId) : null,
             creditDescription: String(body?.creditDescription || ""),
+            creditReceipts: finalCreditAmount && Array.isArray(body?.creditReceipts) ? body.creditReceipts : [],
           },
         };
 
