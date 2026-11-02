@@ -56,6 +56,19 @@ function isSupplyRequest(row) {
   return row?.docId === SUPPLY_REQUEST_DOC_ID || row?.docId === TENKHAH_REQUEST_DOC_ID;
 }
 
+function hasWorkflowAction(historyJson) {
+  return Array.isArray(historyJson) && historyJson.some((entry) =>
+    ["approved", "rejected", "returned"].includes(entry?.type));
+}
+
+function canEditBeforeFirstAction(row) {
+  return row?.status === "pending" && !hasWorkflowAction(row.historyJson);
+}
+
+function unchangedRequestWhere(row) {
+  return { id: row.id, status: row.status, historyJson: { equals: row.historyJson } };
+}
+
 function attachmentServerIds(rows = []) {
   const ids = new Set();
   for (const row of rows) {
@@ -247,7 +260,9 @@ async function updateApprovalWithLiquidityCheck(row, data) {
     if (((startsCommitment || movesCommitment) && requestedMinorUnits > liquidityRemaining) || (!startsCommitment && !movesCommitment && liquidityRemaining < 0n)) {
       return { error: "amount_exceeds_project_liquidity", liquidityRemaining: formatMinorUnits(liquidityRemaining) };
     }
-    return { updated: await tx.paymentRequest.update({ where: { id: row.id }, data: approvalData }) };
+    const changed = await tx.paymentRequest.updateMany({ where: unchangedRequestWhere(current), data: approvalData });
+    if (!changed.count) return { error: "request_changed" };
+    return { updated: await tx.paymentRequest.findUnique({ where: { id: row.id } }) };
   }, { maxWait: 5000, timeout: 15000 });
 }
 
@@ -1181,7 +1196,7 @@ export async function GET(req, ctx) {
     const relatedLettersByRequest = await relatedLettersForRows([row]);
     return json({ item: { ...normalizeOut(row, userNamesById), relatedLetters: relatedLettersByRequest.get(String(row.id)) || [], canAct,
       canEditPlanning: canAct && hasWorkflowUnitForRole({ roleKey: ROLE_KEYS.PROJECT_CONTROL, userUnitNames: uctx.userUnitNames, roleUnitNames: uctx.roleUnitNames }),
-      canEdit: uctx.isSuperAdmin || row.createdById === userId, canDelete: await canDeleteFinancialRecords(userId) || ((uctx.isSuperAdmin || row.createdById === userId) && !["approved", "rejected", "canceled", "cancelled"].includes(row.status)) } });
+      canEdit: canEditBeforeFirstAction(row) && (uctx.isSuperAdmin || row.createdById === userId), canDelete: await canDeleteFinancialRecords(userId) || ((uctx.isSuperAdmin || row.createdById === userId) && !["approved", "rejected", "canceled", "cancelled"].includes(row.status)) } });
   }
 
   // GET /api/requests (list)
@@ -1273,7 +1288,7 @@ export async function GET(req, ctx) {
       relatedLetters: relatedLettersByRequest.get(String(x.row.id)) || [],
       canAct: x.canAct,
        canEditPlanning: x.canAct && hasWorkflowUnitForRole({ roleKey: ROLE_KEYS.PROJECT_CONTROL, userUnitNames: uctx.userUnitNames, roleUnitNames: uctx.roleUnitNames }),
-      canEdit: uctx.isSuperAdmin || x.isMine,
+      canEdit: canEditBeforeFirstAction(x.row) && (uctx.isSuperAdmin || x.isMine),
       canDelete: canDelete || ((uctx.isSuperAdmin || x.isMine) && !["approved", "rejected", "canceled", "cancelled"].includes(x.row.status)),
     })),
   });
@@ -1469,7 +1484,9 @@ export async function POST(req, ctx) {
       data = { status: "returned", currentAssigneeUserId: Number(row.createdById), historyJson: history };
     }
 
-    const updated = await prisma.paymentRequest.update({ where: { id }, data });
+    const changed = await prisma.paymentRequest.updateMany({ where: unchangedRequestWhere(row), data });
+    if (!changed.count) return json({ error: "request_changed" }, 409);
+    const updated = await prisma.paymentRequest.findUnique({ where: { id } });
     return json({ ok: true, item: normalizeOut(updated) });
   }
 
@@ -1622,16 +1639,18 @@ export async function PATCH(req, ctx) {
   // فقط سازنده (فعلاً)
   const uctx = await getUserContext(req, userId);
   if (row.createdById !== userId && !uctx.isSuperAdmin) return json({ error: "forbidden" }, 403);
+  if (!canEditBeforeFirstAction(row)) return json({ error: "request_already_processed" }, 409);
 
   const body = (await readJson(req)) || {};
   const data = pickUpdatable(body);
   if (data.docDatesJalali !== undefined) data.docDateJalali = data.docDatesJalali[0] || null;
   if ([SUPPLY_REQUEST_DOC_ID, TENKHAH_REQUEST_DOC_ID].includes(data.docId)) return json({ error: "invalid_doc_type" }, 400);
+  if (data.title !== undefined && !String(data.title).trim()) return json({ error: "title_required" }, 400);
+  if (data.budgetCode !== undefined && !String(data.budgetCode).trim()) return json({ error: "budget_code_required" }, 400);
 
-  // Monetary changes are allowed only while a returned request is back with
-  // its requester. The requested amount also has an exact copy in history.
-  const canEditReturnedAmount = row.status === "returned" && getCurrentStep(row.historyJson)?.roleKey === ROLE_KEYS.REQUESTER;
-  const monetaryFieldsProvided = body?.amount != null || body?.amountStr != null || body?.exchangeRate != null;
+  // The exact requested amount and its Rial conversion live in the created
+  // history entry, so update that entry together with the database amount.
+  const monetaryFieldsProvided = body?.amount != null || body?.amountStr != null || body?.exchangeRate != null || data.currencyTypeId !== undefined;
   delete data.amount;
   delete data.exchangeRate;
   delete data.rialAmount;
@@ -1639,7 +1658,7 @@ export async function PATCH(req, ctx) {
   if (data.creditAmount == null) delete data.creditAmount;
 
   const history = Array.isArray(row.historyJson) ? [...row.historyJson] : [];
-  if (canEditReturnedAmount && monetaryFieldsProvided) {
+  if (monetaryFieldsProvided) {
     const createdIndex = history.findIndex((entry) => entry?.type === "created");
     const previous = createdIndex >= 0 ? history[createdIndex] : {};
     const isForeignCurrency = (data.currencyTypeId === undefined ? row.currencyTypeId : data.currencyTypeId) != null;
@@ -1652,13 +1671,6 @@ export async function PATCH(req, ctx) {
       : requestedAmount.minorUnits;
     const projectId = data.projectId ?? row.projectId;
     if (!projectId) return json({ error: "project_required" }, 400);
-    const previousRialMinorUnits = parseRequestedAmount(previous.rialAmount ?? row.amount, true)?.minorUnits;
-    if (rialAmountMinorUnits !== previousRialMinorUnits || Number(projectId) !== Number(row.projectId)) {
-      const liquidityRemaining = await getProjectLiquidityRemaining(projectId);
-      if (rialAmountMinorUnits > liquidityRemaining) {
-        return json({ error: "amount_exceeds_project_liquidity", liquidityRemaining: formatMinorUnits(liquidityRemaining) }, 400);
-      }
-    }
     data.amount = requestedAmount.legacyWholeAmount;
     if (createdIndex >= 0) {
       history[createdIndex] = {
@@ -1705,29 +1717,26 @@ export async function PATCH(req, ctx) {
     at: new Date().toISOString(),
   });
 
-  const projectChanged = data.projectId !== undefined && Number(data.projectId) !== Number(row.projectId);
-  if (projectChanged && (!Number.isInteger(data.projectId) || data.projectId <= 0)) return json({ error: "project_required" }, 400);
-  if (projectChanged && isProjectCommitment(row)) {
-    const result = await prisma.$transaction(async (tx) => {
-      await lockProjectLiquidities(tx, [row.projectId, data.projectId].filter((projectId) => Number(projectId) > 0));
-      const current = await tx.paymentRequest.findUnique({ where: { id } });
-      if (!current || current.status !== row.status || JSON.stringify(current.historyJson) !== JSON.stringify(row.historyJson)) {
-        return { error: "request_changed" };
-      }
-      const created = Array.isArray(current.historyJson)
-        ? current.historyJson.find((entry) => entry?.type === "created")
-        : null;
-      const amount = parseRequestedAmount(created?.rialAmount ?? current.amount, true)?.minorUnits ?? 0n;
-      const liquidityRemaining = await getProjectLiquidityRemaining(data.projectId, tx);
-      if (amount > liquidityRemaining) return { error: "amount_exceeds_project_liquidity", liquidityRemaining: formatMinorUnits(liquidityRemaining) };
-      return { updated: await tx.paymentRequest.update({ where: { id }, data: { ...data, historyJson: history } }) };
-    }, { maxWait: 5000, timeout: 15000 });
-    if (result.error) return json({ error: result.error, ...(result.liquidityRemaining != null ? { liquidityRemaining: result.liquidityRemaining } : {}) }, result.error === "request_changed" ? 409 : 400);
-    return json({ ok: true, item: normalizeOut(result.updated) });
-  }
-
-  const updated = await prisma.paymentRequest.update({ where: { id }, data: { ...data, historyJson: history } });
-  return json({ ok: true, item: normalizeOut(updated) });
+  const nextProjectId = data.projectId ?? row.projectId;
+  if (!Number.isInteger(nextProjectId) || nextProjectId <= 0) return json({ error: "project_required" }, 400);
+  const result = await prisma.$transaction(async (tx) => {
+    await lockProjectLiquidities(tx, [row.projectId, nextProjectId].filter((projectId) => Number(projectId) > 0));
+    const current = await tx.paymentRequest.findUnique({ where: { id } });
+    if (!current || !canEditBeforeFirstAction(current) || current.status !== row.status ||
+      JSON.stringify(current.historyJson) !== JSON.stringify(row.historyJson)) return { error: "request_changed" };
+    const created = Array.isArray(current.historyJson) ? current.historyJson.find((entry) => entry?.type === "created") : null;
+    const nextRial = history.find((entry) => entry?.type === "created")?.rialAmount ?? created?.rialAmount ?? current.amount;
+    const nextAmount = parseRequestedAmount(nextRial, true)?.minorUnits ?? 0n;
+    const oldAmount = parseRequestedAmount(created?.rialAmount ?? current.amount, true)?.minorUnits ?? 0n;
+    const liquidityRemaining = await getProjectLiquidityRemaining(nextProjectId, tx);
+    const available = nextProjectId === Number(current.projectId) ? liquidityRemaining + oldAmount : liquidityRemaining;
+    if (nextAmount > available) return { error: "amount_exceeds_project_liquidity", liquidityRemaining: formatMinorUnits(available) };
+    const changed = await tx.paymentRequest.updateMany({ where: unchangedRequestWhere(current), data: { ...data, historyJson: history } });
+    if (!changed.count) return { error: "request_changed" };
+    return { updated: await tx.paymentRequest.findUnique({ where: { id } }) };
+  }, { maxWait: 5000, timeout: 15000 });
+  if (result.error) return json({ error: result.error, ...(result.liquidityRemaining != null ? { liquidityRemaining: result.liquidityRemaining } : {}) }, result.error === "request_changed" ? 409 : 400);
+  return json({ ok: true, item: normalizeOut(result.updated) });
 }
 
 export async function DELETE(req, ctx) {
