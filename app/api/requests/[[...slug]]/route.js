@@ -362,6 +362,7 @@ function normalizeOut(row, userNamesById = null) {
     cashReceipts: Array.isArray(finalPayment.cashReceipts) ? finalPayment.cashReceipts : [],
     cashDate: row.cashDateJalali,
     creditSection: finalPayment.creditAmount ?? bigintToJson(row.creditAmount),
+    creditDescription: finalPayment.creditDescription || "",
     creditReceipts: Array.isArray(finalPayment.creditReceipts) ? finalPayment.creditReceipts : [],
     creditPay: row.creditPay,
 
