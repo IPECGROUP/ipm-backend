@@ -16,18 +16,37 @@ async function authorize(request, allowProjectAccess = false) {
 }
 
 async function ensureTemplate() {
-  await prisma.$executeRaw`CREATE TABLE IF NOT EXISTS sample_cost_structure (
-    id INTEGER PRIMARY KEY CHECK (id = 1),
-    rows JSONB NOT NULL
-  )`;
-  const initialRows = JSON.stringify(initial.rows);
-  await prisma.$executeRaw`INSERT INTO sample_cost_structure (id, rows) VALUES (1, ${initialRows}::jsonb) ON CONFLICT (id) DO NOTHING`;
-  await prisma.$executeRaw`CREATE TABLE IF NOT EXISTS sample_cost_structure_types (
-    type TEXT PRIMARY KEY,
-    rows JSONB NOT NULL DEFAULT '[]'::jsonb
-  )`;
-  await prisma.$executeRaw`INSERT INTO sample_cost_structure_types (type, rows) SELECT 'engineering', rows FROM sample_cost_structure WHERE id = 1 ON CONFLICT (type) DO NOTHING`;
-  await prisma.$executeRaw`INSERT INTO sample_cost_structure_types (type) VALUES ('procurement'), ('execution') ON CONFLICT (type) DO NOTHING`;
+  await prisma.$transaction(async (tx) => {
+    await tx.$queryRaw`SELECT pg_advisory_xact_lock(159042)::text`;
+    await tx.$executeRaw`CREATE TABLE IF NOT EXISTS sample_cost_structure (
+      id INTEGER PRIMARY KEY CHECK (id = 1),
+      rows JSONB NOT NULL
+    )`;
+    const initialRows = JSON.stringify(initial.rows);
+    await tx.$executeRaw`INSERT INTO sample_cost_structure (id, rows) VALUES (1, ${initialRows}::jsonb) ON CONFLICT (id) DO NOTHING`;
+    await tx.$executeRaw`CREATE TABLE IF NOT EXISTS sample_cost_structure_types (
+      type TEXT PRIMARY KEY,
+      rows JSONB NOT NULL DEFAULT '[]'::jsonb
+    )`;
+    await tx.$executeRaw`INSERT INTO sample_cost_structure_types (type, rows) SELECT 'engineering', rows FROM sample_cost_structure WHERE id = 1 ON CONFLICT (type) DO NOTHING`;
+    await tx.$executeRaw`INSERT INTO sample_cost_structure_types (type) VALUES ('procurement'), ('execution') ON CONFLICT (type) DO NOTHING`;
+    await tx.$executeRaw`CREATE TABLE IF NOT EXISTS sample_cost_structure_migrations (
+      name TEXT PRIMARY KEY
+    )`;
+
+    const migration = await tx.$queryRaw`SELECT name FROM sample_cost_structure_migrations WHERE name = 'engineering_to_execution'`;
+    if (migration.length) return;
+
+    const templates = await tx.$queryRaw`SELECT type, rows FROM sample_cost_structure_types WHERE type IN ('engineering', 'execution')`;
+    const engineering = templates.find((template) => template.type === "engineering").rows;
+    const execution = templates.find((template) => template.type === "execution").rows;
+    const merged = new Map(execution.map((row) => [row.budgetCode, row]));
+    for (const row of engineering) merged.set(row.budgetCode, row);
+    const executionRows = JSON.stringify([...merged.values()]);
+    await tx.$executeRaw`UPDATE sample_cost_structure_types SET rows = ${executionRows}::jsonb WHERE type = 'execution'`;
+    await tx.$executeRaw`UPDATE sample_cost_structure_types SET rows = '[]'::jsonb WHERE type = 'engineering'`;
+    await tx.$executeRaw`INSERT INTO sample_cost_structure_migrations (name) VALUES ('engineering_to_execution')`;
+  }, { timeout: 20000 });
 }
 
 export async function GET(request) {
