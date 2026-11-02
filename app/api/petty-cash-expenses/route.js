@@ -437,7 +437,6 @@ export async function GET(request) {
             COALESCE(SUM(e.amount), 0) AS "registeredExpenses",
             COALESCE(SUM(e.amount) FILTER (
               WHERE e.stage = 'completed'
-                AND e.project_manager_status = 'approved'
             ), 0) AS "approvedExpenses"
           FROM petty_cash_expenses e
            WHERE e.created_by_id = $1 AND e.stage <> 'draft'
@@ -575,6 +574,7 @@ export async function POST(request) {
       })) : [];
       if (attachments.length && !validExpenseFiles(attachments)) return json({ error: "invalid_attachment" }, 400);
       const draftPayload = { reportName, form, attachments, manualEntryOpen: Boolean(body.draftPayload?.manualEntryOpen),
+        entryMode: body.draftPayload?.entryMode === "return" ? "return" : "expense",
         editingExpenseId: Number(body.draftPayload?.editingExpenseId) || null,
         editingExpenseIndex: Number.isInteger(body.draftPayload?.editingExpenseIndex) && body.draftPayload.editingExpenseIndex >= 0
           ? body.draftPayload.editingExpenseIndex : null };
@@ -582,7 +582,7 @@ export async function POST(request) {
         description: String(entry.description || "").trim(), budgetCode: String(entry.budgetCode || "").trim(),
         ...expenseMoney(entry), files: expenseFiles(entry) }));
       if (expenses.some((expense) => !/^\d{4}[/-](0[1-9]|1[0-2])[/-](0[1-9]|[12]\d|3[01])$/.test(expense.expenseDate) ||
-        !expense.description || !expense.budgetCode || expense.budgetCode.length > 80 || !expense.valid || expense.amount <= 0n ||
+        !expense.description || expense.budgetCode.length > 80 || !expense.valid || expense.amount <= 0n ||
         expense.amount > 9223372036854775807n || !validExpenseFiles(expense.files))) return json({ error: "required_expense_fields" }, 400);
       const currencyIds = [...new Set(expenses.map((expense) => expense.currencyTypeId).filter(Boolean))];
       const currencies = currencyIds.length ? await prisma.currencyType.findMany({ where: { id: { in: currencyIds } }, select: { id: true, title: true } }) : [];
@@ -601,7 +601,7 @@ export async function POST(request) {
         }
         const project = await tx.project.findFirst({ where: { id: projectId, isActive: true }, select: { id: true } });
         if (!project) throw new RouteError("active_project_not_found", 404);
-        const codes = [...new Set(expenses.map((expense) => expense.budgetCode))];
+        const codes = [...new Set(expenses.map((expense) => expense.budgetCode).filter(Boolean))];
         const budgets = await tx.costBreakdownItem.findMany({ where: { projectId, budgetCode: { in: codes } }, select: { budgetCode: true } });
         if (codes.some((code) => !budgets.some((budget) => budget.budgetCode === code))) throw new RouteError("budget_code_not_found", 400);
         let id = reportId;
@@ -640,7 +640,7 @@ export async function POST(request) {
         files: expenseFiles(entry),
       }));
       if (expenses.some((expense) => !/^\d{4}[/-](0[1-9]|1[0-2])[/-](0[1-9]|[12]\d|3[01])$/.test(expense.expenseDate) ||
-        !expense.description || !expense.budgetCode || expense.budgetCode.length > 80 || !expense.valid || expense.amount <= 0n || expense.amount > 9223372036854775807n ||
+        !expense.description || expense.budgetCode.length > 80 || !expense.valid || expense.amount <= 0n || expense.amount > 9223372036854775807n ||
         !validExpenseFiles(expense.files))) return json({ error: "required_expense_fields" }, 400);
       const currencyIds = [...new Set(expenses.map((expense) => expense.currencyTypeId).filter(Boolean))];
       const currencies = currencyIds.length ? await prisma.currencyType.findMany({ where: { id: { in: currencyIds } }, select: { id: true, title: true } }) : [];
@@ -674,7 +674,7 @@ export async function POST(request) {
           ),0)::text AS "receivedAmount",
           COALESCE((
             SELECT SUM(e.amount) FROM petty_cash_expenses e
-            WHERE e.created_by_id=$1 AND e.stage='completed' AND e.project_manager_status='approved'
+            WHERE e.created_by_id=$1 AND e.stage='completed'
           ),0)::text AS "settledAmount"
         `, userId);
         const receivedAmount = BigInt(balance?.receivedAmount || "0");
@@ -683,7 +683,7 @@ export async function POST(request) {
         const reportAmount = expenses.reduce((sum, expense) => sum + expense.amount, 0n);
         if (receivedAmount <= 0n || availableAmount <= 0n) throw new RouteError("petty_cash_balance_unavailable", 400);
         if (reportAmount > availableAmount) throw new RouteError("petty_cash_balance_exceeded", 400);
-        const codes = [...new Set(expenses.map((expense) => expense.budgetCode))];
+        const codes = [...new Set(expenses.map((expense) => expense.budgetCode).filter(Boolean))];
         const budgets = await tx.costBreakdownItem.findMany({ where: { projectId, budgetCode: { in: codes } }, select: { budgetCode: true } });
         if (codes.some((code) => !budgets.some((budget) => budget.budgetCode === code))) throw new RouteError("budget_code_not_found", 400);
         if (body.draftReportId) {
@@ -816,9 +816,9 @@ export async function PATCH(request) {
           const projectCode = normalizeDigits(String(project?.code || "").trim());
           if (!/^\d{3}$/.test(projectCode)) throw new RouteError("active_project_not_found", 400);
           nextBudgetCodes = expenses.map((expense) => String(suppliedCodes[expense.id] || "").trim());
-          if (nextBudgetCodes.some((code) => !code || code.length > 80)) throw new RouteError("budget_code_not_found", 400);
-          const budgets = await tx.costBreakdownItem.findMany({ where: { projectId: nextProjectId, budgetCode: { in: [...new Set(nextBudgetCodes)] } }, select: { budgetCode: true } });
-          if (nextBudgetCodes.some((code) => !budgets.some((budget) => budget.budgetCode === code))) throw new RouteError("budget_code_not_found", 400);
+          if (nextBudgetCodes.some((code, index) => (!expenses[index].budget_code && code) || (expenses[index].budget_code && !code) || code.length > 80)) throw new RouteError("budget_code_not_found", 400);
+          const budgets = await tx.costBreakdownItem.findMany({ where: { projectId: nextProjectId, budgetCode: { in: [...new Set(nextBudgetCodes.filter(Boolean))] } }, select: { budgetCode: true } });
+          if (nextBudgetCodes.some((code) => code && !budgets.some((budget) => budget.budgetCode === code))) throw new RouteError("budget_code_not_found", 400);
           if (nextProjectId !== Number(report.project_id)) {
             const numberParts = normalizeDigits(String(report.report_number || "")).match(/^(\d{2})\/[^/]+\/(\d{4,})$/);
             if (!numberParts) throw new RouteError("invalid_report_number", 409);
@@ -879,7 +879,7 @@ export async function PATCH(request) {
       const normalizedEntries = entries.map((entry) => ({ id: Number(entry.id) || 0, expenseDate: normalizeDigits(entry.expenseDate).trim(),
         description: String(entry.description || "").trim(), budgetCode: String(entry.budgetCode || "").trim(), ...expenseMoney(entry),
         files: expenseFiles(entry) }));
-      if (normalizedEntries.some((entry) => !/^\d{4}[/-](0[1-9]|1[0-2])[/-](0[1-9]|[12]\d|3[01])$/.test(entry.expenseDate) || !entry.description || !entry.budgetCode || entry.budgetCode.length > 80 ||
+      if (normalizedEntries.some((entry) => !/^\d{4}[/-](0[1-9]|1[0-2])[/-](0[1-9]|[12]\d|3[01])$/.test(entry.expenseDate) || !entry.description || entry.budgetCode.length > 80 ||
         !entry.valid || entry.amount <= 0n || entry.amount > 9223372036854775807n || !validExpenseFiles(entry.files))) return json({ error: "required_expense_fields" }, 400);
       const currencyIds = [...new Set(normalizedEntries.map((entry) => entry.currencyTypeId).filter(Boolean))];
       const currencies = currencyIds.length ? await prisma.currencyType.findMany({ where: { id: { in: currencyIds } }, select: { id: true, title: true } }) : [];
@@ -902,7 +902,7 @@ export async function PATCH(request) {
           const linked = await tx.$queryRawUnsafe("SELECT expense_id FROM petty_cash_settlement_report_items WHERE expense_id = ANY($1::int[])", removed.map((expense) => Number(expense.id)));
           if (linked.length) throw new RouteError("not_allowed", 403);
         }
-        const codes = [...new Set(normalizedEntries.map((entry) => entry.budgetCode))];
+        const codes = [...new Set(normalizedEntries.map((entry) => entry.budgetCode).filter(Boolean))];
         const budgets = await tx.costBreakdownItem.findMany({ where: { projectId: Number(report.project_id), budgetCode: { in: codes } }, select: { budgetCode: true } });
         if (codes.some((code) => !budgets.some((budget) => budget.budgetCode === code))) throw new RouteError("budget_code_not_found", 400);
         const changes = [];
