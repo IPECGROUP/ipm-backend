@@ -117,17 +117,6 @@ function readCookieValue(cookie, name) {
 
 async function getUserId(req) {
   const cookie = req.headers.get("cookie") || "";
-  const fromHeader = req.headers.get("x-user-id");
-  const fromCookie = readCookieValue(cookie, "user_id");
-  const direct = fromHeader || fromCookie;
-  if (direct && /^\d+$/.test(String(direct))) {
-    const directId = Number(direct);
-    try {
-      const user = await prisma.user.findUnique({ where: { id: directId }, select: { id: true } });
-      if (user?.id) return directId;
-    } catch {}
-  }
-
   const sessionId = readCookieValue(cookie, "ipm_session");
   if (sessionId) {
     try {
@@ -156,6 +145,17 @@ async function getUserId(req) {
       if (session?.userId && (!session.expiresAt || new Date(session.expiresAt).getTime() >= Date.now())) {
         return Number(session.userId);
       }
+    } catch {}
+  }
+
+  const fromHeader = req.headers.get("x-user-id");
+  const fromCookie = readCookieValue(cookie, "user_id");
+  const direct = fromHeader || fromCookie;
+  if (direct && /^\d+$/.test(String(direct))) {
+    const directId = Number(direct);
+    try {
+      const user = await prisma.user.findUnique({ where: { id: directId }, select: { id: true } });
+      if (user?.id) return directId;
     } catch {}
   }
 
@@ -659,6 +659,7 @@ function serializeItem(row) {
     ccUserIds: ccUserIdsOf(row),
     workflowMeta: latestWorkflowMeta(row),
     canAct,
+    canEditPlanning: row.canEditPlanning === true,
     canDelete: row.canDelete === true,
     createdById: row.createdById,
     createdByName: row.createdBy?.name || row.createdBy?.username || row.createdBy?.email || null,
@@ -676,23 +677,36 @@ async function resolveProject(projectId) {
   });
 }
 
-async function makeSerial({ dateJalali, projectCode }) {
+function serialForProject(serial, projectCode) {
+  const parts = normalizeDigits(serial).match(/^(\d{2})\/\d+\/(\d{3,})$/);
+  const code = normalizeDigits(projectCode).replace(/[^\d]/g, "");
+  return parts && code ? `${parts[1]}/${code}/${parts[2]}` : null;
+}
+
+function historyWithSerial(historyJson, serial) {
+  return (Array.isArray(historyJson) ? historyJson : []).map((entry) =>
+    entry?.type === "created" && entry.registrationInfo
+      ? { ...entry, registrationInfo: { ...entry.registrationInfo, serial } }
+      : entry
+  );
+}
+
+async function makeSerial({ dateJalali, projectCode }, db = prisma) {
   const yy = getJalaliYY(dateJalali);
   const normalizedProjectCode = normalizeDigits(String(projectCode || "").trim()).replace(/[^\d]/g, "");
   const prefix = normalizedProjectCode ? `${yy}/${normalizedProjectCode}` : yy;
-  const rows = await prisma.paymentRequest.findMany({
+  const rows = await db.paymentRequest.findMany({
     where: {
       docId: REQUEST_DOC_ID,
       // The sequence is shared by every project within the same Jalali year.
       serial: { startsWith: `${yy}/` },
     },
     select: { serial: true },
-    take: 1000,
   });
 
   let maxSeq = 0;
   const escapedYear = yy.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const re = new RegExp(`^${escapedYear}/[^/]+/(\\d{3})$`);
+  const re = new RegExp(`^${escapedYear}/[^/]+/(\\d{3,})$`);
   for (const row of rows) {
     const m = String(row?.serial || "").match(re);
     if (m) maxSeq = Math.max(maxSeq, Number(m[1]) || 0);
@@ -824,6 +838,7 @@ export async function GET(req) {
     }
 
     const userCtx = await userRoleAndUnitContext(userId);
+    const isPlanningMember = isProjectControlContext(userCtx);
     const cartableOnly = url.searchParams.get("cartable") === "1";
     const colleagueIds = await workflowColleagueIds(prisma, userId);
     colleagueIds.add(Number(userId));
@@ -841,6 +856,7 @@ export async function GET(req) {
       if (cartableOnly) return canAct && Number(row.currentAssigneeUserId) === Number(userId);
       return (
         canDelete || Number(row.createdById) === Number(userId) ||
+        isPlanningMember ||
         hasPerformedWorkflowAction(row, userId) || colleagueHandledWorkflow(row.historyJson, colleagueIds) ||
         actionParticipantRequestIds.has(Number(row.id)) ||
         isCompletedCommercialOwner ||
@@ -859,6 +875,7 @@ export async function GET(req) {
         requestType: requestTypesById.get(Number(row.id)),
         project: projectById.get(Number(row.projectId)) || null,
         canAct: canActOnSupplyStep({ row, userId, userCtx, mainAdmin }),
+        canEditPlanning: isPlanningMember && !!getCurrentStep(row.historyJson) && row.status !== "rejected",
         canDelete: canDelete || Number(row.createdById) === Number(userId),
       })),
       pagination: { page, pageSize, total, hasMore: page * pageSize < total },
@@ -919,7 +936,7 @@ export async function POST(req) {
       const actionClientInfo = clientDateTimeInfo(body.clientRegistrationInfo);
       const currentIndex = typeof step.index === "number" ? step.index : 0;
       const scalarUpdates = {};
-      if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER && nextBudgetCode) scalarUpdates.budgetCode = nextBudgetCode;
+      if (nextBudgetCode) return json({ error: "forbidden" }, 403);
       if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER && finalAmount !== null && finalAmount > 0n) scalarUpdates.amount = finalAmount;
       if (step.roleKey === SUPPLY_STEP.PROJECT_MANAGER && (actionText || deadlineDate || finalAmount !== null)) {
         history.push({
@@ -1023,7 +1040,9 @@ export async function POST(req) {
       return json({ ok: true, item: serializeItem({
         ...updated,
         requestType,
+        project: updated.projectId ? await prisma.project.findUnique({ where: { id: updated.projectId }, select: { id: true, code: true, name: true } }) : null,
         canAct: canActOnSupplyStep({ row: updated, userId, userCtx, mainAdmin }),
+        canEditPlanning: isProjectControlContext(userCtx) && !!getCurrentStep(updated.historyJson) && updated.status !== "rejected",
         canDelete: await canDeleteFinancialRecords(userId) || Number(updated.createdById) === Number(userId),
       }) });
     }
@@ -1112,9 +1131,12 @@ export async function POST(req) {
     }
     await ensureRequestTypeTables();
     const created = await prisma.$transaction(async (tx) => {
+      await tx.$queryRawUnsafe("SELECT pg_advisory_xact_lock(hashtext($1))::text AS locked", `supply_request_serial_${getJalaliYY(effectiveDateJalali)}`);
+      const savedSerial = await makeSerial({ dateJalali: effectiveDateJalali, projectCode: project.code }, tx);
+      const savedHistory = historyWithSerial(historyJson, savedSerial);
       const item = await tx.paymentRequest.create({
         data: {
-          serial,
+          serial: savedSerial,
           dateJalali: effectiveDateJalali,
           scope: "projects",
           title,
@@ -1138,7 +1160,7 @@ export async function POST(req) {
           createdById: Number(userId),
           currentAssigneeUserId: initialTargetRoleKey ? Number(initialAssignee.user.id) : Number(userId),
           status: initialTargetRoleKey ? "pending" : "approved",
-          historyJson,
+          historyJson: savedHistory,
         },
         include: {
           createdBy: { select: { name: true, username: true, email: true } },
@@ -1160,6 +1182,8 @@ export async function POST(req) {
 }
 
 export async function PATCH(req) {
+  const denied = await requirePagePermission(req, "درخواست تأمین", "نمایش منو");
+  if (denied) return denied;
   try {
     const userId = await getUserId(req);
     if (!userId) return json({ error: "unauthorized" }, 401);
@@ -1171,9 +1195,45 @@ export async function PATCH(req) {
 
     const row = await prisma.paymentRequest.findFirst({
       where: { id, docId: REQUEST_DOC_ID },
-      select: { id: true, createdById: true, historyJson: true },
+      select: { id: true, createdById: true, projectId: true, budgetCode: true, historyJson: true },
     });
     if (!row) return json({ error: "not_found" }, 404);
+    if (body.planningEdit === true) {
+      const userCtx = await userRoleAndUnitContext(userId);
+      if (!isProjectControlContext(userCtx)) return json({ error: "forbidden" }, 403);
+      const projectId = toPositiveInt(body.projectId);
+      const project = await resolveProject(projectId);
+      if (!project) return json({ error: "active_project_not_found" }, 404);
+      const budgetCode = cleanText(body.budgetCode, 80);
+      if (!budgetCode) return json({ error: "budget_code_required" }, 400);
+      const budgets = await prisma.costBreakdownItem.findMany({ where: { projectId }, select: { budgetCode: true } });
+      const normalizeCode = (value) => normalizeDigits(value).trim().toUpperCase()
+        .replace(/[^\d.-]/g, "-").replace(/[.-]+/g, "-").replace(/^-|-$/g, "");
+      if (!budgets.some((budget) => {
+        const code = normalizeCode(budget.budgetCode);
+        return code && (normalizeCode(budgetCode) === code || normalizeCode(budgetCode) === `${normalizeCode(project.code)}-${code}`);
+      })) return json({ error: "budget_code_not_found" }, 400);
+      const result = await prisma.$transaction(async (tx) => {
+        const locked = await tx.$queryRawUnsafe(`SELECT "projectId", "serial", "status", "historyJson" FROM "PaymentRequest" WHERE "id"=$1 AND "docId"=$2 FOR UPDATE`, id, REQUEST_DOC_ID);
+        const current = locked[0];
+        if (!current || !getCurrentStep(current.historyJson) || current.status === "rejected") return { error: "request_changed" };
+        const serial = serialForProject(current.serial, project.code);
+        if (!serial) return { error: "invalid_serial" };
+        if (serial !== current.serial && await tx.paymentRequest.findFirst({ where: { serial, id: { not: id } }, select: { id: true } })) return { error: "serial_conflict" };
+        const historyJson = [...historyWithSerial(current.historyJson, serial), {
+          type: "planning_edit", byUserId: Number(userId), at: new Date().toISOString(),
+          projectId, budgetCode, serial,
+        }];
+        const updated = await tx.paymentRequest.update({ where: { id }, data: { projectId, budgetCode, serial, historyJson },
+          include: { createdBy: { select: { name: true, username: true, email: true } }, currentAssigneeUser: { select: { name: true, username: true, email: true } }, currencyType: { select: { id: true, title: true } } } });
+        return { updated };
+      });
+      if (result.error) return json({ error: result.error }, result.error === "request_changed" || result.error === "serial_conflict" ? 409 : 400);
+      const requestType = (await requestTypesForRequests([id])).get(id);
+      return json({ ok: true, item: serializeItem({ ...result.updated, project, requestType,
+        canAct: canActOnSupplyStep({ row: result.updated, userId }), canEditPlanning: true,
+        canDelete: await canDeleteFinancialRecords(userId) || Number(result.updated.createdById) === Number(userId) }) });
+    }
     if (Number(row.createdById) !== Number(userId)) return json({ error: "forbidden" }, 403);
     if (Array.isArray(row.historyJson) && row.historyJson.some((entry) => entry?.type === "approved" || entry?.status === "approved")) {
       return json({ error: "approval_already_recorded" }, 409);
@@ -1184,6 +1244,7 @@ export async function PATCH(req) {
     if (!project) return json({ error: "active_project_not_found" }, 404);
     const title = cleanText(body.title, 255);
     const budgetCode = cleanText(body.budgetCode ?? body.budget_code, 80);
+    if (projectId !== Number(row.projectId) || budgetCode !== row.budgetCode) return json({ error: "forbidden" }, 403);
     const amount = toBigIntAmount(body.amount);
     const currencyTypeId = toPositiveInt(body.currencyTypeId ?? body.currency_type_id);
     const hasRequestType = Object.hasOwn(body, "requestTypeId");
@@ -1197,16 +1258,21 @@ export async function PATCH(req) {
     await ensureRequestTypeTables();
     const updated = await prisma.$transaction(async (tx) => {
       const lockedRows = await tx.$queryRawUnsafe(
-        `SELECT "historyJson" FROM "PaymentRequest" WHERE "id" = $1 FOR UPDATE`,
+        `SELECT "historyJson", "serial" FROM "PaymentRequest" WHERE "id" = $1 FOR UPDATE`,
         id,
       );
       if (Array.isArray(lockedRows?.[0]?.historyJson) && lockedRows[0].historyJson.some((entry) => entry?.type === "approved" || entry?.status === "approved")) {
         throw new Error("approval_already_recorded");
       }
+      const serial = serialForProject(lockedRows?.[0]?.serial, project.code);
+      if (!serial) throw new Error("invalid_serial");
+      if (serial !== lockedRows[0].serial && await tx.paymentRequest.findFirst({ where: { serial, id: { not: id } }, select: { id: true } })) throw new Error("serial_conflict");
       const item = await tx.paymentRequest.update({
         where: { id },
         data: {
           projectId,
+          serial,
+          historyJson: historyWithSerial(lockedRows[0].historyJson, serial),
           budgetCode,
           title,
           description: cleanText(body.description, 2000) || null,
@@ -1232,11 +1298,14 @@ export async function PATCH(req) {
       requestType: savedRequestType,
       project,
       canAct: canActOnSupplyStep({ row: updated, userId, userCtx, mainAdmin }),
+      canEditPlanning: isProjectControlContext(userCtx) && !!getCurrentStep(updated.historyJson) && updated.status !== "rejected",
       canDelete: true,
     }) });
   } catch (e) {
     console.error("supply_requests_patch_error", e);
     if (e?.message === "approval_already_recorded") return json({ error: "approval_already_recorded" }, 409);
+    if (e?.message === "serial_conflict") return json({ error: "serial_conflict" }, 409);
+    if (e?.message === "invalid_serial") return json({ error: "invalid_serial" }, 400);
     const mapped = mapDbError(e);
     if (mapped) return json({ error: mapped.error }, mapped.status);
     return json(internalErrorPayload(e), 500);
