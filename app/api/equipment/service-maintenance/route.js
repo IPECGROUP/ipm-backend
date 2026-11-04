@@ -69,16 +69,21 @@ export async function POST(request) {
     const body = await request.json().catch(() => ({}));
     const equipmentId = String(body.equipmentId || "");
     const serviceDate = String(body.serviceDate || "").replaceAll("-", "/");
-    const lastServiceDate = String(body.lastServiceDate || "").replaceAll("-", "/");
     const description = String(body.description || "").trim();
     const files = (Array.isArray(body.files) ? body.files : []).map((file) => ({ name: String(file?.name || "").slice(0, 180), url: String(file?.url || "") }));
     const validDate = (value) => /^\d{4}\/(0[1-9]|1[0-2])\/(0[1-9]|[12]\d|3[01])$/.test(value);
-    if (!/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(equipmentId) || !validDate(serviceDate) || (lastServiceDate && !validDate(lastServiceDate)) || description.length > 10000 || files.length > 20 || files.some((file) => !file.name || !/^\/uploads\/equipment-service-maintenance\/[a-f0-9-]{36}\.(?:pdf|jpe?g|png|webp)$/i.test(file.url))) {
+    if (!/^[\da-f]{8}-[\da-f]{4}-[\da-f]{4}-[\da-f]{4}-[\da-f]{12}$/i.test(equipmentId) || !validDate(serviceDate) || description.length > 10000 || files.length > 20 || files.some((file) => !file.name || !/^\/uploads\/equipment-service-maintenance\/[a-f0-9-]{36}\.(?:pdf|jpe?g|png|webp)$/i.test(file.url))) {
       return json({ error: "invalid_service_data" }, 400);
     }
     await ensureSchema();
     const equipment = await prisma.$queryRaw`SELECT id FROM "equipment_identities" WHERE id = ${equipmentId}`;
     if (!equipment.length) return json({ error: "equipment_not_found" }, 400);
+    const previousServices = await prisma.$queryRaw`
+      SELECT "service_date" FROM "equipment_service_maintenance"
+      WHERE "equipment_id" = ${equipmentId}
+      ORDER BY "service_date" DESC, "created_at" DESC LIMIT 1
+    `;
+    const lastServiceDate = previousServices[0]?.service_date || "";
     const rows = await prisma.$queryRaw`
       INSERT INTO "equipment_service_maintenance" ("id", "equipment_id", "service_date", "description", "last_service_date", "files", "created_by_id")
       VALUES (${randomUUID()}, ${equipmentId}, ${serviceDate}, ${description}, ${lastServiceDate}, ${JSON.stringify(files)}::jsonb, ${Number(user.id)})
