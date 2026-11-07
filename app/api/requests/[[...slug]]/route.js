@@ -1202,7 +1202,7 @@ export async function GET(req, ctx) {
     const relatedLettersByRequest = await relatedLettersForRows([row]);
     return json({ item: { ...normalizeOut(row, userNamesById), relatedLetters: relatedLettersByRequest.get(String(row.id)) || [], canAct,
       canEditPlanning: canAct && hasWorkflowUnitForRole({ roleKey: ROLE_KEYS.PROJECT_CONTROL, userUnitNames: uctx.userUnitNames, roleUnitNames: uctx.roleUnitNames }),
-      canEdit: canEditRequest(row) && (uctx.isSuperAdmin || row.createdById === userId), canDelete: await canDeleteFinancialRecords(userId) || ((uctx.isSuperAdmin || row.createdById === userId) && !["approved", "rejected", "canceled", "cancelled"].includes(row.status)) } });
+      canEdit: (await canDeleteFinancialRecords(userId)) || (canEditRequest(row) && (uctx.isSuperAdmin || row.createdById === userId)), canDelete: await canDeleteFinancialRecords(userId) || ((uctx.isSuperAdmin || row.createdById === userId) && !["approved", "rejected", "canceled", "cancelled"].includes(row.status)) } });
   }
 
   // GET /api/requests (list)
@@ -1294,7 +1294,7 @@ export async function GET(req, ctx) {
       relatedLetters: relatedLettersByRequest.get(String(x.row.id)) || [],
       canAct: x.canAct,
        canEditPlanning: x.canAct && hasWorkflowUnitForRole({ roleKey: ROLE_KEYS.PROJECT_CONTROL, userUnitNames: uctx.userUnitNames, roleUnitNames: uctx.roleUnitNames }),
-      canEdit: canEditRequest(x.row) && (uctx.isSuperAdmin || x.isMine),
+      canEdit: canDelete || (canEditRequest(x.row) && (uctx.isSuperAdmin || x.isMine)),
       canDelete: canDelete || ((uctx.isSuperAdmin || x.isMine) && !["approved", "rejected", "canceled", "cancelled"].includes(x.row.status)),
     })),
   });
@@ -1645,8 +1645,9 @@ export async function PATCH(req, ctx) {
 
   // فقط سازنده (فعلاً)
   const uctx = await getUserContext(req, userId);
-  if (row.createdById !== userId && !uctx.isSuperAdmin) return json({ error: "forbidden" }, 403);
-  if (!canEditRequest(row)) return json({ error: "request_already_processed" }, 409);
+  const privilegedEdit = await canDeleteFinancialRecords(userId);
+  if (row.createdById !== userId && !uctx.isSuperAdmin && !privilegedEdit) return json({ error: "forbidden" }, 403);
+  if (!privilegedEdit && !canEditRequest(row)) return json({ error: "request_already_processed" }, 409);
 
   const body = (await readJson(req)) || {};
   const data = pickUpdatable(body);
@@ -1729,7 +1730,7 @@ export async function PATCH(req, ctx) {
   const result = await prisma.$transaction(async (tx) => {
     await lockProjectLiquidities(tx, [row.projectId, nextProjectId].filter((projectId) => Number(projectId) > 0));
     const current = await tx.paymentRequest.findUnique({ where: { id } });
-    if (!current || !canEditRequest(current) || current.status !== row.status ||
+    if (!current || (!privilegedEdit && !canEditRequest(current)) || current.status !== row.status ||
       JSON.stringify(current.historyJson) !== JSON.stringify(row.historyJson)) return { error: "request_changed" };
     const created = Array.isArray(current.historyJson) ? current.historyJson.find((entry) => entry?.type === "created") : null;
     const nextRial = history.find((entry) => entry?.type === "created")?.rialAmount ?? created?.rialAmount ?? current.amount;
@@ -1738,7 +1739,7 @@ export async function PATCH(req, ctx) {
     const liquidityRemaining = await getProjectLiquidityRemaining(nextProjectId, tx);
     const available = nextProjectId === Number(current.projectId) && isProjectCommitment(current)
       ? liquidityRemaining + oldAmount : liquidityRemaining;
-    if (nextAmount > available) return { error: "amount_exceeds_project_liquidity", liquidityRemaining: formatMinorUnits(available) };
+    if ((!privilegedEdit || isProjectCommitment(current)) && nextAmount > available) return { error: "amount_exceeds_project_liquidity", liquidityRemaining: formatMinorUnits(available) };
     const changed = await tx.paymentRequest.updateMany({ where: unchangedRequestWhere(current), data: { ...data, historyJson: history } });
     if (!changed.count) return { error: "request_changed" };
     return { updated: await tx.paymentRequest.findUnique({ where: { id } }) };
