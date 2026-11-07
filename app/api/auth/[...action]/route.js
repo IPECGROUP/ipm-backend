@@ -268,7 +268,7 @@ async function handleLogin(request) {
     sameSite: "lax",
     secure: isHttpsRequest(request),
     path: "/",
-    maxAge: SESSION_ABSOLUTE_TIMEOUT_SECONDS,
+    ...(body.remember === true ? { maxAge: SESSION_ABSOLUTE_TIMEOUT_SECONDS } : {}),
   });
   await logSessionStart(token, user.id);
 
