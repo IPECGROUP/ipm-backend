@@ -1202,7 +1202,7 @@ export async function GET(req, ctx) {
     const relatedLettersByRequest = await relatedLettersForRows([row]);
     return json({ item: { ...normalizeOut(row, userNamesById), relatedLetters: relatedLettersByRequest.get(String(row.id)) || [], canAct,
       canEditPlanning: canAct && hasWorkflowUnitForRole({ roleKey: ROLE_KEYS.PROJECT_CONTROL, userUnitNames: uctx.userUnitNames, roleUnitNames: uctx.roleUnitNames }),
-      canEdit: (await canDeleteFinancialRecords(userId)) || (canEditRequest(row) && (uctx.isSuperAdmin || row.createdById === userId)), canDelete: await canDeleteFinancialRecords(userId) || ((uctx.isSuperAdmin || row.createdById === userId) && !["approved", "rejected", "canceled", "cancelled"].includes(row.status)) } });
+      canEditPaymentReceipts: await canDeleteFinancialRecords(userId), canEdit: (await canDeleteFinancialRecords(userId)) || (canEditRequest(row) && (uctx.isSuperAdmin || row.createdById === userId)), canDelete: await canDeleteFinancialRecords(userId) || ((uctx.isSuperAdmin || row.createdById === userId) && !["approved", "rejected", "canceled", "cancelled"].includes(row.status)) } });
   }
 
   // GET /api/requests (list)
@@ -1294,6 +1294,7 @@ export async function GET(req, ctx) {
       relatedLetters: relatedLettersByRequest.get(String(x.row.id)) || [],
       canAct: x.canAct,
        canEditPlanning: x.canAct && hasWorkflowUnitForRole({ roleKey: ROLE_KEYS.PROJECT_CONTROL, userUnitNames: uctx.userUnitNames, roleUnitNames: uctx.roleUnitNames }),
+      canEditPaymentReceipts: canDelete,
       canEdit: canDelete || (canEditRequest(x.row) && (uctx.isSuperAdmin || x.isMine)),
       canDelete: canDelete || ((uctx.isSuperAdmin || x.isMine) && !["approved", "rejected", "canceled", "cancelled"].includes(x.row.status)),
     })),
@@ -1650,6 +1651,9 @@ export async function PATCH(req, ctx) {
   if (!privilegedEdit && !canEditRequest(row)) return json({ error: "request_already_processed" }, 409);
 
   const body = (await readJson(req)) || {};
+  const receiptsTouched = Object.prototype.hasOwnProperty.call(body, "cashReceipts") || Object.prototype.hasOwnProperty.call(body, "creditReceipts");
+  if (receiptsTouched && !privilegedEdit) return json({ error: "forbidden" }, 403);
+  if (receiptsTouched && ["cashReceipts", "creditReceipts"].some((key) => Object.prototype.hasOwnProperty.call(body, key) && (!Array.isArray(body[key]) || body[key].some((file) => !file || typeof file !== "object" || Array.isArray(file))))) return json({ error: "invalid_receipts" }, 400);
   const data = pickUpdatable(body);
   if (data.docDatesJalali !== undefined) data.docDateJalali = data.docDatesJalali[0] || null;
   if ([SUPPLY_REQUEST_DOC_ID, TENKHAH_REQUEST_DOC_ID].includes(data.docId)) return json({ error: "invalid_doc_type" }, 400);
@@ -1717,12 +1721,21 @@ export async function PATCH(req, ctx) {
       };
     }
   }
+  const previousPayment = [...history].reverse().find((entry) => entry?.finalPayment)?.finalPayment;
+  if (receiptsTouched && !previousPayment) return json({ error: "payment_not_recorded" }, 400);
+  const updatedPayment = receiptsTouched ? {
+    ...previousPayment,
+    ...(Object.prototype.hasOwnProperty.call(body, "cashReceipts") ? { cashReceipts: body.cashReceipts } : {}),
+    ...(Object.prototype.hasOwnProperty.call(body, "creditReceipts") ? { creditReceipts: body.creditReceipts } : {}),
+  } : null;
+  const receiptsChanged = receiptsTouched && (JSON.stringify(updatedPayment.cashReceipts || []) !== JSON.stringify(previousPayment.cashReceipts || []) || JSON.stringify(updatedPayment.creditReceipts || []) !== JSON.stringify(previousPayment.creditReceipts || []));
   history.push({
     byUserId: userId,
     type: "edited",
     status: row.status,
     note: "",
     at: new Date().toISOString(),
+    ...(receiptsChanged ? { finalPayment: updatedPayment } : {}),
   });
 
   const nextProjectId = data.projectId ?? row.projectId;
