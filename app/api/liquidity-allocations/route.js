@@ -3,6 +3,7 @@ import { hasPagePermission, requirePagePermission } from "../../../lib/pagePermi
 import { formatMinorUnits, parseRequestedAmount } from "../../../lib/paymentAmount";
 import { isProjectCommitment, paymentCommitmentWhere } from "../../../lib/projectCommitment";
 import { lockProjectLiquidities } from "../../../lib/projectLiquidityLock";
+import { getAuthenticatedUser } from "../../../lib/security";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -94,13 +95,6 @@ function finalPaidMinorUnits(request) {
   if (saved > 0n) return saved * 100n;
   const noted = amountFromFinalNote(request.historyJson);
   return noted > 0n ? noted * 100n : requestedRialMinorUnits(request);
-}
-
-async function isAdmin(userId) {
-  const user = await prisma.user.findUnique({ where: { id: userId }, select: { username: true, email: true, role: true } });
-  const username = String(user?.username || "").toLowerCase();
-  const email = String(user?.email || "").toLowerCase();
-  return user?.role === "admin" || username === "marandi" || email === "marandi@ipecgroup.net";
 }
 
 let liquidityTableReady;
@@ -364,14 +358,21 @@ export async function POST(request) {
 }
 
 export async function DELETE(request) {
-  const denied = await requirePagePermission(request, "تخصیص نقدینگی", "افزودن");
+  const denied = await requirePagePermission(request, "تخصیص نقدینگی", "نمایش منو");
   if (denied) return denied;
-  const userId = await getUserId(request);
-  if (!userId) return json({ error: "unauthorized" }, 401);
-  if (!(await isAdmin(userId))) return json({ error: "forbidden" }, 403);
+  const user = await getAuthenticatedUser(request);
+  if (!user) return json({ error: "unauthorized" }, 401);
+  if (!["ali", "marandi"].includes(String(user.username || "").trim().toLowerCase())) return json({ error: "forbidden" }, 403);
   try {
+    const body = await request.json().catch(() => null);
+    const ids = body?.ids;
+    if (!Array.isArray(ids) || !ids.length || ids.length > 1000 || ids.some((id) => typeof id !== "string" || !id || id.length > 87)) return json({ error: "invalid_selection" }, 400);
     await ensureLiquidityTable();
-    const result = await prisma.$executeRawUnsafe("DELETE FROM liquidity_allocations");
+    const result = await prisma.$transaction(async (tx) => {
+      const rows = await tx.$queryRawUnsafe("SELECT DISTINCT project_id AS \"projectId\" FROM liquidity_allocations WHERE COALESCE(batch_id, 'legacy-' || id::text) = ANY($1::text[]) AND project_id IS NOT NULL", ids);
+      await lockProjectLiquidities(tx, rows.map((row) => row.projectId));
+      return tx.$executeRawUnsafe("DELETE FROM liquidity_allocations WHERE COALESCE(batch_id, 'legacy-' || id::text) = ANY($1::text[])", ids);
+    });
     return json({ ok: true, deleted: Number(result || 0) });
   } catch (error) {
     return json({ error: "internal_error", message: String(error?.message || "internal_error") }, 500);
