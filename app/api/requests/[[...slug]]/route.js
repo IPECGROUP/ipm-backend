@@ -32,6 +32,17 @@ async function ensurePaymentRequestCompatibility() {
 // boundary at every entry point of the payment-request API.
 const SUPPLY_REQUEST_DOC_ID = "supply_request";
 const TENKHAH_REQUEST_DOC_ID = "tenkhah_request";
+async function isSupplyApprovalPendingForUser(db, supplyRequestId, userId) {
+  const id = Number(supplyRequestId);
+  if (!Number.isSafeInteger(id) || id <= 0) return false;
+  const supply = await db.paymentRequest.findFirst({
+    where: { id, docId: SUPPLY_REQUEST_DOC_ID },
+    select: { status: true, currentAssigneeUserId: true, historyJson: true },
+  });
+  return supply?.status === "pending" &&
+    Number(supply.currentAssigneeUserId) === Number(userId) &&
+    getCurrentStep(supply.historyJson)?.roleKey === ROLE_KEYS.PROJECT_MANAGER;
+}
 const paymentRequestOnlyWhere = {
   // `NOT IN` by itself excludes NULL in SQL.  The older payment requests did
   // not have a docId at all, so that condition made their historical
@@ -1554,6 +1565,10 @@ export async function POST(req, ctx) {
   };
 
   const creation = await prisma.$transaction(async (tx) => {
+    if (body?.hasSupplyRequest === "yes" &&
+      await isSupplyApprovalPendingForUser(tx, body?.supplyRequestId, userId)) {
+      return { error: "supply_request_awaiting_your_approval" };
+    }
     await lockProjectLiquidity(tx, data.projectId);
     const liquidityRemaining = await getProjectLiquidityRemaining(data.projectId, tx);
     if (rialAmountMinorUnits > liquidityRemaining) {
@@ -1741,6 +1756,11 @@ export async function PATCH(req, ctx) {
   const nextProjectId = data.projectId ?? row.projectId;
   if (!Number.isInteger(nextProjectId) || nextProjectId <= 0) return json({ error: "project_required" }, 400);
   const result = await prisma.$transaction(async (tx) => {
+    const editedCreated = history.find((entry) => entry?.type === "created");
+    if (editedCreated?.hasSupplyRequest === "yes" &&
+      await isSupplyApprovalPendingForUser(tx, editedCreated.supplyRequestId, userId)) {
+      return { error: "supply_request_awaiting_your_approval" };
+    }
     await lockProjectLiquidities(tx, [row.projectId, nextProjectId].filter((projectId) => Number(projectId) > 0));
     const current = await tx.paymentRequest.findUnique({ where: { id } });
     if (!current || (!privilegedEdit && !canEditRequest(current)) || current.status !== row.status ||
