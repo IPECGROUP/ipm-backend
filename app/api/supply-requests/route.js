@@ -4,6 +4,7 @@ import { NextResponse } from "next/server";
 import { prisma } from "../../../lib/prisma";
 import { fallbackUnitsForRoleNames } from "../../../lib/orgStructureFallback";
 import { requirePagePermission } from "../../../lib/pagePermissions";
+import { isProjectControlUnit, workflowUnitValues } from "../../../lib/project-control-unit";
 
 export const runtime = "nodejs";
 
@@ -470,7 +471,9 @@ async function creatorContext(userId) {
   const userName = user?.name || user?.username || user?.email || `کاربر #${userId}`;
   const unitName = unitNames.join("، ") || "نامشخص";
   const roleName = roleNames.join("، ") || "نامشخص";
-  return { user, userName, unitName, roleName, unitNames, roleNames };
+  const isProjectControlMember = [...userUnits, ...unitRoleRows].some((row) => isProjectControlUnit(row.unit));
+  const workflowUnitNames = [...userUnits, ...unitRoleRows].flatMap((row) => workflowUnitValues(row.unit));
+  return { user, userName, unitName, roleName, unitNames, workflowUnitNames, roleNames, isProjectControlMember };
 }
 
 async function userRoleAndUnitContext(userId) {
@@ -488,7 +491,8 @@ function includesAny(values, patterns) {
 }
 
 function isProjectControlContext(ctx) {
-  return includesAny([...(ctx?.unitNames || []), ...(ctx?.roleNames || [])], ["برنامه ریزی", "برنامه‌ریزی", "کنترل پروژه"]);
+  if (ctx?.isProjectControlMember) return true;
+  return includesAny([...(ctx?.workflowUnitNames || ctx?.unitNames || []), ...(ctx?.roleNames || [])], ["برنامه ریزی", "برنامه‌ریزی", "کنترل پروژه"]);
 }
 
 function isProjectManagerContext(ctx) {
@@ -531,9 +535,9 @@ async function findWorkflowUsers(kind, excludeUserId = null) {
   const unitNamesByRoleId = new Map();
   unitRoleRows.forEach((row) => {
     const roleId = Number(row.roleId);
-    if (!roleId || !row.unit?.name) return;
+    if (!roleId || !row.unit) return;
     const list = unitNamesByRoleId.get(roleId) || [];
-    list.push(row.unit.name);
+    list.push(row.unit);
     unitNamesByRoleId.set(roleId, list);
   });
   const candidates = users
@@ -543,13 +547,16 @@ async function findWorkflowUsers(kind, excludeUserId = null) {
         ...(Array.isArray(user.roles) ? user.roles.map((row) => row.role?.name).filter(Boolean) : []),
         user.role && user.role !== "user" ? user.role : "",
       ].filter(Boolean);
-      const unitNames = [
-        ...(Array.isArray(user.units) ? user.units.map((row) => row.unit?.name).filter(Boolean) : []),
+      const units = [
+        ...(Array.isArray(user.units) ? user.units.map((row) => row.unit).filter(Boolean) : []),
         ...roleIds.flatMap((roleId) => unitNamesByRoleId.get(roleId) || []),
+      ];
+      const unitNames = [
+        ...units.flatMap(workflowUnitValues),
         ...fallbackUnitsForRoleNames(roleNames),
         ...inferredUnitNamesFromRoles(roleNames),
       ];
-      return { user, roleNames, unitNames };
+      return { user, roleNames, unitNames, isProjectControlMember: units.some(isProjectControlUnit) };
     })
     .filter((ctx) => {
       if (kind === SUPPLY_STEP.PROJECT_MANAGER) return isProjectManagerContext(ctx);

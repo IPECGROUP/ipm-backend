@@ -10,6 +10,7 @@ import { nextSharedPaymentSerial } from "../../../../lib/paymentSerial";
 import { convertedRialMinorUnits, formatMinorUnits, parseRequestedAmount } from "../../../../lib/paymentAmount";
 import { isProjectCommitment, paymentCommitmentWhere } from "../../../../lib/projectCommitment";
 import { lockProjectLiquidity, lockProjectLiquidities } from "../../../../lib/projectLiquidityLock";
+import { workflowUnitValues } from "../../../../lib/project-control-unit";
 
 export const runtime = "nodejs";
 
@@ -827,7 +828,7 @@ function hasWorkflowUnitForRole({ roleKey, userUnitNames, roleUnitNames = [] }) 
   const unitNames = [...(Array.isArray(userUnitNames) ? userUnitNames : []), ...(Array.isArray(roleUnitNames) ? roleUnitNames : [])].map(normalizeFaText);
   const isProjectManagementUnit = (name) => name.includes(normalizeFaText("مدیریت پروژه")) || name.includes("project management");
   const isProjectManagement = unitNames.some(isProjectManagementUnit);
-  if (roleKey === ROLE_KEYS.PROJECT_CONTROL) return includesAny(unitNames, ["برنامه ریزی", "برنامه‌ریزی", "کنترل پروژه"]);
+  if (roleKey === ROLE_KEYS.PROJECT_CONTROL) return unitNames.includes("project_control") || unitNames.includes("planning") || includesAny(unitNames, ["برنامه ریزی", "برنامه‌ریزی", "کنترل پروژه"]);
   if (roleKey === ROLE_KEYS.PROJECT_MANAGER) return isProjectManagement;
   if (roleKey === ROLE_KEYS.ACCOUNTING) return includesAny(unitNames, ["واحد مالی", "مالی", "حسابداری", "finance", "accounting"]);
   // Exclude the project-management unit itself, not a user who also has a
@@ -870,7 +871,7 @@ async function findWorkflowUsersForRole(roleKey, excludeUserId = null) {
   `).catch(() => []);
   const mappedUserIds = new Set(
     mappedMembers
-      .filter((row) => hasWorkflowUnitForRole({ roleKey, userUnitNames: [row?.unitName, row?.unitCode] }))
+      .filter((row) => hasWorkflowUnitForRole({ roleKey, userUnitNames: workflowUnitValues({ name: row?.unitName, code: row?.unitCode }) }))
       .map((row) => Number(row.userId))
   );
   let users = [];
@@ -885,7 +886,7 @@ async function findWorkflowUsersForRole(roleKey, excludeUserId = null) {
   }
   return users.filter((candidate) => {
     const userUnitNames = [
-      ...(Array.isArray(candidate.units) ? candidate.units.flatMap((row) => [row.unit?.name, row.unit?.code]).filter(Boolean) : []),
+      ...(Array.isArray(candidate.units) ? candidate.units.flatMap((row) => workflowUnitValues(row.unit)) : []),
     ];
     const hasUnitAppointment = mappedUserIds.has(Number(candidate.id));
     return candidate.isActive !== false && (hasUnitAppointment || hasWorkflowUnitForRole({ roleKey, userUnitNames }));
@@ -1037,10 +1038,10 @@ async function getUserContext(req, userId) {
       ...unitRoleRows.map((row) => row?.unit?.name).filter(Boolean),
     ])
   );
-  const userUnitNames = Array.from(new Set((userUnits || []).flatMap((row) => [row?.unit?.name, row?.unit?.code]).filter(Boolean)));
+  const userUnitNames = Array.from(new Set((userUnits || []).flatMap((row) => workflowUnitValues(row?.unit))));
   const roleUnitNames = Array.from(
     new Set([
-      ...unitRoleRows.flatMap((row) => [row?.unit?.name, row?.unit?.code]).filter(Boolean),
+      ...unitRoleRows.flatMap((row) => workflowUnitValues(row?.unit)),
     ])
   );
   const isFinanceAppointmentMember = (await findWorkflowUsersForRole(ROLE_KEYS.ACCOUNTING))

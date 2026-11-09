@@ -5,6 +5,7 @@ import { isSessionExpired } from "../../../lib/security";
 import { nextSharedPaymentSerial } from "../../../lib/paymentSerial";
 import { requirePagePermission } from "../../../lib/pagePermissions";
 import { pettyCashLimitStatus, readPettyCashBalance } from "../../../lib/pettyCashLimit";
+import { isProjectControlUnit } from "../../../lib/project-control-unit";
 
 export const runtime = "nodejs";
 const json = (data, status = 200) => Response.json(data, { status });
@@ -76,6 +77,7 @@ async function requests(where = "", params = []) {
 async function settlements(ids) { if (!ids.length) return []; const data = await prisma.$queryRawUnsafe(`SELECT s.id,s.tenkhah_request_id AS "tenkhahRequestId",s.created_by_id AS "createdById",s.current_assignee_user_id AS "currentAssigneeUserId",s.stage,s.status,u.name AS "currentAssigneeName",u.username AS "currentAssigneeUsername" FROM tenkhah_settlements s LEFT JOIN "User" u ON u.id=s.current_assignee_user_id WHERE s.tenkhah_request_id=ANY($1::int[]) ORDER BY s.created_at DESC`, ids); const es = await prisma.$queryRawUnsafe(`SELECT id,settlement_id AS "settlementId",expense_date AS "expenseDate",description,budget_code AS "budgetCode",amount::text AS amount,file_name AS "fileName",file_url AS "fileUrl" FROM tenkhah_settlement_entries WHERE settlement_id=ANY($1::int[]) ORDER BY id`, data.map(x => x.id)); return data.map(s => ({ ...s, entries: es.filter(e => +e.settlementId === +s.id) })); }
 const norm = (value = "") => String(value).toLowerCase().replace(/ي/g, "ی").replace(/ك/g, "ک").replace(/\s+/g, " ");
 function isWorkflowUnitMember(stage, links = []) {
+  if (stage === "control_project") return (Array.isArray(links) ? links : []).some((link) => isProjectControlUnit(link?.unit));
   const unitNames = (Array.isArray(links) ? links : []).flatMap((link) => [norm(link?.unit?.name), norm(link?.unit?.code)]).filter(Boolean);
   const isProjectManagement = unitNames.some((name) => name.includes(norm("مدیریت پروژه")) || name.includes("project management"));
   if (stage === "project_manager") return isProjectManagement;
@@ -83,7 +85,6 @@ function isWorkflowUnitMember(stage, links = []) {
   // management. Do not exclude them from the later workflow step.
   if (stage === "management") return unitNames.some((name) => name.includes(norm("مدیریت")) || name.includes("management"));
   if (stage === "finance") return unitNames.some((name) => /مالی|حسابداری|finance|accounting/i.test(name));
-  if (stage === "control_project") return unitNames.some((name) => name.includes(norm("برنامه ریزی")) || name.includes(norm("برنامه‌ریزی")) || name.includes(norm("کنترل پروژه")) || name.includes("planning"));
   return false;
 }
 async function isFinanceUser(userId) {

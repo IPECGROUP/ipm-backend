@@ -5,6 +5,7 @@ import { isSessionExpired } from "../../../lib/security";
 import { reportNotificationState } from "../../../lib/pettyCashNotifications.mjs";
 import { expenseMoney } from "../../../lib/pettyCashExpenseMoney.mjs";
 import { nextSharedPaymentSerial } from "../../../lib/paymentSerial";
+import { isProjectControlUnit } from "../../../lib/project-control-unit";
 
 export const runtime = "nodejs";
 
@@ -146,10 +147,10 @@ function asAmount(value) {
 
 
 function belongsToWorkflowUnit(stage, unit) {
+  if (stage === "planning") return isProjectControlUnit(unit);
   const name = normalized(unit?.name);
   const code = normalized(unit?.code);
   const values = `${name} ${code}`.replace(/\u200c/g, " ");
-  if (stage === "planning") return /برنامه ریزی|کنترل پروژه|planning|project control/.test(values);
   if (stage === "project_manager") return /مدیریت پروژه|project management/.test(values);
   if (stage === "finance") return /مالی|حسابداری|finance|accounting/.test(values);
   if (stage === "management") return /مدیریت|management/.test(values) && !/مدیریت پروژه|project management|مالی|finance|accounting|کنترل پروژه/.test(values);
