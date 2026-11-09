@@ -17,6 +17,6 @@ export async function GET(request) {
   if (!["marandi", "nouri"].includes(String(user.username || "").toLowerCase())) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   try {
     const rows = await readSessionActivityLogs();
-    return NextResponse.json({ items: rows.map((row) => ({ id: row.session_id, name: row.name || row.username, username: row.username, loggedInAt: row.logged_in_at, loggedOutAt: row.logged_out_at })) }, { headers: { "Cache-Control": "no-store" } });
+    return NextResponse.json({ items: rows.map((row) => ({ id: row.session_id, name: row.name || row.username, username: row.username, loggedInAt: row.logged_in_at, loggedOutAt: row.logged_out_at, sessionActive: row.session_active })) }, { headers: { "Cache-Control": "no-store" } });
   } catch (error) { console.error("home_user_activity_failed", error); return NextResponse.json({ error: "user_activity_failed" }, { status: 500 }); }
 }
