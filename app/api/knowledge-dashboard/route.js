@@ -19,7 +19,7 @@ async function ensureKnowledgeSchemas() {
 }
 
 const number = (value) => Number(value || 0);
-const nameOf = (row) => row.name || row.username || `کاربر #${row.user_id}`;
+const nameOf = (row) => row.name || row.username || (row.user_id || row.created_by_id ? `کاربر #${row.user_id || row.created_by_id}` : "کاربر نامشخص");
 
 export async function GET(request) {
   try {
@@ -38,7 +38,7 @@ export async function GET(request) {
     const authors = Object.values(lessons.reduce((result, row) => { const id = String(row.created_by_id || "unknown"); const current = result[id] || { id, name: nameOf(row), count: 0 }; current.count += 1; result[id] = current; return result; }, {})).sort((a, b) => b.count - a.count || a.name.localeCompare(b.name, "fa"));
     const projects = Object.values(lessons.reduce((result, row) => { const id = String(row.project_id || "unknown"); const current = result[id] || { id, label: row.project_name || "بدون پروژه", count: 0 }; current.count += 1; result[id] = current; return result; }, {}));
     return json({
-      lessons: { total: lessons.length, authors: authors.length, topAuthors: authors.slice(0, 3), byProject: projects, byCategory: grouped(lessons, "category", "بدون دسته‌بندی"), byImportance: grouped(lessons, "importance", "نامشخص") },
+      lessons: { total: lessons.length, authors: authors.length, topAuthors: authors.slice(0, 3), byAuthor: authors, byProject: projects, byCategory: grouped(lessons, "category", "بدون دسته‌بندی"), byImportance: grouped(lessons, "importance", "نامشخص") },
       libraries: libraries.map((row) => ({ label: row.library_title || "بدون عنوان", count: number(row.count) })),
       resources: { total: resources.length, byCategory: grouped(resources, "category", "بدون دسته‌بندی") },
       visits: { lessons: lessonVisits.map((row) => ({ id: row.user_id, name: nameOf(row), count: number(row.count) })), training: resourceVisits.map((row) => ({ id: row.user_id, name: nameOf(row), count: number(row.count) })) },
