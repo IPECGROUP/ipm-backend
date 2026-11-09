@@ -620,12 +620,20 @@ export async function GET(request) {
       : "نمایش منو";
     const denied = await requireContractPermission(request, requiredPermission);
     if (denied) return denied;
+    const purpose = url.searchParams.get("purpose");
+    const purposePermissions = { excel: "خروجی اکسل", main_list_with_amounts: "لیست قراردادهای اصلی با مبلغ", preview: "پیش‌نمایش" };
+    if (purpose && !Object.hasOwn(purposePermissions, purpose)) return bad("invalid_purpose");
+    if (purpose) {
+      const purposeDenied = await requireContractPermission(request, purposePermissions[purpose]);
+      if (purposeDenied) return purposeDenied;
+    }
     await ensureContractSchema();
 
     const id = trimString(url.searchParams.get("id"));
     const projectId = parseOptionalProjectId(url.searchParams.get("projectId") || url.searchParams.get("project_id"));
     const documentType = normalizeDocumentType(url.searchParams.get("documentType") || url.searchParams.get("document_type") || "");
 
+    if (purpose === "preview" && !id) return bad("invalid_id");
     if (projectId === undefined) return bad("invalid_project_id");
     if ((url.searchParams.has("documentType") || url.searchParams.has("document_type")) && !documentType) {
       return bad("invalid_document_type");
@@ -634,11 +642,26 @@ export async function GET(request) {
     if (id) {
       const item = await getContractById(id);
       if (!item) return bad("not_found", 404);
-      return json({ item: mapRow(item) });
+      const mapped = mapRow(item);
+      if (purpose === "preview") {
+        const [general, calendar, technical, financial, insurance, appendices] = await Promise.all(
+          ["عمومی", "تقویم قرارداد", "دامنه کار", "مالی و تضامین", "تأمین اجتماعی", "الحاقیه"].map((permission) => hasPagePermission(request, "قراردادها", permission))
+        );
+        return json({ item: {
+          id: mapped.id, projectId: mapped.projectId, documentType: mapped.documentType,
+          contractNo: mapped.contractNo, subContractNo: mapped.subContractNo, parentContractId: mapped.parentContractId,
+          general: general ? mapped.general : {},
+          relatedLetterId: general ? mapped.relatedLetterId : "", relatedLetterIds: general ? mapped.relatedLetterIds : [],
+          calendar: calendar ? mapped.calendar : {}, technical: technical ? mapped.technical : {},
+          financial: { ...(financial ? mapped.financial : {}), appendices: appendices ? (mapped.financial?.appendices || []) : [] },
+          insurance: insurance ? mapped.insurance : {}, lastSavedSection: general ? mapped.lastSavedSection : "",
+        } });
+      }
+      return json({ item: mapped });
     }
 
     const items =
-      projectId || documentType
+      projectId || documentType || purpose === "excel"
         ? mergeRowsById(
             await listContracts({ projectId, documentType }),
             await listChildContracts({ projectId, documentType })
