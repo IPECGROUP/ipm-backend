@@ -106,9 +106,10 @@ export async function GET(request) {
     const kind = normalizeKind(searchParams.get("kind"));
     if (!kind) return json({ error: "invalid_kind" }, 400);
 
-    // A worksheet is always scoped to a selected project. Never return every
-    // project's financial data merely because the filter has not been chosen.
-    const rows = !projectId
+    // The overview explicitly requests all projects; the kind-specific page
+    // permission above still applies to every returned record.
+    const allProjects = searchParams.get("all") === "1";
+    const rows = !projectId && !allProjects
       ? []
       : projectId && contractId
       ? await prisma.$queryRaw`
