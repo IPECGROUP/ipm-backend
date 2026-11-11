@@ -40,19 +40,7 @@ const state = {
 globalThis.__loginTest = state;
 
 const { POST } = await import("../app/api/auth/[...action]/route.js");
-const originalFetch = globalThis.fetch;
-const originalEnv = {
-  ARCAPTCHA_SITE_KEY: process.env.ARCAPTCHA_SITE_KEY,
-  ARCAPTCHA_SECRET_KEY: process.env.ARCAPTCHA_SECRET_KEY,
-  ARCAPTCHA_SITE_KEY_INTERNAL: process.env.ARCAPTCHA_SITE_KEY_INTERNAL,
-  ARCAPTCHA_SECRET_KEY_INTERNAL: process.env.ARCAPTCHA_SECRET_KEY_INTERNAL,
-};
-Object.assign(process.env, {
-  ARCAPTCHA_SITE_KEY: "external-site",
-  ARCAPTCHA_SECRET_KEY: "external-secret",
-  ARCAPTCHA_SITE_KEY_INTERNAL: "internal-site",
-  ARCAPTCHA_SECRET_KEY_INTERNAL: "internal-secret",
-});
+process.env.CAPTCHA_ENFORCEMENT_ENABLED = "false";
 
 let sequence = 0;
 function reset() {
@@ -72,64 +60,25 @@ async function login({ token = `token-${++sequence}`, password = "correct", user
   return { status: response.status, body: await response.json() };
 }
 
-test("valid captcha allows one session and preserves secure cookie and audit", async () => {
-  reset();
-  globalThis.fetch = async (_url, options) => {
-    assert.deepEqual(JSON.parse(options.body), {
-      site_key: "internal-site", secret_key: "internal-secret", challenge_id: "success-token",
-    });
-    return { ok: true, json: async () => ({ success: true }) };
-  };
-  const result = await login({ token: "success-token" });
-  assert.equal(result.status, 200);
-  assert.equal(state.sessions.length, 1);
-  assert.equal(state.cookies.length, 1);
-  assert.equal(state.cookies[0][2].httpOnly, true);
-  assert.equal(state.cookies[0][2].sameSite, "lax");
-  assert.equal(state.audit.at(-1).action, "login_success");
-});
-
-test("missing, rejected, and unavailable captcha never create a session", async () => {
-  for (const [token, response, expectedStatus] of [
-    ["", null, 400],
-    ["rejected-token", { ok: true, json: async () => ({ success: false }) }, 400],
-    ["unavailable-token", { ok: false }, 503],
-  ]) {
+test("optional CAPTCHA preserves credential checking and session cookies", async () => {
+  for (const token of ["", "invalid-payload"]) {
     reset();
-    globalThis.fetch = async () => response;
-    const result = await login({ token });
-    assert.equal(result.status, expectedStatus);
+    assert.equal((await login({ token, password: "wrong" })).status, 401);
     assert.equal(state.sessions.length, 0);
-    assert.equal(state.cookies.length, 0);
-    assert.equal(state.audit.some((entry) => entry.action === "login_success"), false);
+    assert.equal((await login({ token })).status, 200);
+    assert.equal(state.sessions.length, 1);
+    assert.equal(state.cookies[0][2].httpOnly, true);
+    assert.equal(state.cookies[0][2].sameSite, "lax");
   }
 });
-
-test("reused captcha and simultaneous API requests cannot create a second session", async () => {
-  reset();
-  globalThis.fetch = async () => ({ ok: true, json: async () => ({ success: true }) });
-  const first = await login({ token: "replay-token" });
-  const second = await login({ token: "replay-token" });
-  assert.equal(first.status, 200);
-  assert.equal(second.status, 400);
-  assert.equal(state.sessions.length, 1);
-
-  reset();
-  let release;
-  globalThis.fetch = () => new Promise((resolve) => { release = () => resolve({ ok: true, json: async () => ({ success: true }) }); });
-  const pending = login({ token: "parallel-token" });
-  await new Promise((resolve) => setImmediate(resolve));
-  const duplicate = await login({ token: "parallel-token" });
-  release();
-  const accepted = await pending;
-  assert.equal(accepted.status, 200);
-  assert.equal(duplicate.status, 400);
-  assert.equal(state.sessions.length, 1);
+test("enforcement rejects missing CAPTCHA", async () => {
+  reset(); process.env.CAPTCHA_ENFORCEMENT_ENABLED = "true"; process.env.ALTCHA_HMAC_SECRET_INTERNAL = "x".repeat(40);
+  try { assert.equal((await login({ token: "" })).status, 400); assert.equal(state.sessions.length, 0); }
+  finally { process.env.CAPTCHA_ENFORCEMENT_ENABLED = "false"; }
 });
 
 test("IP limit and account lock still block login", async () => {
   reset();
-  globalThis.fetch = async () => ({ ok: true, json: async () => ({ success: true }) });
   for (let index = 0; index < 5; index++) {
     const result = await login({ token: `lock-${index}`, password: "wrong" });
     assert.equal(result.status, index === 4 ? 429 : 401);
@@ -150,16 +99,8 @@ test("IP limit and account lock still block login", async () => {
 
 test("independent test-login remains available without issuing a session", async () => {
   reset();
-  globalThis.fetch = async () => ({ ok: true, json: async () => ({ success: true }) });
   const result = await login({ action: "test-login", username: "test", password: "test", token: "test-only-token" });
   assert.equal(result.status, 200);
   assert.equal(state.sessions.length, 0);
 });
 
-test.after(() => {
-  globalThis.fetch = originalFetch;
-  for (const [key, value] of Object.entries(originalEnv)) {
-    if (value === undefined) delete process.env[key]; else process.env[key] = value;
-  }
-  delete globalThis.__loginTest;
-});

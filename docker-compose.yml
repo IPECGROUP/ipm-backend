@@ -11,6 +11,10 @@ services:
       dockerfile: Dockerfile
     environment:
       NODE_ENV: production
+      CAPTCHA_ENFORCEMENT_ENABLED: ${CAPTCHA_ENFORCEMENT_ENABLED:-false}
+      CAPTCHA_REDIS_URL: redis://captcha-store:6379
+      ALTCHA_HMAC_SECRET: ${ALTCHA_HMAC_SECRET:-}
+      ALTCHA_HMAC_SECRET_INTERNAL: ${ALTCHA_HMAC_SECRET_INTERNAL:-}
       DATABASE_URL: ${DATABASE_URL}
       UPLOADS_DIR: /app/public/uploads
       ONLYOFFICE_SERVER_URL: ${ONLYOFFICE_SERVER_URL:-http://localhost:8082}
@@ -22,6 +26,13 @@ services:
     # ✅ Persist uploads (shared with nginx)
     volumes:
       - uploads_data:/app/public/uploads
+
+  captcha-store:
+    image: redis:7-alpine
+    command: ["redis-server", "--appendonly", "yes", "--appendfsync", "always"]
+    restart: unless-stopped
+    volumes:
+      - captcha_data:/data
 
   nginx:
     image: nginx:alpine
@@ -51,4 +62,5 @@ services:
       JWT_ENABLED: "false"
 
 volumes:
+  captcha_data:
   uploads_data:

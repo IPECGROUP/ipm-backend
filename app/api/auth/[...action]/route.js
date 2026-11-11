@@ -4,7 +4,7 @@ export const dynamic = "force-dynamic";
 import { prisma } from "../../../../lib/prisma";
 import { cookies } from "next/headers";
 import crypto from "crypto";
-import { verifyTestCaptcha } from "../../../../lib/testCaptcha.mjs";
+import { checkLoginCaptcha } from "../../../../lib/captcha.mjs";
 import bcrypt from "bcryptjs";
 import { writeAuditLog } from "../../../../lib/auditLog";
 import { logSessionEnd, logSessionStart } from "../../../../lib/sessionActivityLog";
@@ -163,7 +163,7 @@ async function handleTestLogin(request) {
   if (attempts.length >= IP_LOGIN_MAX_ATTEMPTS) return json({ error: "too_many_login_attempts" }, 429);
   attempts.push(Date.now());
   testLoginAttempts.set(ip, attempts);
-  const captcha = await verifyTestCaptcha(request.headers.get("host"), body.captchaToken);
+  const captcha = await checkLoginCaptcha(request.headers.get("host"), body.captchaToken);
   if (!captcha.ok) return json({ error: captcha.error }, captcha.status);
 
   if (body.username !== "test" || body.password !== "test") return json({ error: "invalid_credentials" }, 401);
@@ -185,7 +185,7 @@ async function handleLogin(request) {
   }
   noteIpLoginAttempt(ip);
 
-  const captcha = await verifyTestCaptcha(request.headers.get("host"), body.captchaToken);
+  const captcha = await checkLoginCaptcha(request.headers.get("host"), body.captchaToken);
   if (!captcha.ok) return json({ error: captcha.error }, captcha.status);
 
   const existingLock = lockState(usernameKey);
