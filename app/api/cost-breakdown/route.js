@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "../../../lib/prisma";
+import { formatMinorUnits, parseRequestedAmount } from "../../../lib/paymentAmount";
 
 export const runtime = "nodejs";
 
@@ -178,7 +179,68 @@ export async function GET(req) {
       }
     }
 
-    return json({ items: items.map(serializeItem) });
+    const usageByCode = {};
+    if (projectId) {
+      const usedMinorUnits = new Map();
+      const addUsage = (codeValue, amountValue, alreadyMinor = false) => {
+        const code = String(codeValue ?? "").trim();
+        if (!code) return;
+        const amount = alreadyMinor
+          ? (parseRequestedAmount(amountValue, true)?.minorUnits ?? 0n)
+          : BigInt(String(amountValue || "0")) * 100n;
+        usedMinorUnits.set(code, (usedMinorUnits.get(code) || 0n) + amount);
+      };
+
+      const paymentRequests = await prisma.paymentRequest.findMany({
+        where: {
+          projectId,
+          scope: "projects",
+          status: { in: ["pending", "approved"] },
+          OR: [{ docId: null }, { docId: { notIn: ["supply_request", "tenkhah_request"] } }],
+        },
+        select: { budgetCode: true, amount: true, historyJson: true },
+      });
+      for (const request of paymentRequests) {
+        const created = Array.isArray(request.historyJson)
+          ? request.historyJson.find((entry) => entry?.type === "created")
+          : null;
+        const amount = created?.rialAmount ?? request.amount ?? 0;
+        addUsage(request.budgetCode, amount, true);
+      }
+
+      // Completed petty-cash expenses are the realized use of a budget line.
+      // Amounts in both tables are already stored as converted rials.
+      try {
+        const expenses = await prisma.$queryRaw`
+          SELECT budget_code AS code, COALESCE(SUM(amount), 0)::text AS total
+          FROM petty_cash_expenses
+          WHERE project_id = ${projectId} AND stage = 'completed'
+          GROUP BY budget_code
+        `;
+        for (const expense of expenses || []) addUsage(expense.code, expense.total);
+      } catch (error) {
+        if (!/petty_cash_expenses|does not exist|relation .* does not exist/i.test(String(error?.message || ""))) throw error;
+      }
+
+      // Include settlements created through the legacy tenkhah settlement flow.
+      try {
+        const settlementEntries = await prisma.$queryRaw`
+          SELECT e.budget_code AS code, COALESCE(SUM(e.amount), 0)::text AS total
+          FROM tenkhah_settlement_entries e
+          INNER JOIN tenkhah_settlements s ON s.id = e.settlement_id
+          INNER JOIN tenkhah_requests t ON t.id = s.tenkhah_request_id
+          WHERE t.project_id = ${projectId} AND s.status = 'completed'
+          GROUP BY e.budget_code
+        `;
+        for (const entry of settlementEntries || []) addUsage(entry.code, entry.total);
+      } catch (error) {
+        if (!/tenkhah_settlement_entries|tenkhah_settlements|tenkhah_requests|does not exist|relation .* does not exist/i.test(String(error?.message || ""))) throw error;
+      }
+
+      for (const [code, amount] of usedMinorUnits) usageByCode[code] = formatMinorUnits(amount);
+    }
+
+    return json({ items: items.map(serializeItem), usageByCode });
   } catch (e) {
     console.error("cost_breakdown_get_error", e);
     return json({ error: "internal_error" }, 500);
