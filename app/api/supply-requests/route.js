@@ -495,6 +495,10 @@ function isProjectControlContext(ctx) {
   return includesAny([...(ctx?.workflowUnitNames || ctx?.unitNames || []), ...(ctx?.roleNames || [])], ["برنامه ریزی", "برنامه‌ریزی", "کنترل پروژه"]);
 }
 
+function isProjectManagementContext(ctx) {
+  return includesAny([...(ctx?.unitNames || []), ...(ctx?.workflowUnitNames || []), ...(ctx?.roleNames || [])], ["مدیریت پروژه", "project management"]);
+}
+
 function isProjectManagerContext(ctx) {
   return includesAny(ctx?.roleNames || [], ["مدیر پروژه", "مدیریت پروژه", "project manager"]);
 }
@@ -846,6 +850,7 @@ export async function GET(req) {
 
     const userCtx = await userRoleAndUnitContext(userId);
     const isPlanningMember = isProjectControlContext(userCtx);
+    const isProjectManagementMember = isProjectManagementContext(userCtx);
     const cartableOnly = url.searchParams.get("cartable") === "1";
     const colleagueIds = await workflowColleagueIds(prisma, userId);
     colleagueIds.add(Number(userId));
@@ -864,6 +869,7 @@ export async function GET(req) {
       return (
         canDelete || Number(row.createdById) === Number(userId) ||
         isPlanningMember ||
+        isProjectManagementMember ||
         hasPerformedWorkflowAction(row, userId) || colleagueHandledWorkflow(row.historyJson, colleagueIds) ||
         actionParticipantRequestIds.has(Number(row.id)) ||
         isCompletedCommercialOwner ||

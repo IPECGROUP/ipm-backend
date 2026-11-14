@@ -276,6 +276,38 @@ function isSupplyParticipant(row, userId) {
   return actions.some((action) => Number(action?.byUserId) === targetUserId);
 }
 
+function normalizeFaText(value = "") {
+  return String(value || "")
+    .trim()
+    .toLowerCase()
+    .replace(/ي/g, "ی")
+    .replace(/ك/g, "ک")
+    .replace(/\s+/g, " ");
+}
+
+async function isProjectManagementMember(userId) {
+  const user = await prisma.user.findUnique({
+    where: { id: Number(userId) },
+    include: { units: { include: { unit: true } }, roles: { include: { role: true } } },
+  }).catch(() => null);
+  if (!user) return false;
+  const roleNames = [
+    ...(Array.isArray(user.roles) ? user.roles.map((row) => row.role?.name).filter(Boolean) : []),
+    user.role && user.role !== "user" ? user.role : "",
+  ].filter(Boolean);
+  const roleIds = (Array.isArray(user.roles) ? user.roles : []).map((row) => Number(row.roleId)).filter(Boolean);
+  const units = (Array.isArray(user.units) ? user.units.map((row) => row.unit).filter(Boolean) : []).map((unit) => unit?.name || "");
+  if (roleIds.length) {
+    const roleUnits = await prisma.unitRoleMap.findMany({
+      where: { roleId: { in: roleIds } },
+      include: { unit: true },
+    }).catch(() => []);
+    units.push(...roleUnits.map((row) => row.unit?.name || ""));
+  }
+  const names = [...units, ...roleNames].map(normalizeFaText);
+  return names.some((name) => name.includes(normalizeFaText("مدیریت پروژه")) || name.includes("project management"));
+}
+
 function statusData(nextStatus, row, history, userId, actorName = "") {
   if (nextStatus === "done") {
     const at = new Date().toISOString();
@@ -318,6 +350,7 @@ export async function GET(req) {
 
     const url = new URL(req.url);
     const requestId = toPositiveInt(url.searchParams.get("requestId") ?? url.searchParams.get("request_id"));
+    const canReadProjectManagement = await isProjectManagementMember(userId);
     const rows = await prisma.paymentRequest.findMany({
       where: {
         docId: REQUEST_DOC_ID,
@@ -333,7 +366,7 @@ export async function GET(req) {
       supplyActions: actionsMap.get(Number(row.id)) || [],
     }));
     const items = rowsWithProjects
-      .filter((row) => isSupplyParticipant(row, userId))
+      .filter((row) => canReadProjectManagement || isSupplyParticipant(row, userId))
       .map(serialize);
     return json({ ok: true, items });
   } catch (error) {
