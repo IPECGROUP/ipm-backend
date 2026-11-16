@@ -207,7 +207,14 @@ export async function GET(r) {
       return [Number(item.id), managementApproverById.get(Number(approval?.byUserId)) || null];
     }));
     const all = dashboardReport ? [] : await settlements(itemsWithWorkflowActors.map(x => x.id)); const shown = inbox ? all.filter(s => +s.currentAssigneeUserId === uid && s.status === "pending") : all.filter(s => +s.createdById === uid || +s.currentAssigneeUserId === uid);
-    return json({ items: itemsWithWorkflowActors.map(x => ({
+    const beneficiaryBalances = dashboardReport && url.searchParams.get("beneficiaryBalances") === "1"
+      ? await Promise.all([...new Set(items.filter((item) => item.status === "charged").map((item) => Number(item.beneficiaryUserId)).filter((id) => Number.isInteger(id) && id > 0))].map(async (id) => {
+        const item = items.find((request) => Number(request.beneficiaryUserId) === id);
+        const balance = await readPettyCashBalance(id);
+        return { id, name: item?.beneficiaryName || item?.beneficiaryUsername || item?.requesterName || `کاربر #${id}`, unsettledBalance: balance.unsettledBalance };
+      }))
+      : undefined;
+    return json({ beneficiaryBalances, items: itemsWithWorkflowActors.map(x => ({
       ...x,
       managementApprover: dashboardReport ? managementApproverByRequestId.get(Number(x.id)) || null : null,
       canAct: !dashboardReport && x.status === "pending" && (x.stage === "finance" ? financeMember : x.stage === "management" ? (x.currentAssigneeUserId ? +x.currentAssigneeUserId === uid : managementMember) : +x.currentAssigneeUserId === uid),
