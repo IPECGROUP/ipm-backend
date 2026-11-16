@@ -1,6 +1,7 @@
 import { NextResponse } from "next/server";
 import { prisma } from "../../../lib/prisma";
 import { formatMinorUnits, parseRequestedAmount } from "../../../lib/paymentAmount";
+import { isPendingBudgetCommitment } from "../../../lib/budgetCommitment";
 
 export const runtime = "nodejs";
 
@@ -180,15 +181,20 @@ export async function GET(req) {
     }
 
     const usageByCode = {};
+    const realizedUsageByCode = {};
+    const commitmentByCode = {};
     if (projectId) {
       const usedMinorUnits = new Map();
-      const addUsage = (codeValue, amountValue, alreadyMinor = false) => {
+      const realizedMinorUnits = new Map();
+      const commitmentMinorUnits = new Map();
+      const addUsage = (codeValue, amountValue, alreadyMinor = false, target = realizedMinorUnits) => {
         const code = String(codeValue ?? "").trim();
         if (!code) return;
         const amount = alreadyMinor
           ? (parseRequestedAmount(amountValue, true)?.minorUnits ?? 0n)
           : BigInt(String(amountValue || "0")) * 100n;
         usedMinorUnits.set(code, (usedMinorUnits.get(code) || 0n) + amount);
+        if (target) target.set(code, (target.get(code) || 0n) + amount);
       };
 
       const paymentRequests = await prisma.paymentRequest.findMany({
@@ -198,14 +204,21 @@ export async function GET(req) {
           status: { in: ["pending", "approved"] },
           OR: [{ docId: null }, { docId: { notIn: ["supply_request", "tenkhah_request"] } }],
         },
-        select: { budgetCode: true, amount: true, historyJson: true },
+        select: { budgetCode: true, amount: true, historyJson: true, status: true },
       });
       for (const request of paymentRequests) {
         const created = Array.isArray(request.historyJson)
           ? request.historyJson.find((entry) => entry?.type === "created")
           : null;
         const amount = created?.rialAmount ?? request.amount ?? 0;
-        addUsage(request.budgetCode, amount, true);
+        if (request.status === "approved") {
+          addUsage(request.budgetCode, amount, true);
+        } else if (isPendingBudgetCommitment(request)) {
+          addUsage(request.budgetCode, amount, true, commitmentMinorUnits);
+        } else {
+          // Preserve the existing usageByCode response for other consumers.
+          addUsage(request.budgetCode, amount, true, null);
+        }
       }
 
       // Completed petty-cash expenses are the realized use of a budget line.
@@ -238,9 +251,11 @@ export async function GET(req) {
       }
 
       for (const [code, amount] of usedMinorUnits) usageByCode[code] = formatMinorUnits(amount);
+      for (const [code, amount] of realizedMinorUnits) realizedUsageByCode[code] = formatMinorUnits(amount);
+      for (const [code, amount] of commitmentMinorUnits) commitmentByCode[code] = formatMinorUnits(amount);
     }
 
-    return json({ items: items.map(serializeItem), usageByCode });
+    return json({ items: items.map(serializeItem), usageByCode, realizedUsageByCode, commitmentByCode });
   } catch (e) {
     console.error("cost_breakdown_get_error", e);
     return json({ error: "internal_error" }, 500);
