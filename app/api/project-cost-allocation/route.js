@@ -27,6 +27,9 @@ function ensureTables() {
 
 const json = (value, status = 200) => NextResponse.json(value, { status, headers: { "Cache-Control": "no-store" } });
 const validYear = (value) => Number.isInteger(value) && value >= 1200 && value <= 1600;
+const isMainProject = (project) => /^\d{3}$/.test(String(project.code ?? "").trim()
+  .replace(/[۰-۹]/g, (digit) => "۰۱۲۳۴۵۶۷۸۹".indexOf(digit))
+  .replace(/[٠-٩]/g, (digit) => "٠١٢٣٤٥٦٧٨٩".indexOf(digit)));
 
 export async function GET(request) {
   const denied = await requirePagePermission(request, "کاربرگ مالی", "نمایش منو");
@@ -39,7 +42,7 @@ export async function GET(request) {
       prisma.project.findMany({ where: { isActive: true }, select: { id: true, name: true, code: true }, orderBy: { name: "asc" } }),
       prisma.$queryRaw`SELECT project_id, month, amount FROM project_cost_allocations WHERE year = ${year}`,
     ]);
-    return json({ projects, values: values.map((row) => ({ projectId: row.project_id, month: row.month, amount: row.amount == null ? "" : String(row.amount) })) });
+    return json({ projects: projects.filter(isMainProject), values: values.map((row) => ({ projectId: row.project_id, month: row.month, amount: row.amount == null ? "" : String(row.amount) })) });
   } catch (error) {
     console.error("project_cost_allocation_get", error);
     return json({ error: "load_failed" }, 500);
@@ -60,8 +63,8 @@ export async function PUT(request) {
     await prisma.$transaction(async (tx) => {
       // Serialize updates to a cell, including its first insert, so history is exact.
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(${projectId}::int, ${year * 100 + month}::int)::text`;
-      const project = await tx.project.findFirst({ where: { id: projectId, isActive: true }, select: { id: true } });
-      if (!project) throw new Error("inactive_project");
+      const project = await tx.project.findFirst({ where: { id: projectId, isActive: true }, select: { id: true, code: true } });
+      if (!project || !isMainProject(project)) throw new Error("inactive_project");
       const rows = await tx.$queryRaw`SELECT amount FROM project_cost_allocations WHERE project_id = ${projectId} AND year = ${year} AND month = ${month}`;
       const old = rows[0]?.amount == null ? null : String(rows[0].amount);
       const next = amount === null ? null : String(BigInt(amount));
