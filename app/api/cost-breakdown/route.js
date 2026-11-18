@@ -28,6 +28,18 @@ function toPositiveInt(value) {
   return Number.isFinite(n) && n > 0 ? Math.trunc(n) : null;
 }
 
+function jalaliYearMonth(value) {
+  const normalized = String(value ?? "")
+    .replace(/[\u06f0-\u06f9]/g, (digit) => String(digit.charCodeAt(0) - 0x06f0))
+    .replace(/[\u0660-\u0669]/g, (digit) => String(digit.charCodeAt(0) - 0x0660))
+    .trim();
+  const match = normalized.match(/^(\d{4})[/-](\d{1,2})(?:[/-]\d{1,2})?$/);
+  if (!match) return null;
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  return month >= 1 && month <= 12 ? { year, month } : null;
+}
+
 function toBigIntAmount(value) {
   const raw = String(value ?? "0")
     .replace(/[۰-۹]/g, (d) => "۰۱۲۳۴۵۶۷۸۹".indexOf(d))
@@ -123,6 +135,10 @@ export async function GET(req) {
   try {
     const { searchParams } = new URL(req.url);
     const projectId = toPositiveInt(searchParams.get("project_id"));
+    const consumptionYear = toPositiveInt(searchParams.get("consumption_year"));
+    if (searchParams.has("consumption_year") && (!consumptionYear || consumptionYear < 1300 || consumptionYear > 1500)) {
+      return json({ error: "invalid_consumption_year" }, 400);
+    }
 
     const queryItems = () =>
       projectId
@@ -183,10 +199,21 @@ export async function GET(req) {
     const usageByCode = {};
     const realizedUsageByCode = {};
     const commitmentByCode = {};
+    const monthlyRealizedUsageByCode = {};
+    let exchangeRates = [];
     if (projectId) {
       const usedMinorUnits = new Map();
       const realizedMinorUnits = new Map();
       const commitmentMinorUnits = new Map();
+      const monthlyMinorUnits = new Map();
+      const addMonthlyUsage = (codeValue, dateValue, amountMinorUnits) => {
+        if (!consumptionYear) return;
+        const code = String(codeValue ?? "").trim();
+        const date = jalaliYearMonth(dateValue);
+        if (!code || date?.year !== consumptionYear) return;
+        const key = `${code}\u0000${date.month}`;
+        monthlyMinorUnits.set(key, (monthlyMinorUnits.get(key) || 0n) + amountMinorUnits);
+      };
       const addUsage = (codeValue, amountValue, alreadyMinor = false, target = realizedMinorUnits) => {
         const code = String(codeValue ?? "").trim();
         if (!code) return;
@@ -204,7 +231,7 @@ export async function GET(req) {
           status: { in: ["pending", "approved"] },
           OR: [{ docId: null }, { docId: { notIn: ["supply_request", "tenkhah_request"] } }],
         },
-        select: { budgetCode: true, amount: true, historyJson: true, status: true },
+        select: { budgetCode: true, amount: true, historyJson: true, status: true, dateJalali: true },
       });
       for (const request of paymentRequests) {
         const created = Array.isArray(request.historyJson)
@@ -213,6 +240,10 @@ export async function GET(req) {
         const amount = created?.rialAmount ?? request.amount ?? 0;
         if (request.status === "approved") {
           addUsage(request.budgetCode, amount, true);
+          const approvedMinorUnits = created?.rialAmount != null
+            ? parseRequestedAmount(created.rialAmount, true)?.minorUnits
+            : BigInt(String(request.amount ?? 0)) * 100n;
+          if (approvedMinorUnits != null) addMonthlyUsage(request.budgetCode, request.dateJalali, approvedMinorUnits);
         } else if (isPendingBudgetCommitment(request)) {
           addUsage(request.budgetCode, amount, true, commitmentMinorUnits);
         } else {
@@ -246,6 +277,18 @@ export async function GET(req) {
           GROUP BY e.budget_code
         `;
         for (const entry of settlementEntries || []) addUsage(entry.code, entry.total);
+        if (consumptionYear) {
+          const monthlyEntries = await prisma.$queryRaw`
+            SELECT e.budget_code AS code, e.expense_date AS "date", e.amount::text AS amount
+            FROM tenkhah_settlement_entries e
+            INNER JOIN tenkhah_settlements s ON s.id = e.settlement_id
+            INNER JOIN tenkhah_requests t ON t.id = s.tenkhah_request_id
+            WHERE t.project_id = ${projectId} AND s.status = 'completed'
+          `;
+          for (const entry of monthlyEntries || []) {
+            addMonthlyUsage(entry.code, entry.date, BigInt(String(entry.amount ?? 0)) * 100n);
+          }
+        }
       } catch (error) {
         if (!/tenkhah_settlement_entries|tenkhah_settlements|tenkhah_requests|does not exist|relation .* does not exist/i.test(String(error?.message || ""))) throw error;
       }
@@ -253,9 +296,30 @@ export async function GET(req) {
       for (const [code, amount] of usedMinorUnits) usageByCode[code] = formatMinorUnits(amount);
       for (const [code, amount] of realizedMinorUnits) realizedUsageByCode[code] = formatMinorUnits(amount);
       for (const [code, amount] of commitmentMinorUnits) commitmentByCode[code] = formatMinorUnits(amount);
+      for (const [key, amount] of monthlyMinorUnits) {
+        const [code, month] = key.split("\u0000");
+        (monthlyRealizedUsageByCode[code] ??= {})[month] = formatMinorUnits(amount);
+      }
+      if (consumptionYear) {
+        try {
+          const rates = await prisma.$queryRaw`
+            SELECT currency_id AS "currencyId", source_id AS "sourceId", month, rate::text AS rate
+            FROM project_exchange_rates
+            WHERE year = ${consumptionYear} AND rate IS NOT NULL
+          `;
+          exchangeRates = (rates || []).map((rate) => ({
+            currencyId: rate.currencyId,
+            sourceId: rate.sourceId,
+            month: rate.month,
+            rate: rate.rate,
+          }));
+        } catch (error) {
+          if (!/project_exchange_rates|does not exist|relation .* does not exist/i.test(String(error?.message || ""))) throw error;
+        }
+      }
     }
 
-    return json({ items: items.map(serializeItem), usageByCode, realizedUsageByCode, commitmentByCode });
+    return json({ items: items.map(serializeItem), usageByCode, realizedUsageByCode, commitmentByCode, monthlyRealizedUsageByCode, exchangeRates });
   } catch (e) {
     console.error("cost_breakdown_get_error", e);
     return json({ error: "internal_error" }, 500);
