@@ -53,6 +53,8 @@ export async function PUT(request) {
     const currencyId = Number(body.currencyId), sourceId = Number(body.sourceId), year = Number(body.year), month = Number(body.month);
     const rate = body.rate === "" ? null : String(body.rate);
     if (!Number.isInteger(currencyId) || currencyId <= 0 || !Number.isInteger(sourceId) || sourceId <= 0 || !validYear(year) || !Number.isInteger(month) || month < 1 || month > 12 || (rate !== null && !/^\d{1,18}$/.test(rate))) return json({ error: "invalid_value" }, 400);
+    const current = Object.fromEntries(new Intl.DateTimeFormat("en-US-u-ca-persian", { timeZone: "Asia/Tehran", year: "numeric", month: "numeric" }).formatToParts(new Date()).map(({ type, value }) => [type, Number(value)]));
+    if (year > current.year || (year === current.year && month > current.month)) return json({ error: "future_period" }, 400);
     await ensureTables();
     await prisma.$transaction(async (tx) => {
       await tx.$queryRaw`SELECT pg_advisory_xact_lock(${currencyId}::int, ${sourceId}::int)::text`;
