@@ -136,6 +136,7 @@ export async function GET(req) {
     const { searchParams } = new URL(req.url);
     const projectId = toPositiveInt(searchParams.get("project_id"));
     const consumptionYear = toPositiveInt(searchParams.get("consumption_year"));
+    const allConsumption = searchParams.get("consumption_all") === "1";
     if (searchParams.has("consumption_year") && (!consumptionYear || consumptionYear < 1300 || consumptionYear > 1500)) {
       return json({ error: "invalid_consumption_year" }, 400);
     }
@@ -200,18 +201,26 @@ export async function GET(req) {
     const realizedUsageByCode = {};
     const commitmentByCode = {};
     const monthlyRealizedUsageByCode = {};
+    const datedRealizedUsageByCode = {};
     let exchangeRates = [];
     if (projectId) {
       const usedMinorUnits = new Map();
       const realizedMinorUnits = new Map();
       const commitmentMinorUnits = new Map();
       const monthlyMinorUnits = new Map();
+      const todayParts = new Intl.DateTimeFormat("en-US-u-ca-persian", { timeZone: "Asia/Tehran", year: "numeric", month: "numeric", day: "numeric" }).formatToParts(new Date());
+      const today = Object.fromEntries(todayParts.map(({ type, value }) => [type, Number(value)]));
       const addMonthlyUsage = (codeValue, dateValue, amountMinorUnits) => {
-        if (!consumptionYear) return;
+        if (!consumptionYear && !allConsumption) return;
         const code = String(codeValue ?? "").trim();
         const date = jalaliYearMonth(dateValue);
-        if (!code || date?.year !== consumptionYear) return;
-        const key = `${code}\u0000${date.month}`;
+        if (!code || !date || (!allConsumption && date.year !== consumptionYear)) return;
+        if (allConsumption) {
+          const normalizedDate = String(dateValue ?? "").replace(/[\u06f0-\u06f9]/g, (d) => String(d.charCodeAt(0) - 0x06f0)).replace(/[\u0660-\u0669]/g, (d) => String(d.charCodeAt(0) - 0x0660));
+          const day = Number(normalizedDate.match(/^\d{4}[/-]\d{1,2}[/-](\d{1,2})/)?.[1] || 1);
+          if (date.year * 10000 + date.month * 100 + day > today.year * 10000 + today.month * 100 + today.day) return;
+        }
+        const key = allConsumption ? `${code}\u0000${date.year}\u0000${date.month}` : `${code}\u0000${date.month}`;
         monthlyMinorUnits.set(key, (monthlyMinorUnits.get(key) || 0n) + amountMinorUnits);
       };
       const addUsage = (codeValue, amountValue, alreadyMinor = false, target = realizedMinorUnits) => {
@@ -262,6 +271,10 @@ export async function GET(req) {
           GROUP BY budget_code
         `;
         for (const expense of expenses || []) addUsage(expense.code, expense.total);
+        if (consumptionYear || allConsumption) {
+          const datedExpenses = await prisma.$queryRaw`SELECT budget_code AS code, expense_date AS "date", amount::text AS amount FROM petty_cash_expenses WHERE project_id = ${projectId} AND stage = 'completed'`;
+          for (const expense of datedExpenses || []) addMonthlyUsage(expense.code, expense.date, BigInt(String(expense.amount ?? 0)) * 100n);
+        }
       } catch (error) {
         if (!/petty_cash_expenses|does not exist|relation .* does not exist/i.test(String(error?.message || ""))) throw error;
       }
@@ -277,7 +290,7 @@ export async function GET(req) {
           GROUP BY e.budget_code
         `;
         for (const entry of settlementEntries || []) addUsage(entry.code, entry.total);
-        if (consumptionYear) {
+        if (consumptionYear || allConsumption) {
           const monthlyEntries = await prisma.$queryRaw`
             SELECT e.budget_code AS code, e.expense_date AS "date", e.amount::text AS amount
             FROM tenkhah_settlement_entries e
@@ -297,19 +310,21 @@ export async function GET(req) {
       for (const [code, amount] of realizedMinorUnits) realizedUsageByCode[code] = formatMinorUnits(amount);
       for (const [code, amount] of commitmentMinorUnits) commitmentByCode[code] = formatMinorUnits(amount);
       for (const [key, amount] of monthlyMinorUnits) {
-        const [code, month] = key.split("\u0000");
-        (monthlyRealizedUsageByCode[code] ??= {})[month] = formatMinorUnits(amount);
+        const [code, first, second] = key.split("\u0000");
+        if (allConsumption) ((datedRealizedUsageByCode[code] ??= {})[first] ??= {})[second] = formatMinorUnits(amount);
+        else (monthlyRealizedUsageByCode[code] ??= {})[first] = formatMinorUnits(amount);
       }
-      if (consumptionYear) {
+      if (consumptionYear || allConsumption) {
         try {
           const rates = await prisma.$queryRaw`
-            SELECT currency_id AS "currencyId", source_id AS "sourceId", month, rate::text AS rate
+            SELECT currency_id AS "currencyId", source_id AS "sourceId", year, month, rate::text AS rate
             FROM project_exchange_rates
-            WHERE year = ${consumptionYear} AND rate IS NOT NULL
+            WHERE (${allConsumption} OR year = ${consumptionYear}) AND rate IS NOT NULL
           `;
           exchangeRates = (rates || []).map((rate) => ({
             currencyId: rate.currencyId,
             sourceId: rate.sourceId,
+            year: rate.year,
             month: rate.month,
             rate: rate.rate,
           }));
@@ -319,7 +334,7 @@ export async function GET(req) {
       }
     }
 
-    return json({ items: items.map(serializeItem), usageByCode, realizedUsageByCode, commitmentByCode, monthlyRealizedUsageByCode, exchangeRates });
+    return json({ items: items.map(serializeItem), usageByCode, realizedUsageByCode, commitmentByCode, monthlyRealizedUsageByCode, datedRealizedUsageByCode, exchangeRates });
   } catch (e) {
     console.error("cost_breakdown_get_error", e);
     return json({ error: "internal_error" }, 500);
