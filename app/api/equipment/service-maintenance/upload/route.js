@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { prisma } from "../../../../../lib/prisma";
+import { requirePagePermission } from "../../../../../lib/pagePermissions";
 import { safeOriginalName, validateUpload } from "../../../../../lib/uploadSecurity";
 
 export const runtime = "nodejs";
@@ -17,6 +18,8 @@ async function isAuthenticated(request) {
 }
 
 export async function POST(request) {
+  const denied = await requirePagePermission(request, "سرویس و نگهداری", "افزودن");
+  if (denied) return denied;
   try {
     if (!await isAuthenticated(request)) return Response.json({ error: "unauthorized" }, { status: 401 });
     const form = await request.formData().catch(() => null);

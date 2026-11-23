@@ -3,6 +3,7 @@ import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { NextResponse } from "next/server";
 import { prisma } from "../../../../lib/prisma";
+import { requirePagePermission } from "../../../../lib/pagePermissions";
 import { validateUpload } from "../../../../lib/uploadSecurity";
 
 export const runtime = "nodejs";
@@ -20,6 +21,8 @@ async function isAuthenticated(request) {
 }
 
 export async function POST(request) {
+  const denied = await requirePagePermission(request, "شناسنامه تجهیزات", "افزودن");
+  if (denied) return denied;
   try {
     if (!await isAuthenticated(request)) return json({ error: "unauthorized" }, 401);
     const form = await request.formData();

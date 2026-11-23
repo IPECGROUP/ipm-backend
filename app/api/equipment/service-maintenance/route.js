@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { prisma } from "../../../../lib/prisma";
+import { requirePagePermission } from "../../../../lib/pagePermissions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -63,6 +64,8 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
+  const denied = await requirePagePermission(request, "سرویس و نگهداری", "افزودن");
+  if (denied) return denied;
   try {
     const user = await currentUser(request);
     if (!user) return json({ error: "unauthorized" }, 401);

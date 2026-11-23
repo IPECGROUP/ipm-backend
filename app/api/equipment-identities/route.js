@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { prisma } from "../../../lib/prisma";
+import { requirePagePermission } from "../../../lib/pagePermissions";
 import { ensureEquipmentFieldTables } from "../../../lib/equipmentFieldsSchema";
 import { ensureEquipmentSpecificationsTable } from "../../../lib/equipmentSpecificationsSchema";
 
@@ -77,6 +78,8 @@ export async function GET(request) {
 }
 
 export async function POST(request) {
+  const denied = await requirePagePermission(request, "شناسنامه تجهیزات", "افزودن");
+  if (denied) return denied;
   try {
     const user = await currentUser(request);
     if (!user) return json({ error: "unauthorized" }, 401);
@@ -120,6 +123,8 @@ export async function POST(request) {
 }
 
 export async function PATCH(request) {
+  const denied = await requirePagePermission(request, "شناسنامه تجهیزات", "افزودن");
+  if (denied) return denied;
   try {
     if (!await currentUser(request)) return json({ error: "unauthorized" }, 401);
     const body = await request.json().catch(() => ({}));
