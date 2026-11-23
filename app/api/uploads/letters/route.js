@@ -200,7 +200,7 @@ export async function POST(req) {
     if (!file) return cleanupAndBad("missing_file");
 
     const content = await fs.readFile(file.tempPath);
-    const checked = validateUpload({ name: file.originalName, size: file.size, buffer: content });
+    const checked = validateUpload({ name: file.originalName, size: file.size, buffer: content, profile: "letters" });
     if (!checked.ok) return cleanupAndBad(checked.error, 415);
     file.originalName = checked.originalName;
     file.mimeType = checked.mimeType;
