@@ -144,6 +144,8 @@ export async function GET(request) {
 
 export async function POST(request) {
   try {
+    const writeDenied = await requirePagePermission(request, "کاربرگ مالی", "افزودن");
+    if (writeDenied) return writeDenied;
     const peekBody = await request.clone().json().catch(() => null);
     const permission = peekBody?.kind === "receipts" ? "دریافتی‌ها" : "صورت وضعیت‌ها";
     const denied = await requirePagePermission(request, "کاربرگ مالی", permission);

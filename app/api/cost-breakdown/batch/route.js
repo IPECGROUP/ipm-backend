@@ -3,7 +3,7 @@ import { prisma } from "@/lib/prisma";
 import { hasPagePermission } from "@/lib/pagePermissions";
 
 export async function POST(request) {
-  if (!await hasPagePermission(request, "ساختار شکست هزینه‌ها", "نمایش منو")) return NextResponse.json({ error: "forbidden" }, { status: 403 });
+  if (!await hasPagePermission(request, "ساختار شکست هزینه‌ها", "افزودن")) return NextResponse.json({ error: "forbidden" }, { status: 403 });
   const body = await request.json().catch(() => null);
   const projectId = Number(body?.projectId);
   const rows = body?.rows;

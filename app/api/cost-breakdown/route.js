@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "../../../lib/prisma";
+import { requirePagePermission } from "../../../lib/pagePermissions";
 import { formatMinorUnits, parseRequestedAmount } from "../../../lib/paymentAmount";
 import { isPendingBudgetCommitment } from "../../../lib/budgetCommitment";
 
@@ -342,6 +343,8 @@ export async function GET(req) {
 }
 
 export async function POST(req) {
+  const denied = await requirePagePermission(req, "ساختار شکست هزینه‌ها", "افزودن");
+  if (denied) return denied;
   try {
     await ensureCostBreakdownTable();
 
@@ -378,6 +381,8 @@ export async function POST(req) {
 }
 
 export async function PATCH(req) {
+  const denied = await requirePagePermission(req, "ساختار شکست هزینه‌ها", "افزودن");
+  if (denied) return denied;
   try {
     await ensureCostBreakdownTable();
 
@@ -453,6 +458,8 @@ export async function PATCH(req) {
 }
 
 export async function DELETE(req) {
+  const denied = await requirePagePermission(req, "ساختار شکست هزینه‌ها", "حذف");
+  if (denied) return denied;
   try {
     await ensureCostBreakdownTable();
 

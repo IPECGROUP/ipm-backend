@@ -51,8 +51,8 @@ export async function GET(request) {
 }
 
 export async function PUT(request) {
-  const denied = await requirePagePermission(request, "کاربرگ مالی", "نمایش منو");
-  if (denied && !await hasPagePermission(request, "پارامترهای مالی پروژه‌ها", "نمایش منو")) return denied;
+  const denied = await requirePagePermission(request, "پارامترهای مالی پروژه‌ها", "افزودن");
+  if (denied) return denied;
   try {
     const actor = await getAuthenticatedUser(request);
     if (!actor) return json({ error: "forbidden" }, 403);

@@ -14,6 +14,8 @@ function json(data, status = 200) {
 
 export async function POST(request) {
   try {
+    const writeDenied = await requirePagePermission(request, "کاربرگ مالی", "افزودن");
+    if (writeDenied) return writeDenied;
     const denied = await requirePagePermission(request, "کاربرگ مالی", "صورت وضعیت‌ها");
     if (denied) return denied;
 
