@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import { NextResponse } from "next/server";
 import { prisma } from "../../../../lib/prisma";
+import { requirePagePermission } from "../../../../lib/pagePermissions";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -83,6 +84,8 @@ export async function POST(request) {
   try {
     const user = await currentUser(request);
     if (!user) return json({ error: "unauthorized" }, 401);
+    const denied = await requirePagePermission(request, "رسیدهای تحویل", "افزودن");
+    if (denied) return denied;
     const body = await request.json().catch(() => ({}));
     const { date, type, title, recipient, files, valid } = receiptFields(body);
     if (!valid) return json({ error: "invalid_delivery_receipt" }, 400);
@@ -107,6 +110,8 @@ export async function PATCH(request) {
   try {
     const user = await currentUser(request);
     if (!user) return json({ error: "unauthorized" }, 401);
+    const denied = await requirePagePermission(request, "رسیدهای تحویل", "افزودن");
+    if (denied) return denied;
     const body = await request.json().catch(() => ({}));
     const id = String(body.id || "");
     const { date, type, title, recipient, files, valid } = receiptFields(body);

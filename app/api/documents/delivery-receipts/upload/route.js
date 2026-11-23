@@ -3,6 +3,7 @@ import path from "node:path";
 import { mkdir, writeFile } from "node:fs/promises";
 import { NextResponse } from "next/server";
 import { prisma } from "../../../../../lib/prisma";
+import { requirePagePermission } from "../../../../../lib/pagePermissions";
 import { validateUpload } from "../../../../../lib/uploadSecurity";
 
 export const runtime = "nodejs";
@@ -22,6 +23,8 @@ async function isAuthenticated(request) {
 export async function POST(request) {
   try {
     if (!await isAuthenticated(request)) return json({ error: "unauthorized" }, 401);
+    const denied = await requirePagePermission(request, "رسیدهای تحویل", "افزودن");
+    if (denied) return denied;
     const form = await request.formData();
     const file = form.get("file");
     if (!file || typeof file.arrayBuffer !== "function") return json({ error: "no_file" }, 400);
