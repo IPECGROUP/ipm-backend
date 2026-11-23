@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { prisma } from "../../../lib/prisma";
-import { requirePagePermission } from "../../../lib/pagePermissions";
+import { hasPagePermission, requirePagePermission } from "../../../lib/pagePermissions";
 import { getAuthenticatedUser } from "../../../lib/security";
 
 export const runtime = "nodejs";
@@ -34,7 +34,7 @@ const isGeneral = (project) => String(project.name || "").trim().replace(/ي/g, 
 
 export async function GET(request) {
   const denied = await requirePagePermission(request, "کاربرگ مالی", "نمایش منو");
-  if (denied) return denied;
+  if (denied && !await hasPagePermission(request, "پارامترهای مالی پروژه‌ها", "نمایش منو")) return denied;
   const year = Number(new URL(request.url).searchParams.get("year"));
   if (!validYear(year)) return json({ error: "invalid_year" }, 400);
   try {
@@ -52,7 +52,7 @@ export async function GET(request) {
 
 export async function PUT(request) {
   const denied = await requirePagePermission(request, "کاربرگ مالی", "نمایش منو");
-  if (denied) return denied;
+  if (denied && !await hasPagePermission(request, "پارامترهای مالی پروژه‌ها", "نمایش منو")) return denied;
   try {
     const actor = await getAuthenticatedUser(request);
     if (!actor) return json({ error: "forbidden" }, 403);
