@@ -213,6 +213,10 @@ function normalizeProjectCode(value = "") {
   return raw.match(/^(\d{3})/)?.[1] || "";
 }
 
+function canEditAllSupplyRequests(user) {
+  return ["ali", "marandi"].includes(String(user?.username || "").trim().toLowerCase());
+}
+
 function isMainAdmin(user) {
   const username = String(user?.username || "").trim().toLowerCase();
   const email = String(user?.email || "").trim().toLowerCase();
@@ -671,6 +675,7 @@ function serializeItem(row) {
     workflowMeta: latestWorkflowMeta(row),
     canAct,
     canEditPlanning: row.canEditPlanning === true,
+    canEditAll: row.canEditAll === true,
     canDelete: row.canDelete === true,
     createdById: row.createdById,
     createdByName: row.createdBy?.name || row.createdBy?.username || row.createdBy?.email || null,
@@ -776,7 +781,8 @@ export async function GET(req) {
       return json({ users });
     }
 
-    const { mainAdmin } = await userContext(userId);
+    const { mainAdmin, user } = await userContext(userId);
+    const canEditAll = canEditAllSupplyRequests(user);
     const ownerOnly = url.searchParams.get("owner") === "me";
     const search = cleanText(url.searchParams.get("search") || "", 120);
     const requestedPage = Number(url.searchParams.get("page") || 1);
@@ -867,7 +873,7 @@ export async function GET(req) {
         ["approved", "rejected"].includes(row.status);
       if (cartableOnly) return canAct && Number(row.currentAssigneeUserId) === Number(userId);
       return (
-        canDelete || Number(row.createdById) === Number(userId) ||
+        canEditAll || canDelete || Number(row.createdById) === Number(userId) ||
         isPlanningMember ||
         isProjectManagementMember ||
         hasPerformedWorkflowAction(row, userId) || colleagueHandledWorkflow(row.historyJson, colleagueIds) ||
@@ -888,9 +894,11 @@ export async function GET(req) {
         requestType: requestTypesById.get(Number(row.id)),
         project: projectById.get(Number(row.projectId)) || null,
         canAct: canActOnSupplyStep({ row, userId, userCtx, mainAdmin }),
+        canEditAll,
         canEditPlanning: isPlanningMember && !!getCurrentStep(row.historyJson) && row.status !== "rejected",
         canDelete: canDelete || Number(row.createdById) === Number(userId),
       })),
+      canEditAll,
       pagination: { page, pageSize, total, hasMore: page * pageSize < total },
     });
   } catch (e) {
@@ -1247,17 +1255,24 @@ export async function PATCH(req) {
         canAct: canActOnSupplyStep({ row: result.updated, userId }), canEditPlanning: true,
         canDelete: await canDeleteFinancialRecords(userId) || Number(result.updated.createdById) === Number(userId) }) });
     }
-    if (Number(row.createdById) !== Number(userId)) return json({ error: "forbidden" }, 403);
-    if (Array.isArray(row.historyJson) && row.historyJson.some((entry) => entry?.type === "approved" || entry?.status === "approved")) {
+    const { user } = await userContext(userId);
+    const canEditAll = canEditAllSupplyRequests(user);
+    if (!canEditAll && Number(row.createdById) !== Number(userId)) return json({ error: "forbidden" }, 403);
+    if (!canEditAll && Array.isArray(row.historyJson) && row.historyJson.some((entry) => entry?.type === "approved" || entry?.status === "approved")) {
       return json({ error: "approval_already_recorded" }, 409);
     }
 
     const projectId = toPositiveInt(body.projectId ?? body.project_id);
-    const project = await resolveProject(projectId);
+    const project = canEditAll && projectId === Number(row.projectId) ? await prisma.project.findUnique({ where: { id: projectId }, select: { id: true, code: true, name: true } }) : await resolveProject(projectId);
     if (!project) return json({ error: "active_project_not_found" }, 404);
     const title = cleanText(body.title, 255);
     const budgetCode = cleanText(body.budgetCode ?? body.budget_code, 80);
-    if (projectId !== Number(row.projectId) || budgetCode !== row.budgetCode) return json({ error: "forbidden" }, 403);
+    if (!canEditAll && (projectId !== Number(row.projectId) || budgetCode !== row.budgetCode)) return json({ error: "forbidden" }, 403);
+    if (canEditAll && (projectId !== Number(row.projectId) || budgetCode !== row.budgetCode)) {
+      const budgets = await prisma.costBreakdownItem.findMany({ where: { projectId }, select: { budgetCode: true } });
+      const normalizeCode = (value) => normalizeDigits(value).trim().toUpperCase().replace(/[^\d.-]/g, "-").replace(/[.-]+/g, "-").replace(/^-|-$/g, "");
+      if (!budgets.some((budget) => { const code = normalizeCode(budget.budgetCode); return code && (normalizeCode(budgetCode) === code || normalizeCode(budgetCode) === normalizeCode(project.code) + "-" + code); })) return json({ error: "budget_code_not_found" }, 400);
+    }
     const amount = toBigIntAmount(body.amount);
     const currencyTypeId = toPositiveInt(body.currencyTypeId ?? body.currency_type_id);
     const hasRequestType = Object.hasOwn(body, "requestTypeId");
@@ -1274,7 +1289,7 @@ export async function PATCH(req) {
         `SELECT "historyJson", "serial" FROM "PaymentRequest" WHERE "id" = $1 FOR UPDATE`,
         id,
       );
-      if (Array.isArray(lockedRows?.[0]?.historyJson) && lockedRows[0].historyJson.some((entry) => entry?.type === "approved" || entry?.status === "approved")) {
+      if (!canEditAll && Array.isArray(lockedRows?.[0]?.historyJson) && lockedRows[0].historyJson.some((entry) => entry?.type === "approved" || entry?.status === "approved")) {
         throw new Error("approval_already_recorded");
       }
       const serial = serialForProject(lockedRows?.[0]?.serial, project.code);
@@ -1312,7 +1327,8 @@ export async function PATCH(req) {
       project,
       canAct: canActOnSupplyStep({ row: updated, userId, userCtx, mainAdmin }),
       canEditPlanning: isProjectControlContext(userCtx) && !!getCurrentStep(updated.historyJson) && updated.status !== "rejected",
-      canDelete: true,
+      canEditAll,
+      canDelete: await canDeleteFinancialRecords(userId) || Number(updated.createdById) === Number(userId),
     }) });
   } catch (e) {
     console.error("supply_requests_patch_error", e);
