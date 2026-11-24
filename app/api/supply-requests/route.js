@@ -1,3 +1,5 @@
+import { getAuthenticatedUser } from "../../../lib/security";
+import { supplyDelegatedUserId } from "../../../lib/supplyDelegation";
 import { workflowColleagueIds, colleagueHandledWorkflow } from "../../../lib/workflowUnitVisibility";
 import { canDeleteFinancialRecords } from "../../../lib/deleteAccess";
 import { NextResponse } from "next/server";
@@ -676,6 +678,8 @@ function serializeItem(row) {
     canAct,
     canEditPlanning: row.canEditPlanning === true,
     canEditAll: row.canEditAll === true,
+    delegatedCreator: row.delegatedCreator === true,
+    delegatedAssignee: row.delegatedAssignee === true,
     canDelete: row.canDelete === true,
     createdById: row.createdById,
     createdByName: row.createdBy?.name || row.createdBy?.username || row.createdBy?.email || null,
@@ -747,6 +751,9 @@ export async function GET(req) {
     const userId = await getUserId(req);
     if (!userId) return json({ error: "unauthorized" }, 401);
 
+    const authenticatedUser = await getAuthenticatedUser(req);
+    const delegatedUserId = authenticatedUser && Number(authenticatedUser.id) === Number(userId) ? await supplyDelegatedUserId(prisma, authenticatedUser) : null;
+
     if (url.searchParams.get("nextRecipientsForCreate") === "1") {
       const creatorCtx = await userRoleAndUnitContext(userId);
       const targetRoleKey = nextRoleKeyForCreatorContext(creatorCtx);
@@ -764,7 +771,7 @@ export async function GET(req) {
       if (!row) return json({ error: "not_found" }, 404);
       const { mainAdmin } = await userContext(userId);
       const userCtx = await userRoleAndUnitContext(userId);
-      if (!canActOnSupplyStep({ row, userId, userCtx, mainAdmin })) return json({ error: "forbidden" }, 403);
+      if (!canActOnSupplyStep({ row, userId, userCtx, mainAdmin }) && !(delegatedUserId && canActOnSupplyStep({ row, userId: delegatedUserId }))) return json({ error: "forbidden" }, 403);
       const step = getCurrentStep(row.historyJson);
       const targetRoleKey = await nextApproveRoleKeyForRow(row, step);
       if (!targetRoleKey) return json({ targetRoleKey: null, users: [] });
@@ -860,32 +867,35 @@ export async function GET(req) {
     const cartableOnly = url.searchParams.get("cartable") === "1";
     const colleagueIds = await workflowColleagueIds(prisma, userId);
     colleagueIds.add(Number(userId));
+    if (delegatedUserId) colleagueIds.add(delegatedUserId);
     const actionParticipantRequestIds = cartableOnly
       ? new Set()
       : await supplyActionRequestIdsForUser(colleagueIds, rows.map((row) => row.id));
     const canDelete = await canDeleteFinancialRecords(userId);
     const visibleRows = rows.filter((row) => {
-      const canAct = canActOnSupplyStep({ row, userId, userCtx, mainAdmin });
+      const delegatedAssignee = !!delegatedUserId && Number(row.currentAssigneeUserId) === delegatedUserId;
+      const canAct = canActOnSupplyStep({ row, userId, userCtx, mainAdmin }) || (delegatedAssignee && canActOnSupplyStep({ row, userId: delegatedUserId }));
       const currentStep = getCurrentStep(row.historyJson);
       const isCompletedCommercialOwner =
         !currentStep &&
         Number(row.currentAssigneeUserId) === Number(userId) &&
         ["approved", "rejected"].includes(row.status);
-      if (cartableOnly) return canAct && Number(row.currentAssigneeUserId) === Number(userId);
+      if (cartableOnly) return canAct && (Number(row.currentAssigneeUserId) === Number(userId) || delegatedAssignee);
       return (
         canEditAll || canDelete || Number(row.createdById) === Number(userId) ||
+        (delegatedUserId && (Number(row.createdById) === delegatedUserId || Number(row.currentAssigneeUserId) === delegatedUserId || hasBeenAssignedToUser(row, delegatedUserId))) ||
         isPlanningMember ||
         isProjectManagementMember ||
         hasPerformedWorkflowAction(row, userId) || colleagueHandledWorkflow(row.historyJson, colleagueIds) ||
         actionParticipantRequestIds.has(Number(row.id)) ||
         isCompletedCommercialOwner ||
-        (canAct && Number(row.currentAssigneeUserId) === Number(userId))
+        (canAct && (Number(row.currentAssigneeUserId) === Number(userId) || delegatedAssignee))
       );
     });
     const finalRows = cartableOnly
       ? visibleRows.filter((row) => {
           const step = getCurrentStep(row.historyJson);
-          return !!step && step.roleKey !== SUPPLY_STEP.COMMERCIAL && canActOnSupplyStep({ row, userId, userCtx, mainAdmin });
+          return !!step && step.roleKey !== SUPPLY_STEP.COMMERCIAL && (canActOnSupplyStep({ row, userId, userCtx, mainAdmin }) || (delegatedUserId && canActOnSupplyStep({ row, userId: delegatedUserId })));
         })
       : visibleRows;
     return json({
@@ -893,12 +903,15 @@ export async function GET(req) {
         ...row,
         requestType: requestTypesById.get(Number(row.id)),
         project: projectById.get(Number(row.projectId)) || null,
-        canAct: canActOnSupplyStep({ row, userId, userCtx, mainAdmin }),
+        canAct: canActOnSupplyStep({ row, userId, userCtx, mainAdmin }) || !!(delegatedUserId && canActOnSupplyStep({ row, userId: delegatedUserId })),
+        delegatedCreator: !!delegatedUserId && Number(row.createdById) === delegatedUserId,
+        delegatedAssignee: !!delegatedUserId && Number(row.currentAssigneeUserId) === delegatedUserId,
         canEditAll,
         canEditPlanning: isPlanningMember && !!getCurrentStep(row.historyJson) && row.status !== "rejected",
         canDelete: canDelete || Number(row.createdById) === Number(userId),
       })),
       canEditAll,
+      hasSupplyDelegation: !!delegatedUserId,
       pagination: { page, pageSize, total, hasMore: page * pageSize < total },
     });
   } catch (e) {
@@ -943,7 +956,9 @@ export async function POST(req) {
 
       const { mainAdmin } = await userContext(userId);
       const userCtx = await userRoleAndUnitContext(userId);
-      if (!canActOnSupplyStep({ row, userId, userCtx, mainAdmin })) return json({ error: "forbidden" }, 403);
+      const authenticatedUser = await getAuthenticatedUser(req);
+      const delegatedUserId = authenticatedUser && Number(authenticatedUser.id) === Number(userId) ? await supplyDelegatedUserId(prisma, authenticatedUser) : null;
+      if (!canActOnSupplyStep({ row, userId, userCtx, mainAdmin }) && !(delegatedUserId && canActOnSupplyStep({ row, userId: delegatedUserId }))) return json({ error: "forbidden" }, 403);
 
       const history = Array.isArray(row.historyJson) ? row.historyJson : [];
       const step = getCurrentStep(history);
@@ -1257,7 +1272,9 @@ export async function PATCH(req) {
     }
     const { user } = await userContext(userId);
     const canEditAll = canEditAllSupplyRequests(user);
-    if (!canEditAll && Number(row.createdById) !== Number(userId)) return json({ error: "forbidden" }, 403);
+    const authenticatedUser = await getAuthenticatedUser(req);
+    const delegatedUserId = authenticatedUser && Number(authenticatedUser.id) === Number(userId) ? await supplyDelegatedUserId(prisma, authenticatedUser) : null;
+    if (!canEditAll && Number(row.createdById) !== Number(userId) && Number(row.createdById) !== delegatedUserId) return json({ error: "forbidden" }, 403);
     if (!canEditAll && Array.isArray(row.historyJson) && row.historyJson.some((entry) => entry?.type === "approved" || entry?.status === "approved")) {
       return json({ error: "approval_already_recorded" }, 409);
     }

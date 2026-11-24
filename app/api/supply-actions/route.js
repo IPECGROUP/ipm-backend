@@ -1,3 +1,5 @@
+import { getAuthenticatedUser } from "../../../lib/security";
+import { supplyDelegatedUserId } from "../../../lib/supplyDelegation";
 import { NextResponse } from "next/server";
 import { prisma } from "../../../lib/prisma";
 
@@ -24,32 +26,8 @@ function readCookieValue(cookie, name) {
 }
 
 async function getUserId(req) {
-  const cookie = req.headers.get("cookie") || "";
-  const fromHeader = req.headers.get("x-user-id");
-  const fromCookie = readCookieValue(cookie, "user_id");
-  const direct = fromHeader || fromCookie;
-  if (direct && /^\d+$/.test(String(direct))) {
-    const directId = Number(direct);
-    try {
-      const user = await prisma.user.findUnique({ where: { id: directId }, select: { id: true } });
-      if (user?.id) return directId;
-    } catch {}
-  }
-
-  const sessionId = readCookieValue(cookie, "ipm_session");
-  if (sessionId) {
-    try {
-      const session = await prisma.session.findFirst({
-        where: { OR: [{ id: sessionId }, { token: sessionId }] },
-      });
-      if (session?.userId && (!session.expiresAt || new Date(session.expiresAt).getTime() >= Date.now())) {
-        return Number(session.userId);
-      }
-    } catch {}
-  }
-
-  if (process.env.NODE_ENV !== "production") return 1;
-  return null;
+  const user = await getAuthenticatedUser(req);
+  return user?.id ? Number(user.id) : null;
 }
 
 async function readJson(req) {
@@ -350,6 +328,8 @@ export async function GET(req) {
 
     const url = new URL(req.url);
     const requestId = toPositiveInt(url.searchParams.get("requestId") ?? url.searchParams.get("request_id"));
+    const authenticatedUser = await getAuthenticatedUser(req);
+    const delegatedUserId = authenticatedUser && Number(authenticatedUser.id) === Number(userId) ? await supplyDelegatedUserId(prisma, authenticatedUser) : null;
     const canReadProjectManagement = await isProjectManagementMember(userId);
     const rows = await prisma.paymentRequest.findMany({
       where: {
@@ -357,7 +337,7 @@ export async function GET(req) {
         ...(requestId ? { id: requestId } : {}),
       },
       orderBy: [{ updatedAt: "desc" }, { id: "desc" }],
-      take: requestId ? 1 : 300,
+      ...(requestId ? { take: 1 } : delegatedUserId ? {} : { take: 300 }),
     });
 
     const actionsMap = await actionsByRequestIds(rows.map((row) => row.id));
@@ -366,7 +346,7 @@ export async function GET(req) {
       supplyActions: actionsMap.get(Number(row.id)) || [],
     }));
     const items = rowsWithProjects
-      .filter((row) => canReadProjectManagement || isSupplyParticipant(row, userId))
+      .filter((row) => canReadProjectManagement || isSupplyParticipant(row, userId) || (delegatedUserId && isSupplyParticipant(row, delegatedUserId)))
       .map(serialize);
     return json({ ok: true, items });
   } catch (error) {
@@ -392,7 +372,11 @@ export async function POST(req) {
       where: { id: requestId, docId: REQUEST_DOC_ID },
     });
     if (!row) return json({ error: "not_found" }, 404);
-    if (!canUseSupplyAction(row, userId)) return json({ error: "forbidden" }, 403);
+    const authenticatedUser = await getAuthenticatedUser(req);
+    const delegatedUserId = authenticatedUser && Number(authenticatedUser.id) === Number(userId) ? await supplyDelegatedUserId(prisma, authenticatedUser) : null;
+    const actionMap = delegatedUserId ? await actionsByRequestIds([requestId]) : null;
+    const rowWithActions = actionMap ? { ...row, supplyActions: actionMap.get(requestId) || [] } : row;
+    if (!canUseSupplyAction(row, userId) && !(delegatedUserId && canUseSupplyAction(rowWithActions, delegatedUserId))) return json({ error: "forbidden" }, 403);
 
     const actionDate = normalizeDate(body.date ?? body.actionDate ?? body.action_date);
     if (mode !== "delete" && actionDate) {
