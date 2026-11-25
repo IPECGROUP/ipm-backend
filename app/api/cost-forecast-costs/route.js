@@ -158,7 +158,12 @@ async function ensureActiveProject(projectId) {
 }
 
 export async function GET(request) {
-  const denied = await requirePagePermission(request, "پیش‌بینی جریان نقدی", "پیش‌بینی هزینه‌ها");
+  const dashboardView = new URL(request.url).searchParams.get("dashboard") === "1";
+  const denied = await requirePagePermission(
+    request,
+    "پیش‌بینی جریان نقدی",
+    dashboardView ? "داشبورد مدیریت مالی" : "پیش‌بینی هزینه‌ها",
+  );
   if (denied) return denied;
   try {
     await ensureCostForecastTables();
