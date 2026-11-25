@@ -31,12 +31,45 @@ export async function GET(request) {
   if (!validYear(year)) return json({ error: "invalid_year" }, 400);
   try {
     await ensureTables();
-    const [currencies, sources, rates] = await Promise.all([
+    const [currencies, sources, contractFinancials, rates] = await Promise.all([
       prisma.currencyType.findMany({ select: { id: true, title: true }, orderBy: { title: "asc" } }),
       prisma.currencySource.findMany({ select: { id: true, title: true }, orderBy: { title: "asc" } }),
+      prisma.contractInformation.findMany({ where: { projectId: { not: null } }, select: { financial: true } }).catch((error) => {
+        if (error?.code === "P2021") return [];
+        throw error;
+      }),
       prisma.$queryRaw`SELECT currency_id, source_id, month, rate FROM project_exchange_rates WHERE year = ${year}`,
     ]);
-    return json({ currencies, sources, rates: rates.map((row) => ({ currencyId: row.currency_id, sourceId: row.source_id, month: row.month, rate: row.rate == null ? "" : String(row.rate) })) });
+    const usedPairs = new Set();
+    const normalizeLabel = (value) => String(value || "").replace(/ي/g, "ی").replace(/ك/g, "ک").trim().toLowerCase();
+    const currencyIdsByLabel = new Map(currencies.map((currency) => [normalizeLabel(currency.title), Number(currency.id)]));
+    const sourceIdsByLabel = new Map(sources.map((source) => [normalizeLabel(source.title), Number(source.id)]));
+    const rialCurrency = currencies.find((currency) => /ریال|rial|﷼|(^|\s)irr(\s|$)/i.test(String(currency.title || "").replace(/ي/g, "ی").trim()));
+    for (const { financial } of contractFinancials) {
+      for (const section of [financial?.contractAmounts, financial?.appendices]) {
+        if (!Array.isArray(section)) continue;
+        for (const row of section) {
+          if (!row || row.amount == null || String(row.amount).trim() === "") continue;
+          let currencyId = Number(row.currencyId ?? row.currency_id);
+          const currencyLabel = row.currencyLabel ?? row.currency_label ?? row.currencyName ?? row.currency_name;
+          if (!Number.isInteger(currencyId) || currencyId <= 0) currencyId = currencyIdsByLabel.get(normalizeLabel(currencyLabel));
+          if ((!Number.isInteger(currencyId) || currencyId <= 0) && (row.currencyIsRial || /ریال|rial|﷼|(^|\s)irr(\s|$)/i.test(normalizeLabel(currencyLabel)))) {
+            currencyId = Number(rialCurrency?.id);
+          }
+          let sourceId = Number(row.sourceId ?? row.currencySourceId ?? row.source_id ?? row.currency_source_id);
+          const sourceLabel = row.sourceLabel ?? row.currencySourceLabel ?? row.source_label ?? row.currency_source_label;
+          if (!Number.isInteger(sourceId) || sourceId <= 0) sourceId = sourceIdsByLabel.get(normalizeLabel(sourceLabel));
+          if (Number.isInteger(currencyId) && currencyId > 0 && Number.isInteger(sourceId) && sourceId > 0) {
+            usedPairs.add(`${currencyId}:${sourceId}`);
+          }
+        }
+      }
+    }
+    const currencyPairs = [...usedPairs].map((key) => {
+      const [currencyId, sourceId] = key.split(":").map(Number);
+      return { currencyId, sourceId };
+    });
+    return json({ currencies, sources, currencyPairs, rates: rates.map((row) => ({ currencyId: row.currency_id, sourceId: row.source_id, month: row.month, rate: row.rate == null ? "" : String(row.rate) })) });
   } catch (error) {
     console.error("project_exchange_rates_get", error);
     return json({ error: "load_failed" }, 500);
