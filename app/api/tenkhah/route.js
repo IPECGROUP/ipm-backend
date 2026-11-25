@@ -211,7 +211,13 @@ export async function GET(r) {
       ? await Promise.all([...new Set(items.filter((item) => item.status === "charged").map((item) => Number(item.beneficiaryUserId)).filter((id) => Number.isInteger(id) && id > 0))].map(async (id) => {
         const item = items.find((request) => Number(request.beneficiaryUserId) === id);
         const balance = await readPettyCashBalance(id);
-        return { id, name: item?.beneficiaryName || item?.beneficiaryUsername || item?.requesterName || `کاربر #${id}`, unsettledBalance: balance.unsettledBalance };
+        return {
+          id,
+          name: item?.beneficiaryName || item?.beneficiaryUsername || item?.requesterName || `کاربر #${id}`,
+          receivedAmount: balance.receivedAmount,
+          unregisteredBalance: balance.unregisteredBalance,
+          unsettledBalance: balance.unsettledBalance,
+        };
       }))
       : undefined;
     return json({ beneficiaryBalances, items: itemsWithWorkflowActors.map(x => ({
