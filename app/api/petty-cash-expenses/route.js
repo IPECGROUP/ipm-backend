@@ -35,6 +35,14 @@ async function userIdOf(request) {
   return /^\d+$/.test(raw) ? Number(raw) : 1;
 }
 
+async function isPettyCashAdmin(userId) {
+  const user = await prisma.user.findUnique({
+    where: { id: Number(userId) },
+    select: { username: true },
+  }).catch(() => null);
+  return ["ali", "marandi"].includes(String(user?.username || "").trim().toLowerCase());
+}
+
 function normalized(value = "") {
   return String(value).toLowerCase().replace(/ي/g, "ی").replace(/ك/g, "ک").replace(/\s+/g, " ").trim();
 }
@@ -275,6 +283,7 @@ function canReviewExpense(expense, userId, roster) {
 
 async function expenseReportsFor(userId, roster, inbox = false) {
   const canDelete = await canDeleteFinancialRecords(userId);
+  const canEditAll = await isPettyCashAdmin(userId);
   const colleagueIds = Array.from(await workflowColleagueIds(prisma, userId));
   const reports = await prisma.$queryRawUnsafe(`
     SELECT r.id,r.report_name AS "reportName",r.report_number AS "reportNumber",r.document_type AS "documentType",r.project_id AS "projectId",r.created_at AS "createdAt",
@@ -294,7 +303,7 @@ async function expenseReportsFor(userId, roster, inbox = false) {
          OR ($5::boolean AND (h->>'stage'='management' OR (h->'changes') @> '[{"toStage":"management"}]'::jsonb))))
        AND (r.initial_stage<>'draft' OR r.created_by_id=$1)
     ORDER BY r.created_at DESC,r.id DESC
-  `, userId, roster.planning.some((u) => u.id === userId), roster.project_manager.some((u) => u.id === userId), roster.finance.some((u) => u.id === userId), roster.management.some((u) => u.id === userId), canDelete, colleagueIds.map(String));
+  `, userId, roster.planning.some((u) => u.id === userId), roster.project_manager.some((u) => u.id === userId), roster.finance.some((u) => u.id === userId), roster.management.some((u) => u.id === userId), canDelete || canEditAll, colleagueIds.map(String));
   // Read personal drafts explicitly so the main report list does not depend on
   // workflow membership or notification history to find them.
   const drafts = inbox ? [] : await prisma.$queryRawUnsafe(`
@@ -334,7 +343,7 @@ async function expenseReportsFor(userId, roster, inbox = false) {
         || (roster.management.some((u) => u.id === userId) && (entry.stage === "management" || entry.changes?.some((change) => change.toStage === "management"))));
     const { creatorDecision, notificationVersion } = report.initialStage === "draft"
       ? { creatorDecision: null, notificationVersion: null } : reportNotificationState(report, items, userId, canAct);
-    return { ...report, id: Number(report.id), historyJson: history.map((entry) => ({ ...entry, actorName: actorNames.get(Number(entry.userId)) || null })), canAct, canRevise, canDelete: canDelete || canRevise || (report.initialStage === "draft" && Number(report.createdById) === userId), wasSentToMe, creatorDecision, notificationVersion, items, notificationTarget: "petty_cash_report", title: report.reportName, requestNumber: report.reportNumber || report.reportName };
+    return { ...report, id: Number(report.id), historyJson: history.map((entry) => ({ ...entry, actorName: actorNames.get(Number(entry.userId)) || null })), canAct, canRevise, canEdit: canEditAll || canRevise || (report.initialStage === "draft" && Number(report.createdById) === userId), canDelete: canDelete || canRevise || (report.initialStage === "draft" && Number(report.createdById) === userId), wasSentToMe, creatorDecision, notificationVersion, items, notificationTarget: "petty_cash_report", title: report.reportName, requestNumber: report.reportNumber || report.reportName };
   }).filter((report) => !inbox || report.canAct || report.canRevise || report.creatorDecision);
 }
 
@@ -888,17 +897,18 @@ export async function PATCH(request) {
       const currencyNames = new Map(currencies.map((currency) => [currency.id, currency.title]));
       normalizedEntries.forEach((entry) => { entry.currencyName = entry.currencyTypeId ? currencyNames.get(entry.currencyTypeId) : "ریال"; entry.fileName = entry.files[0].name; entry.fileUrl = entry.files[0].url; });
       const roster = await workflowRoster();
+      const canEditAll = await isPettyCashAdmin(userId);
       await prisma.$transaction(async (tx) => {
         const reports = await tx.$queryRawUnsafe("SELECT * FROM petty_cash_expense_reports WHERE id=$1 FOR UPDATE", reportId);
         const report = reports[0];
-        if (!report || Number(report.created_by_id) !== userId) throw new RouteError("not_allowed", 403);
+        if (!report || (!canEditAll && Number(report.created_by_id) !== userId)) throw new RouteError("not_allowed", 403);
         if (Number(report.workflow_version) !== version) throw new RouteError("workflow_changed", 409);
         const existing = await tx.$queryRawUnsafe("SELECT * FROM petty_cash_expenses WHERE expense_report_id=$1 ORDER BY id FOR UPDATE", reportId);
-        if (!existing.some((e) => e.stage === "revision")) throw new RouteError("not_allowed", 403);
+        if (!canEditAll && !existing.some((e) => e.stage === "revision")) throw new RouteError("not_allowed", 403);
         if (new Set(normalizedEntries.filter((e) => e.id).map((e) => e.id)).size !== normalizedEntries.filter((e) => e.id).length ||
           normalizedEntries.some((entry) => entry.id && !existing.some((e) => Number(e.id) === entry.id))) throw new RouteError("invalid_input", 400);
         const removed = existing.filter((expense) => !normalizedEntries.some((entry) => entry.id === Number(expense.id)));
-        if (removed.some((expense) => expense.stage !== "revision")) throw new RouteError("not_allowed", 403);
+        if (!canEditAll && removed.some((expense) => expense.stage !== "revision")) throw new RouteError("not_allowed", 403);
         if (removed.length) {
           const linked = await tx.$queryRawUnsafe("SELECT expense_id FROM petty_cash_settlement_report_items WHERE expense_id = ANY($1::int[])", removed.map((expense) => Number(expense.id)));
           if (linked.length) throw new RouteError("not_allowed", 403);
@@ -908,11 +918,23 @@ export async function PATCH(request) {
         if (codes.some((code) => !budgets.some((budget) => budget.budgetCode === code))) throw new RouteError("budget_code_not_found", 400);
         const changes = [];
         for (const expense of removed) {
-          await tx.$executeRawUnsafe("DELETE FROM petty_cash_expenses WHERE id=$1 AND expense_report_id=$2 AND stage='revision'", Number(expense.id), reportId);
-          changes.push({ id: Number(expense.id), fromStage: "revision", toStage: "deleted", decision: "delete" });
+          await tx.$executeRawUnsafe(canEditAll
+            ? "DELETE FROM petty_cash_expenses WHERE id=$1 AND expense_report_id=$2"
+            : "DELETE FROM petty_cash_expenses WHERE id=$1 AND expense_report_id=$2 AND stage='revision'", Number(expense.id), reportId);
+          changes.push({ id: Number(expense.id), fromStage: expense.stage, toStage: "deleted", decision: "delete" });
         }
         for (const entry of normalizedEntries) {
           const previous = existing.find((e) => Number(e.id) === entry.id);
+          if (canEditAll && previous && previous.stage !== "revision") {
+            await tx.$executeRawUnsafe(`UPDATE petty_cash_expenses SET expense_date=$1,description=$2,budget_code=$3,amount=$4::bigint,
+              file_name=$5,file_url=$6,files=$7::jsonb,currency_type_id=$8::int,currency_name=$9,currency_amount=$10::numeric,
+              exchange_rate=$11::bigint,updated_at=CURRENT_TIMESTAMP WHERE id=$12 AND expense_report_id=$13`,
+            entry.expenseDate, entry.description, entry.budgetCode, String(entry.amount), entry.fileName, entry.fileUrl,
+            JSON.stringify(entry.files), entry.currencyTypeId, entry.currencyName, entry.currencyAmount, String(entry.exchangeRate),
+            entry.id, reportId);
+            changes.push({ id: entry.id, fromStage: previous.stage, toStage: previous.stage, decision: "admin_edit" });
+            continue;
+          }
           if (previous && previous.stage !== "revision") {
             const previousMoney = expenseMoney({ amount: previous.amount, currencyTypeId: previous.currency_type_id,
               currencyAmount: previous.currency_amount, exchangeRate: previous.exchange_rate });
@@ -938,11 +960,11 @@ export async function PATCH(request) {
           }
           changes.push({ id: entry.id, toStage: stage });
         }
-        const assignedToUserIds = [...new Set(changes.flatMap((change) => change.toStage === "project_manager"
+        const assignedToUserIds = [...new Set(changes.filter((change) => !["admin_edit", "delete"].includes(change.decision)).flatMap((change) => change.toStage === "project_manager"
           ? [Number(existing.find((expense) => Number(expense.id) === change.id)?.project_manager_id)]
           : (roster[change.toStage] || []).map((user) => user.id)).filter((id) => Number.isInteger(id) && id > 0))];
         await tx.$executeRawUnsafe(`UPDATE petty_cash_expense_reports SET report_name=$1,workflow_version=workflow_version+1,
-          review_history=review_history || $2::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$3`, reportName, JSON.stringify([{ userId, action: "resubmitted", changes, assignedToUserIds, at: new Date().toISOString() }]), reportId);
+          review_history=review_history || $2::jsonb,updated_at=CURRENT_TIMESTAMP WHERE id=$3`, reportName, JSON.stringify([{ userId, action: canEditAll ? "admin_edited" : "resubmitted", changes, assignedToUserIds, at: new Date().toISOString() }]), reportId);
       });
       return json({ ok: true, item: { id: reportId } });
     }
