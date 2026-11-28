@@ -11,15 +11,14 @@ export const runtime = "nodejs";
 const json = (data, status = 200) => Response.json(data, { status });
 const cookie = (r, n) => String(r.headers.get("cookie") || "").match(new RegExp(`(?:^|;\\s*)${n}=([^;]+)`))?.[1] || "";
 async function userIdOf(r) { const sid = cookie(r, "ipm_session"); const s = sid && await prisma.session.findUnique({ where: { id: sid } }).catch(() => null); if (s && !isSessionExpired(s)) return s.userId; const raw = r.headers.get("x-user-id") || cookie(r, "user_id"); return process.env.NODE_ENV !== "production" && /^\d+$/.test(raw) ? +raw : (process.env.NODE_ENV !== "production" ? 1 : null); }
-// Keep the ali account's elevated payment-request access consistent across
-// the ordinary payment-request and tenkhah APIs. This access is intentionally
-// scoped to this page's listing/deletion behavior, not to every financial operation.
+// Keep the top administrators' tenkhah access scoped to request editing and
+// listing. Workflow decisions still follow the normal assignee rules.
 async function isTenkhahRequestAdmin(userId) {
   const user = await prisma.user.findUnique({
     where: { id: Number(userId) },
     select: { username: true },
   }).catch(() => null);
-  return String(user?.username || "").trim().toLowerCase() === "ali";
+  return ["ali", "marandi"].includes(String(user?.username || "").trim().toLowerCase());
 }
 const amount = (v) => { const x = String(v ?? "").replace(/[۰-۹]/g, d => "۰۱۲۳۴۵۶۷۸۹".indexOf(d)).replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d)).replace(/[^\d]/g, ""); return x ? BigInt(x) : 0n; };
 const englishDigits = (value = "") => String(value).replace(/[۰-۹]/g, d => "۰۱۲۳۴۵۶۷۸۹".indexOf(d)).replace(/[٠-٩]/g, d => "٠١٢٣٤٥٦٧٨٩".indexOf(d));
@@ -131,7 +130,8 @@ export async function GET(r) {
     const url = new URL(r.url), recipientStage = url.searchParams.get("recipients"), balanceBeneficiaryId = +url.searchParams.get("beneficiaryId");
     const dashboardReport = url.searchParams.get("dashboard") === "1";
     if (dashboardReport) { const denied = await requirePagePermission(r, "پیش‌بینی جریان نقدی", "داشبورد مدیریت مالی"); if (denied) return denied; }
-    const canViewAllRequests = dashboardReport || await canDeleteFinancialRecords(uid);
+    const tenkhahAdmin = dashboardReport ? false : await isTenkhahRequestAdmin(uid);
+    const canViewAllRequests = dashboardReport || tenkhahAdmin || await canDeleteFinancialRecords(uid);
     // Beneficiary selection is intentionally independent from administrative
     // role-management access. Return only the profile fields needed by the
     // request form, never users' roles or unit assignments.
@@ -224,7 +224,7 @@ export async function GET(r) {
       ...x,
       managementApprover: dashboardReport ? managementApproverByRequestId.get(Number(x.id)) || null : null,
       canAct: !dashboardReport && x.status === "pending" && (x.stage === "finance" ? financeMember : x.stage === "management" ? (x.currentAssigneeUserId ? +x.currentAssigneeUserId === uid : managementMember) : +x.currentAssigneeUserId === uid),
-      canEdit: canViewAllRequests && !dashboardReport,
+      canEdit: !dashboardReport && (tenkhahAdmin || canViewAllRequests),
       settlements: all.filter(s => +s.tenkhahRequestId === +x.id),
     })), settlements: shown });
   } catch (e) { return json({ error: "internal_error", message: String(e?.message || e) }, 500); }
